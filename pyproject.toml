@@ -42,10 +42,10 @@ docs = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/<username>/Bernardyn"
+Homepage = "https://github.com/jilavsky/Bernardyn"
 Documentation = "https://bernardyn.readthedocs.io"
-Repository = "https://github.com/<username>/Bernardyn"
-Issues = "https://github.com/<username>/Bernardyn/issues"
+Repository = "https://github.com/jilavsky/Bernardyn"
+Issues = "https://github.com/jilavsky/Bernardyn/issues"
 
 [tool.setuptools.packages.find]
 include = ["bernardyn*"]

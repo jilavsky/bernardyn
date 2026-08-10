@@ -20,7 +20,7 @@ pip install Bernardyn
 ### From source
 
 ```bash
-git clone https://github.com/<username>/Bernardyn.git
+git clone https://github.com/jilavsky/Bernardyn.git
 cd Bernardyn
 pip install -e .
 ```
