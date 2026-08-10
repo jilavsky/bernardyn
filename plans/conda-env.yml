@@ -1,0 +1,11 @@
+name: bernardyn
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python>=3.10
+  - pip
+  - numpy>=1.26.0
+  - h5py>=3.10.0
+  - pyqtgraph>=0.13.0
+  - pyside6>=6.6.0

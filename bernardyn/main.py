@@ -1,1 +1,19 @@
-"\"\"\"Main entry point for Bernardyn.\"\"\"\n\nimport sys\nfrom PySide6.QtWidgets import QApplication, QMainWindow\n\n\nclass MainWindow(QMainWindow):\n    \"\"\"Main application window.\"\"\"\n\n    def __init__(self):\n        super().__init__()\n        self.setWindowTitle(\"Bernardyn\")\n        self.resize(1200, 800)\n\n\ndef main():\n    \"\"\"Run the Bernardyn application.\"\"\"\n    app = QApplication(sys.argv)\n    window = MainWindow()\n    window.show()\n    sys.exit(app.exec())\n\n\nif __name__ == \"__main__\":\n    main()\n"
+"""Main entry point for Bernardyn."""
+
+import sys
+from PySide6.QtWidgets import QApplication
+
+from bernardyn.gui.main_window import MainWindow
+
+
+def main():
+    """Run the Bernardyn application."""
+    app = QApplication(sys.argv)
+    app.setApplicationName("Bernardyn")
+    window = MainWindow()
+    window.show()
+    sys.exit(app.exec())
+
+
+if __name__ == "__main__":
+    main()
