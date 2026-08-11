@@ -151,6 +151,36 @@ class MainWindow(QMainWindow):
         manage_templates_action.triggered.connect(self._on_manage_templates)
         template_menu.addAction(manage_templates_action)
 
+        # --- Export menu ---
+        export_menu = menubar.addMenu("Export")
+
+        export_png_action = QAction("Export as PNG...", self)
+        export_png_action.setShortcut("Ctrl+Shift+E")
+        export_png_action.triggered.connect(lambda: self._on_export_file("png"))
+        export_menu.addAction(export_png_action)
+
+        export_svg_action = QAction("Export as SVG...", self)
+        export_svg_action.triggered.connect(lambda: self._on_export_file("svg"))
+        export_menu.addAction(export_svg_action)
+
+        export_pdf_action = QAction("Export as PDF...", self)
+        export_pdf_action.triggered.connect(lambda: self._on_export_file("pdf"))
+        export_menu.addAction(export_pdf_action)
+
+        export_menu.addSeparator()
+
+        copy_clipboard_action = QAction("Copy to Clipboard", self)
+        copy_clipboard_action.setShortcut("Ctrl+C")
+        copy_clipboard_action.triggered.connect(self._on_copy_to_clipboard)
+        export_menu.addAction(copy_clipboard_action)
+
+        export_menu.addSeparator()
+
+        save_project_action = QAction("Save Project...", self)
+        save_project_action.setShortcut("Ctrl+Shift+S")
+        save_project_action.triggered.connect(self._on_save_project)
+        export_menu.addAction(save_project_action)
+
     def _create_new_graph(self, name: str) -> tuple:
         """Create a new graph tab with its own plot widget and controls.
 
@@ -383,6 +413,93 @@ class MainWindow(QMainWindow):
 
         dialog.template_selected.connect(on_template_selected)
         dialog.exec()
+
+    def _on_export_file(self, fmt: str = "png") -> None:
+        """Handle 'Export as ...' menu action.
+
+        Args:
+            fmt: Default file format ('png', 'svg', 'pdf').
+        """
+        from PySide6.QtWidgets import QFileDialog
+
+        ext_map = {
+            "png": ("PNG Files (*.png)", "*.png"),
+            "svg": ("SVG Files (*.svg)", "*.svg"),
+            "pdf": ("PDF Files (*.pdf)", "*.pdf"),
+        }
+
+        filter_str, default_ext = ext_map.get(fmt, ("All Files (*.*)", "*.*"))
+        default_name = f"bernardyn_plot.{default_ext[1:]}"
+
+        filepath, _ = QFileDialog.getSaveFileName(
+            self, f"Export Plot as {fmt.upper()}", default_name, filter_str,
+        )
+
+        if filepath:
+            from bernardyn.export.exporter import get_default_dispatcher
+
+            plot_widget = self._get_current_plot_widget()
+            dispatcher = get_default_dispatcher()
+            success = dispatcher.export(plot_widget, filepath)
+
+            if success:
+                QMessageBox.information(
+                    self, "Export Successful",
+                    f"Plot exported to {filepath}",
+                )
+            else:
+                QMessageBox.warning(
+                    self, "Export Failed",
+                    f"Failed to export plot to {filepath}",
+                )
+
+    def _on_copy_to_clipboard(self) -> None:
+        """Handle 'Copy to Clipboard' menu action."""
+        from PySide6.QtWidgets import QMessageBox
+
+        plot_widget = self._get_current_plot_widget()
+        from bernardyn.export.exporter import get_default_dispatcher
+
+        dispatcher = get_default_dispatcher()
+        success = dispatcher.export(plot_widget, "clipboard")
+
+        if success:
+            QMessageBox.information(
+                self, "Copied",
+                "Plot copied to clipboard.",
+            )
+        else:
+            QMessageBox.warning(
+                self, "Copy Failed",
+                "Failed to copy plot to clipboard.",
+            )
+
+    def _on_save_project(self) -> None:
+        """Handle 'Save Project' menu action — export as .hdf5 container."""
+        from PySide6.QtWidgets import QFileDialog, QMessageBox
+
+        filepath, _ = QFileDialog.getSaveFileName(
+            self, "Save Project", "bernardyn_project.hdf5",
+            "HDF5 Files (*.hdf *.h5)",
+        )
+
+        if filepath:
+            from bernardyn.export.container_exporter import get_container_exporter
+
+            plot_widget = self._get_current_plot_widget()
+            exporter = get_container_exporter()
+            success = exporter.export(plot_widget, filepath)
+
+            if success:
+                QMessageBox.information(
+                    self, "Project Saved",
+                    f"Project saved to {filepath}",
+                )
+            else:
+                QMessageBox.warning(
+                    self, "Save Failed",
+                    f"Failed to save project to {filepath}",
+                )
 
     def _on_graph_generate(self, graph_name: str) -> None:
         """Generate the plot for a specific graph tab."""

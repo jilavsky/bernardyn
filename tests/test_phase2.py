@@ -852,6 +852,138 @@ def _():
 
 
 # ============================================================
+# Phase 6: Export System (no GUI required for unit tests)
+# ============================================================
+print("\n=== Testing Phase 6: Export System ===")
+
+
+@test("Exporter dispatcher routes formats correctly")
+def _():
+    from bernardyn.export.exporter import get_default_dispatcher
+
+    dispatcher = get_default_dispatcher()
+    formats = dispatcher.get_available_formats()
+    assert "image" in formats, f"Expected 'image' format, got {formats}"
+    assert "clipboard" in formats, f"Expected 'clipboard' format, got {formats}"
+
+
+@test("Exporter dispatcher get_exporter returns correct type")
+def _():
+    from bernardyn.export.exporter import get_default_dispatcher
+
+    dispatcher = get_default_dispatcher()
+    img_exp = dispatcher.get_exporter("image")
+    assert img_exp is not None, "Expected image exporter"
+
+    clip_exp = dispatcher.get_exporter("clipboard")
+    assert clip_exp is not None, "Expected clipboard exporter"
+
+
+@test("Exporter dispatcher get_exporter returns None for unknown format")
+def _():
+    from bernardyn.export.exporter import get_default_dispatcher
+
+    dispatcher = get_default_dispatcher()
+    result = dispatcher.get_exporter("unknown_format")
+    assert result is None, "Expected None for unknown format"
+
+
+@test("ImageExporter.get_format_name returns 'image'")
+def _():
+    from bernardyn.export.image_exporter import ImageExporter
+
+    exp = ImageExporter()
+    assert exp.get_format_name() == "image"
+
+
+@test("ClipboardExporter.get_format_name returns 'clipboard'")
+def _():
+    from bernardyn.export.clipboard_exporter import ClipboardExporter
+
+    exp = ClipboardExporter()
+    assert exp.get_format_name() == "clipboard"
+
+
+@test("ContainerExporter.export creates HDF5 file")
+def _():
+    import tempfile
+    import os
+    from bernardyn.export.container_exporter import ContainerExporter
+
+    exporter = ContainerExporter()
+    tmpfile = tempfile.mktemp(suffix=".hdf5")
+
+    # Create a mock plot widget with get_plot_widget method
+    class MockPlotWidget:
+        def get_plot_widget(self):
+            return None
+
+    success = exporter.export(MockPlotWidget(), tmpfile)
+    assert success is True, "Expected export to succeed"
+    assert os.path.exists(tmpfile), f"Expected file at {tmpfile}"
+
+    # Clean up
+    os.remove(tmpfile)
+
+
+@test("ContainerExporter.load reads HDF5 file")
+def _():
+    import tempfile
+    from bernardyn.export.container_exporter import ContainerExporter
+
+    exporter = ContainerExporter()
+    tmpfile = tempfile.mktemp(suffix=".hdf5")
+
+    # Create a mock plot widget with get_plot_widget method
+    class MockPlotWidget:
+        def get_plot_widget(self):
+            return None
+
+    exporter.export(MockPlotWidget(), tmpfile)
+
+    result = exporter.load(tmpfile)
+    assert result is not None, "Expected loaded data"
+    assert "metadata" in result, "Expected 'metadata' key"
+
+    # Clean up
+    import os
+    os.remove(tmpfile)
+
+
+@test("ContainerExporter.load returns None for missing file")
+def _():
+    from bernardyn.export.container_exporter import ContainerExporter
+
+    exporter = ContainerExporter()
+    result = exporter.load("/nonexistent/path/file.hdf5")
+    assert result is None, "Expected None for missing file"
+
+
+@test("ContainerExporter.get_format_name returns 'container'")
+def _():
+    from bernardyn.export.container_exporter import ContainerExporter
+
+    exp = ContainerExporter()
+    assert exp.get_format_name() == "container"
+
+
+@test("ContainerExporter CONTAINER_VERSION is set")
+def _():
+    from bernardyn.export.container_exporter import ContainerExporter
+
+    assert ContainerExporter.CONTAINER_VERSION == "1.0"
+
+
+@test("get_container_exporter returns singleton")
+def _():
+    from bernardyn.export.container_exporter import get_container_exporter
+
+    e1 = get_container_exporter()
+    e2 = get_container_exporter()
+    assert e1 is e2, "Expected same instance"
+
+
+# ============================================================
 # Summary
 # ============================================================
 print("\n" + "=" * 60)
