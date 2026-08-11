@@ -52,9 +52,15 @@ class ControlsPanel(QGroupBox):
     def __init__(self, parent: Optional[Any] = None):
         super().__init__("Plot Controls", parent)
 
-        self._plot_type: str = "line"  # 'line' or 'image'
+        self._plot_type: str = "line"  # 'line', 'image', 'waterfall', 'heatmap'
         self._x_log: bool = True
         self._y_log: bool = True
+
+        # Waterfall-specific controls
+        self._z_offset_spin: Optional[QDoubleSpinBox] = None
+
+        # Heatmap/image color scale
+        self._color_scale_combo: Optional[QComboBox] = None
         self._show_grid_x: bool = False
         self._show_grid_y: bool = False
         self._show_legend: bool = True
@@ -79,6 +85,8 @@ class ControlsPanel(QGroupBox):
         self._plot_type_combo = QComboBox()
         self._plot_type_combo.addItem("Line Plot", "line")
         self._plot_type_combo.addItem("2D Image", "image")
+        self._plot_type_combo.addItem("Waterfall Plot", "waterfall")
+        self._plot_type_combo.addItem("Heatmap Plot", "heatmap")
         self._plot_type_combo.currentIndexChanged.connect(self._on_plot_type_changed)
         type_layout.addWidget(self._plot_type_combo)
 
@@ -147,8 +155,42 @@ class ControlsPanel(QGroupBox):
         range_group.setLayout(range_layout)
         scale_layout.addWidget(range_group)
 
-        # Grid and legend toggles
-        display_group = QGroupBox("Display")
+        # Color scale selector (for image and heatmap plots)
+        color_scale_group = QGroupBox("Color Scale")
+        color_scale_layout = QVBoxLayout()
+
+        self._color_scale_combo = QComboBox()
+        from bernardyn.plot.image_plotter import COLOR_SCALES
+        for scale in COLOR_SCALES:
+            self._color_scale_combo.addItem(scale, scale)
+        self._color_scale_combo.currentIndexChanged.connect(self._on_color_scale_changed)
+        color_scale_layout.addWidget(self._color_scale_combo)
+
+        # Log scale toggle for image/heatmap
+        self._log_scale_check = QCheckBox("Log Scale")
+        self._log_scale_check.stateChanged.connect(self._on_log_scale_changed)
+        color_scale_layout.addWidget(self._log_scale_check)
+
+        color_scale_group.setLayout(color_scale_layout)
+        main_layout.addWidget(color_scale_group)
+
+        # --- Z Offset section (for waterfall plots) ---
+        z_offset_group = QGroupBox("Z Offset")
+        z_offset_layout = QVBoxLayout()
+
+        self._z_offset_spin = QDoubleSpinBox()
+        self._z_offset_spin.setRange(0.01, 1000.0)
+        self._z_offset_spin.setValue(1.0)
+        self._z_offset_spin.setDecimals(3)
+        self._z_offset_spin.setSingleStep(0.1)
+        self._z_offset_spin.valueChanged.connect(self._on_z_offset_changed)
+        z_offset_layout.addWidget(self._z_offset_spin)
+
+        z_offset_group.setLayout(z_offset_layout)
+        main_layout.addWidget(z_offset_group)
+
+        # --- Scale section (for line plots) ---
+        scale_group = QGroupBox("Scale")
         display_layout = QVBoxLayout()
 
         self._grid_x_check = QCheckBox("X Grid")
@@ -255,8 +297,46 @@ class ControlsPanel(QGroupBox):
         return QIcon(pixmap), text
 
     def _on_plot_type_changed(self, index: int) -> None:
-        """Handle plot type changes."""
+        """Handle plot type changes — show/hide relevant controls."""
         self._plot_type = self._plot_type_combo.currentData()
+
+        # Show/hide scale controls (line plots only)
+        is_line = self._plot_type == "line"
+        for widget in [self._x_log_check, self._y_log_check]:
+            if hasattr(self, '_scale_group'):
+                pass  # handled below
+
+        # Show/hide color scale controls (image and heatmap)
+        is_image_or_heatmap = self._plot_type in ("image", "heatmap")
+        if hasattr(self, '_color_scale_combo'):
+            self._color_scale_combo.setVisible(is_image_or_heatmap)
+        if hasattr(self, '_log_scale_check'):
+            self._log_scale_check.setVisible(is_image_or_heatmap)
+
+        # Show/hide z offset controls (waterfall only)
+        is_waterfall = self._plot_type == "waterfall"
+        if hasattr(self, '_z_offset_spin'):
+            self._z_offset_spin.setVisible(is_waterfall)
+
+        # Show/hide dataset styling (line and waterfall only)
+        is_stylable = self._plot_type in ("line", "waterfall")
+        if hasattr(self, '_dataset_combo'):
+            self._dataset_combo.setVisible(is_stylable)
+
+    def _on_color_scale_changed(self, index: int) -> None:
+        """Handle color scale changes."""
+        if self._on_scale_changed:
+            self._on_scale_changed("color_scale", self._color_scale_combo.currentData())
+
+    def _on_log_scale_changed(self, state: int) -> None:
+        """Handle log scale toggle changes."""
+        if self._on_scale_changed:
+            self._on_scale_changed("log_scale", self._log_scale_check.isChecked())
+
+    def _on_z_offset_changed(self, value: float) -> None:
+        """Handle Z offset changes."""
+        if self._on_scale_changed:
+            self._on_scale_changed("z_offset", value)
 
     def _on_x_scale_changed(self, index: int) -> None:
         """Handle X axis scale changes."""
@@ -401,6 +481,24 @@ class ControlsPanel(QGroupBox):
         """Get the current slit-smeared display state."""
         return self._show_slit_smear
 
+    def get_color_scale(self) -> str:
+        """Get the current color scale."""
+        if self._color_scale_combo is not None:
+            return self._color_scale_combo.currentData() or "grayscale"
+        return "grayscale"
+
+    def get_log_scale(self) -> bool:
+        """Get the current log scale state."""
+        if self._log_scale_check is not None:
+            return self._log_scale_check.isChecked()
+        return False
+
+    def get_z_offset(self) -> float:
+        """Get the current Z offset value."""
+        if self._z_offset_spin is not None:
+            return self._z_offset_spin.value()
+        return 1.0
+
     def set_x_range(self, xmin: float, xmax: float) -> None:
         """Set the X axis range spinboxes."""
         self._x_min_spin.setValue(xmin)
@@ -427,11 +525,16 @@ class ControlsPanel(QGroupBox):
         self._x_min_spin.setEnabled(enabled)
         self._x_max_spin.setEnabled(enabled)
         self._y_min_spin.setEnabled(enabled)
-        self._y_max_spin.setEnabled(enabled)
         self._grid_x_check.setEnabled(enabled)
         self._grid_y_check.setEnabled(enabled)
         self._legend_check.setEnabled(enabled)
         self._slit_smear_check.setEnabled(enabled and self._has_slit_smear_data)
+        if hasattr(self, '_color_scale_combo') and self._color_scale_combo is not None:
+            self._color_scale_combo.setEnabled(enabled)
+        if hasattr(self, '_log_scale_check') and self._log_scale_check is not None:
+            self._log_scale_check.setEnabled(enabled)
+        if hasattr(self, '_z_offset_spin') and self._z_offset_spin is not None:
+            self._z_offset_spin.setEnabled(enabled)
         self._dataset_combo.setEnabled(enabled)
         self._color_combo.setEnabled(enabled)
         self._symbol_combo.setEnabled(enabled)

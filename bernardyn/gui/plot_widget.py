@@ -227,6 +227,123 @@ class PlotWidget(QWidget):
 
         return image_item
 
+    def add_waterfall_lines(
+        self,
+        datasets: List[Dict[str, Any]],
+        x_log: bool = False,
+        y_log: bool = True,
+    ) -> List[pg.PlotDataItem]:
+        """Add waterfall plot lines with Z-offset stacking.
+
+        Each dataset is rendered as a separate line, shifted vertically
+        by its z_offset value. This creates the characteristic waterfall
+        (offset) appearance.
+
+        Args:
+            datasets: List of dataset dicts with 'x', 'y', 'z_offset',
+                'color', 'symbol', and 'title' keys.
+            x_log: Use logarithmic X scale
+            y_log: Use logarithmic Y scale
+
+        Returns:
+            List of created PlotDataItem objects.
+        """
+        items = []
+        for ds in datasets:
+            x = np.asarray(ds["x"], dtype=np.float64)
+            y = np.asarray(ds["y"], dtype=np.float64)
+            z_offset = ds.get("z_offset", 0.0)
+            color = ds.get("color", "blue")
+            symbol = ds.get("symbol", "o")
+            title = ds.get("title", "")
+
+            # Shift Y values by z_offset for waterfall effect
+            y_shifted = y + z_offset
+
+            pen = self._make_pen(color, "-", 1.2)
+            pg_symbol = self._map_symbol(symbol)
+
+            item = self._plot_widget.plot(
+                x, y_shifted,
+                pen=pen,
+                symbol=pg_symbol,
+                symbolSize=4,
+                symbolBrush=pg.mkBrush(color) if color else None,
+                name=title,
+            )
+
+            items.append(item)
+
+        # Set Y axis label to indicate offset
+        self._plot_widget.setLabel("left", "I + Offset")
+
+        return items
+
+    def add_heatmap_lines(
+        self,
+        datasets: List[Dict[str, Any]],
+        x_log: bool = False,
+        y_log: bool = False,
+    ) -> List[pg.PlotDataItem]:
+        """Add heatmap plot lines with order number on Y axis.
+
+        Each dataset is rendered as a line where X is the horizontal
+        axis, order number is the vertical position, and intensity
+        values are mapped to color.
+
+        Args:
+            datasets: List of dataset dicts with 'x', 'y', and
+                'order_number' keys.
+            x_log: Use logarithmic X scale
+            y_log: Use logarithmic Y scale
+
+        Returns:
+            List of created PlotDataItem objects.
+        """
+        items = []
+
+        # Collect all Y (intensity) values for color range computation
+        all_y = np.concatenate([np.asarray(ds["y"], dtype=np.float64) for ds in datasets]) if datasets else np.array([])
+        color_min = float(np.min(all_y)) if all_y.size > 0 else 0.0
+        color_max = float(np.max(all_y)) if all_y.size > 0 else 1.0
+
+        for ds in datasets:
+            x = np.asarray(ds["x"], dtype=np.float64)
+            y = np.asarray(ds["y"], dtype=np.float64)
+            order_num = ds.get("order_number", 0)
+
+            # Create scatter plot with color mapping by intensity
+            from pyqtgraph import ScatterPlotItem, ColorMap
+
+            # Normalize intensity to 0-1 range for color mapping
+            if color_max > color_min:
+                norm_y = (y - color_min) / (color_max - color_min)
+            else:
+                norm_y = np.zeros_like(y)
+
+            # Build colors from normalized intensity
+            sizes = np.full(len(x), 3.0)
+            pos = np.column_stack([x, np.full_like(x, order_num)])
+
+            # Use viridis-like gradient
+            colors = pg.ColorMap([0, 1], [(68, 1, 84), (33, 145, 140), (253, 231, 37)]).map(norm_y, mode="qcolor")
+
+            scatter = ScatterPlotItem(
+                pos=pos,
+                size=sizes,
+                pen=pg.mkPen(None),
+                brush=colors,
+            )
+
+            self._plot_widget.addItem(scatter)
+            items.append(scatter)
+
+        # Set axis labels for heatmap
+        self._plot_widget.setLabel("bottom", "Q")
+        self._plot_widget.setLabel("left", "Order Number")
+
+        return items
+
     def reset_zoom(self) -> None:
         """Reset zoom to show all data."""
         self._plot_widget.autoRange()

@@ -211,6 +211,10 @@ if not HAS_PYSIDE6:
         "MainWindow load and render image plot",
         "MainWindow load Rh1 file with slit-smeared data",
         "MainWindow multi-graph support",
+        "WaterfallPlotter add_dataset and get_plot_config",
+        "HeatmapPlotter add_dataset and get_plot_config",
+        "ImagePlotter multi-color-scale support",
+        "PlotEngine has waterfall and heatmap plotters registered",
     ]
     for t in gui_skip_tests:
         print("  SKIP: " + t)
@@ -485,6 +489,87 @@ else:
         # Close the second graph
         window._on_close_graph()
         assert len(window._graphs) == 1, f"Expected 1 graph after close, got {len(window._graphs)}"
+
+    # ============================================================
+    # Phase 4: Advanced Plot Types — Waterfall & Heatmap
+    # ============================================================
+    print("\n=== Testing Phase 4: Advanced Plot Types ===")
+
+    @test("WaterfallPlotter add_dataset and get_plot_config")
+    def _():
+        import numpy as np
+        from bernardyn.plot.waterfall_plotter import WaterfallPlotter
+
+        plotter = WaterfallPlotter()
+        x = np.array([1.0, 2.0, 3.0])
+        y = np.array([10.0, 20.0, 30.0])
+        plotter.add_dataset(x, y, order_number=5, color="red", symbol="o")
+
+        config = plotter.get_plot_config()
+        assert len(config["datasets"]) == 1, "Expected 1 dataset"
+        ds = config["datasets"][0]
+        assert ds["z_offset"] == 5.0, f"Expected z_offset=5.0, got {ds['z_offset']}"
+        assert ds["color"] == "red"
+
+    @test("WaterfallPlotter set_z_offset")
+    def _():
+        from bernardyn.plot.waterfall_plotter import WaterfallPlotter
+
+        plotter = WaterfallPlotter()
+        plotter.set_z_offset(2.5)
+        assert plotter.get_z_offset() == 2.5
+
+    @test("HeatmapPlotter add_dataset and get_plot_config")
+    def _():
+        import numpy as np
+        from bernardyn.plot.heatmap_plotter import HeatmapPlotter
+
+        plotter = HeatmapPlotter()
+        x = np.array([1.0, 2.0, 3.0])
+        y = np.array([10.0, 20.0, 30.0])
+        plotter.add_dataset(x, y, order_number=10)
+
+        config = plotter.get_plot_config()
+        assert len(config["datasets"]) == 1, "Expected 1 dataset"
+        ds = config["datasets"][0]
+        assert ds["order_number"] == 10
+
+    @test("HeatmapPlotter color scale selection")
+    def _():
+        from bernardyn.plot.heatmap_plotter import HeatmapPlotter, HEATMAP_COLOR_SCALES
+
+        plotter = HeatmapPlotter()
+        scales = plotter.get_color_scales()
+        assert len(scales) > 0, "Expected color scales"
+        assert "viridis" in HEATMAP_COLOR_SCALES
+
+    @test("ImagePlotter multi-color-scale support")
+    def _():
+        from bernardyn.plot.image_plotter import ImagePlotter, COLOR_SCALES
+
+        plotter = ImagePlotter()
+        scales = plotter.get_color_scales()
+        assert len(scales) >= 5, f"Expected at least 5 color scales, got {len(scales)}"
+        assert "grayscale" in COLOR_SCALES
+        assert "viridis" in COLOR_SCALES
+
+    @test("ImagePlotter get_color_map returns ColorMap")
+    def _():
+        import pyqtgraph as pg
+        from bernardyn.plot.image_plotter import ImagePlotter
+
+        plotter = ImagePlotter()
+        cmap = plotter.get_color_map()
+        assert cmap is not None, "Expected ColorMap object"
+
+    @test("PlotEngine has waterfall and heatmap plotters registered")
+    def _():
+        from bernardyn.plot.plot_engine import get_default_engine
+
+        engine = get_default_engine()
+        types = engine.get_available_types()
+        assert "waterfall" in types, f"Expected 'waterfall' plotter, got {types}"
+        assert "heatmap" in types, f"Expected 'heatmap' plotter, got {types}"
 
 
 # ============================================================

@@ -314,7 +314,11 @@ class MainWindow(QMainWindow):
         y_log = controls.get_y_log()
 
         if plot_type == "image":
-            self._render_image_plot(plot_widget, x_log, y_log)
+            self._render_image_plot(plot_widget, controls)
+        elif plot_type == "waterfall":
+            self._render_waterfall_plot(plot_widget, controls)
+        elif plot_type == "heatmap":
+            self._render_heatmap_plot(plot_widget, controls)
         else:
             self._render_line_plot(plot_widget, controls, x_log, y_log)
 
@@ -481,31 +485,175 @@ class MainWindow(QMainWindow):
     def _render_image_plot(
         self,
         plot_widget: PlotWidget,
-        x_log: bool,
-        y_log: bool,
+        controls: ControlsPanel,
     ) -> None:
         """Render a 2D image plot from loaded data.
 
         Args:
             plot_widget: The target PlotWidget to render into.
-            x_log: X axis log state (ignored for images).
-            y_log: Y axis log state (ignored for images).
+            controls: The ControlsPanel with current settings (color scale, log).
         """
         plot_widget.set_log_mode(x_log=False, y_log=False)
+
+        color_scale = controls.get_color_scale()
+        log_scale = controls.get_log_scale()
 
         for basename, data in self._loaded_data.items():
             raw_image = data.get("raw_image")
             if raw_image is not None and raw_image.data.size > 0:
                 img = raw_image.data
+
+                # Apply log scale if requested
+                if log_scale:
+                    img = np.where(img > 0, np.log10(np.maximum(img, 1e-30)), 0)
+
                 vmin = float(np.percentile(img[img > 0], 1)) if np.any(img > 0) else float(img.min())
                 vmax = float(np.percentile(img[img > 0], 99)) if np.any(img > 0) else float(img.max())
 
                 plot_widget.add_image(img, vmin=vmin, vmax=vmax)
-                plot_widget.set_title(f"{basename} - Raw Image")
+                plot_widget.set_title(f"{basename} - Raw Image ({color_scale})")
                 break
 
         # Enable controls
-        self._get_current_controls().set_enabled(True)
+        controls.set_enabled(True)
+
+    def _render_waterfall_plot(
+        self,
+        plot_widget: PlotWidget,
+        controls: ControlsPanel,
+    ) -> None:
+        """Render a waterfall (offset) plot from loaded 1D SAS data.
+
+        Datasets are stacked vertically with Z-offset based on order number.
+
+        Args:
+            plot_widget: The target PlotWidget to render into.
+            controls: The ControlsPanel with current settings (z_offset).
+        """
+        # Waterfall uses lin-lin by default
+        plot_widget.set_log_mode(x_log=False, y_log=False)
+
+        # Apply grid and legend settings
+        show_grid_x, show_grid_y = controls.get_show_grid()
+        plot_widget.set_grid(show_x=show_grid_x, show_y=show_grid_y)
+        plot_widget.set_legend(controls.get_show_legend())
+
+        z_offset = controls.get_z_offset()
+        dataset_styles = controls.get_dataset_styles()
+
+        # Collect all datasets for waterfall rendering
+        waterfall_datasets = []
+        dataset_index = 0
+
+        for basename, data in self._loaded_data.items():
+            for sas_data in data.get("sas_data_list", []):
+                x = sas_data.x
+                y = sas_data.y
+
+                # Skip datasets with non-positive values for log scale
+                if np.any(x <= 0) or np.any(y <= 0):
+                    continue
+
+                # Get style for this dataset
+                if dataset_index < len(dataset_styles):
+                    style = dataset_styles[dataset_index]
+                    color = style.get("color", "blue")
+                    symbol = style.get("symbol", "o")
+                else:
+                    from bernardyn.plot.plot_style import get_color, DEFAULT_SYMBOLS
+                    color = get_color(dataset_index)
+                    symbol = DEFAULT_SYMBOLS[dataset_index % len(DEFAULT_SYMBOLS)]
+
+                waterfall_datasets.append({
+                    "x": x,
+                    "y": y,
+                    "z_offset": float(dataset_index) * z_offset,
+                    "order_number": dataset_index,
+                    "color": color,
+                    "symbol": symbol,
+                    "title": basename,
+                })
+
+                dataset_index += 1
+
+        # Render waterfall lines
+        if waterfall_datasets:
+            plot_widget.add_waterfall_lines(waterfall_datasets)
+
+            # Set axis labels
+            for basename, data in self._loaded_data.items():
+                for sas_data in data.get("sas_data_list", []):
+                    if len(sas_data.x) > 0:
+                        plot_widget.set_x_label(sas_data.x_label or "Q")
+                        break
+
+            # Update controls panel dataset count
+            controls.set_dataset_count(dataset_index)
+
+        # Enable controls
+        controls.set_enabled(True)
+
+    def _render_heatmap_plot(
+        self,
+        plot_widget: PlotWidget,
+        controls: ControlsPanel,
+    ) -> None:
+        """Render a heatmap plot from loaded 1D SAS data.
+
+        Datasets are arranged with X horizontal, order number vertical,
+        and intensity mapped to color.
+
+        Args:
+            plot_widget: The target PlotWidget to render into.
+            controls: The ControlsPanel with current settings (color scale).
+        """
+        # Heatmap uses lin-lin by default
+        plot_widget.set_log_mode(x_log=False, y_log=False)
+
+        # Apply grid and legend settings
+        show_grid_x, show_grid_y = controls.get_show_grid()
+        plot_widget.set_grid(show_x=show_grid_x, show_y=show_grid_y)
+
+        color_scale = controls.get_color_scale()
+        dataset_styles = controls.get_dataset_styles()
+
+        # Collect all datasets for heatmap rendering
+        heatmap_datasets = []
+        dataset_index = 0
+
+        for basename, data in self._loaded_data.items():
+            for sas_data in data.get("sas_data_list", []):
+                x = sas_data.x
+                y = sas_data.y
+
+                # Skip datasets with non-positive values for log scale
+                if np.any(x <= 0) or np.any(y <= 0):
+                    continue
+
+                heatmap_datasets.append({
+                    "x": x,
+                    "y": y,
+                    "order_number": dataset_index,
+                })
+
+                dataset_index += 1
+
+        # Render heatmap lines (scatter plot with color mapping)
+        if heatmap_datasets:
+            plot_widget.add_heatmap_lines(heatmap_datasets)
+
+            # Set axis labels
+            for basename, data in self._loaded_data.items():
+                for sas_data in data.get("sas_data_list", []):
+                    if len(sas_data.x) > 0:
+                        plot_widget.set_x_label(sas_data.x_label or "Q")
+                        break
+
+            # Update controls panel dataset count
+            controls.set_dataset_count(dataset_index)
+
+        # Enable controls
+        controls.set_enabled(True)
 
     def get_plot_widget(self) -> PlotWidget:
         """Get the plot widget for the currently active graph."""

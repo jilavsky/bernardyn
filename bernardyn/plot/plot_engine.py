@@ -105,14 +105,48 @@ class ImagePlotterAdapter(Plotter):
         return self._plotter.get_plot_config()
 
 
+class WaterfallPlotterAdapter(Plotter):
+    """Adapter that wraps WaterfallPlotter as a Plotter interface implementation."""
+
+    def __init__(self, waterfall_plotter):
+        self._plotter = waterfall_plotter
+
+    def get_plot_type(self) -> str:
+        return "waterfall"
+
+    def get_plot_config(self, **kwargs):
+        x_log = kwargs.get("x_log", False)
+        y_log = kwargs.get("y_log", True)
+        return self._plotter.get_plot_config(x_log=x_log, y_log=y_log)
+
+
+class HeatmapPlotterAdapter(Plotter):
+    """Adapter that wraps HeatmapPlotter as a Plotter interface implementation."""
+
+    def __init__(self, heatmap_plotter):
+        self._plotter = heatmap_plotter
+
+    def get_plot_type(self) -> str:
+        return "heatmap"
+
+    def get_plot_config(self, **kwargs):
+        x_log = kwargs.get("x_log", False)
+        y_log = kwargs.get("y_log", False)
+        return self._plotter.get_plot_config(x_log=x_log, y_log=y_log)
+
+
 # Global plot engine with default plotters registered
 _default_engine = PlotEngine()
 
 from bernardyn.plot.line_plotter import LinePlotter  # noqa: E402
 from bernardyn.plot.image_plotter import ImagePlotter  # noqa: E402
+from bernardyn.plot.waterfall_plotter import WaterfallPlotter  # noqa: E402
+from bernardyn.plot.heatmap_plotter import HeatmapPlotter  # noqa: E402
 
 _default_engine.register(LinePlotterAdapter(LinePlotter()))
 _default_engine.register(ImagePlotterAdapter(ImagePlotter()))
+_default_engine.register(WaterfallPlotterAdapter(WaterfallPlotter()))
+_default_engine.register(HeatmapPlotterAdapter(HeatmapPlotter()))
 
 
 def get_plotter(plot_type: str):
