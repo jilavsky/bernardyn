@@ -3,6 +3,9 @@
 Wires together the data panel (left), plot widget (center), and
 controls panel (right) into a functional GUI. Handles the data
 loading pipeline: file selection -> load -> plot display.
+
+Supports multi-graph layouts, per-dataset styling, grid/legend
+toggles, and slit-smeared/desmeared data display.
 """
 
 import logging
@@ -11,10 +14,15 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QComboBox,
     QDockWidget,
     QMainWindow,
-    QSplitter,
+    QMenu,
     QMessageBox,
+    QSplitter,
+    QTabWidget,
+    QAction,
+    QMenuBar,
 )
 
 from bernardyn.data.loader import get_default_dispatcher
@@ -29,9 +37,10 @@ class MainWindow(QMainWindow):
     """Main application window for Bernardyn.
 
     Layout:
+      - Menu bar with File and Graph menus
       - Left dock: DataPanel (file browser, listbox, sort/filter)
-      - Center: PlotWidget (pyqtgraph plot display)
-      - Right dock: ControlsPanel (plot type, scales, ranges)
+      - Center: QTabWidget of PlotWidgets (multi-graph support)
+      - Right dock: ControlsPanel (plot type, scales, ranges, styles)
 
     The window wires signals between panels to create a complete
     data loading and plotting pipeline.
@@ -49,15 +58,24 @@ class MainWindow(QMainWindow):
         # Current loaded data (for re-rendering)
         self._loaded_data: Dict[str, Any] = {}
 
+        # Multi-graph support: list of (name, plot_widget, controls) tuples
+        self._graphs: List[tuple] = []
+
         # Build the UI
         self._setup_ui()
         self._wire_signals()
 
     def _setup_ui(self) -> None:
         """Build the main window layout."""
-        # Central widget with splitter for plot area
-        self._plot_widget = PlotWidget()
-        self.setCentralWidget(self._plot_widget)
+        # --- Menu bar ---
+        self._setup_menu_bar()
+
+        # Central widget: QTabWidget for multi-graph support
+        self._tab_widget = QTabWidget()
+        self.setCentralWidget(self._tab_widget)
+
+        # Create the first graph tab by default
+        self._create_new_graph("Graph 1")
 
         # Left dock: Data panel
         self._data_panel = DataPanel()
@@ -73,13 +91,169 @@ class MainWindow(QMainWindow):
         self._controls_dock.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
         self.addDockWidget(Qt.RightDockWidgetArea, self._controls_dock)
 
+    def _setup_menu_bar(self) -> None:
+        """Build the menu bar with File and Graph menus."""
+        menubar = self.menuBar()
+
+        # --- File menu ---
+        file_menu = menubar.addMenu("File")
+
+        open_action = QAction("Open File...", self)
+        open_action.setShortcut("Ctrl+O")
+        open_action.triggered.connect(self._on_open_file)
+        file_menu.addAction(open_action)
+
+        open_folder_action = QAction("Open Folder...", self)
+        open_folder_action.setShortcut("Ctrl+Shift+O")
+        open_folder_action.triggered.connect(self._on_open_folder)
+        file_menu.addAction(open_folder_action)
+
+        file_menu.addSeparator()
+
+        exit_action = QAction("Exit", self)
+        exit_action.setShortcut("Ctrl+Q")
+        exit_action.triggered.connect(self.close)
+        file_menu.addAction(exit_action)
+
+        # --- Graph menu ---
+        graph_menu = menubar.addMenu("Graph")
+
+        add_graph_action = QAction("New Graph...", self)
+        add_graph_action.setShortcut("Ctrl+T")
+        add_graph_action.triggered.connect(self._on_new_graph)
+        graph_menu.addAction(add_graph_action)
+
+        close_graph_action = QAction("Close Graph", self)
+        close_graph_action.setShortcut("Ctrl+W")
+        close_graph_action.triggered.connect(self._on_close_graph)
+        graph_menu.addAction(close_graph_action)
+
+        graph_menu.addSeparator()
+
+        # Graph list submenu
+        self._graph_list_menu = QMenu("Switch to Graph", self)
+        graph_menu.addMenu(self._graph_list_menu)
+
+    def _create_new_graph(self, name: str) -> tuple:
+        """Create a new graph tab with its own plot widget and controls.
+
+        Returns:
+            Tuple of (name, plot_widget, controls_panel).
+        """
+        plot_widget = PlotWidget()
+        controls = ControlsPanel()
+
+        # Wire this graph's controls to the plot widget
+        controls.set_on_scale_changed(
+            lambda kind, value: self._on_graph_control_changed(name, kind, value)
+        )
+        controls.generate_requested.connect(
+            lambda: self._on_graph_generate(name)
+        )
+
+        # Add tab
+        idx = self._tab_widget.addTab(plot_widget, name)
+        self._tab_widget.setCurrentIndex(idx)
+
+        graph_info = (name, plot_widget, controls)
+        self._graphs.append(graph_info)
+
+        # Update graph list menu
+        self._update_graph_list_menu()
+
+        return graph_info
+
+    def _get_current_graph(self) -> Optional[tuple]:
+        """Get the currently active graph tuple."""
+        if not self._graphs:
+            return None
+        current_idx = self._tab_widget.currentIndex()
+        if 0 <= current_idx < len(self._graphs):
+            return self._graphs[current_idx]
+        # Fallback: last graph
+        return self._graphs[-1] if self._graphs else None
+
+    def _get_current_plot_widget(self) -> PlotWidget:
+        """Get the plot widget for the currently active graph."""
+        graph = self._get_current_graph()
+        if graph:
+            return graph[1]
+        # Fallback to first graph's plot widget
+        if self._graphs:
+            return self._graphs[0][1]
+        return PlotWidget()
+
+    def _get_current_controls(self) -> ControlsPanel:
+        """Get the controls panel for the currently active graph."""
+        graph = self._get_current_graph()
+        if graph:
+            return graph[2]
+        return self._controls_panel
+
     def _wire_signals(self) -> None:
         """Connect signals between UI components."""
-        # Data panel -> load and plot selected files
+        # Data panel -> load and plot selected files (applied to current graph)
         self._data_panel.files_selected.connect(self._on_files_selected)
 
-        # Controls panel -> update plot scales
-        self._controls_panel.generate_requested.connect(self._on_generate_plot)
+    def _update_graph_list_menu(self) -> None:
+        """Update the graph list submenu in the menu bar."""
+        self._graph_list_menu.clear()
+        for i, (name, plot_widget, controls) in enumerate(self._graphs):
+            action = self._graph_list_menu.addAction(name)
+            action.triggered.connect(lambda checked, idx=i: self._switch_to_graph(idx))
+
+    def _switch_to_graph(self, index: int) -> None:
+        """Switch the active graph tab to the given index."""
+        if 0 <= index < len(self._graphs):
+            self._tab_widget.setCurrentIndex(index)
+
+    def _on_open_file(self) -> None:
+        """Handle File > Open File menu action."""
+        from PySide6.QtWidgets import QFileDialog
+
+        filepath, _ = QFileDialog.getOpenFileName(
+            self, "Open Data File", "",
+            "HDF5 Files (*.hdf *.h5);;ASCII Files (*.txt *.csv);;All Files (*)",
+        )
+        if filepath:
+            self._data_panel.set_folder("/".join(filepath.split("/")[:-1]))
+            # Select the file in the listbox and trigger loading
+            self._data_panel.set_regex_filter("^" + filepath.split("/")[-1] + "$")
+            self._on_files_selected([filepath])
+
+    def _on_open_folder(self) -> None:
+        """Handle File > Open Folder menu action."""
+        from PySide6.QtWidgets import QFileDialog
+
+        folder = QFileDialog.getExistingDirectory(
+            self, "Select Data Folder",
+            self._data_panel.get_current_folder() or "/home",
+        )
+        if folder:
+            self._data_panel.set_folder(folder)
+
+    def _on_new_graph(self) -> None:
+        """Handle Graph > New Graph menu action."""
+        # Name the new graph based on existing count
+        idx = len(self._graphs) + 1
+        self._create_new_graph(f"Graph {idx}")
+
+    def _on_close_graph(self) -> None:
+        """Handle Graph > Close Graph menu action."""
+        if len(self._graphs) <= 1:
+            QMessageBox.information(
+                self, "Close Graph",
+                "Cannot close the last graph tab.",
+            )
+            return
+
+        current_idx = self._tab_widget.currentIndex()
+        if 0 <= current_idx < len(self._graphs):
+            name, plot_widget, controls = self._graphs.pop(current_idx)
+            plot_widget.deleteLater()
+            controls.deleteLater()
+            self._tab_widget.removeTab(current_idx)
+            self._update_graph_list_menu()
 
     def _on_files_selected(self, filepaths: List[str]) -> None:
         """Handle file selection from the data panel."""
@@ -102,35 +276,79 @@ class MainWindow(QMainWindow):
                     f"Failed to load {filepath}:\n{str(e)}",
                 )
 
-        # Auto-generate plot with loaded data
+        # Auto-generate plot with loaded data on the current graph
         if self._loaded_data:
-            self._on_generate_plot()
+            current_graph = self._get_current_graph()
+            if current_graph:
+                name, plot_widget, controls = current_graph
+                self._on_graph_generate(name)
 
-    def _on_generate_plot(self) -> None:
-        """Generate the plot from loaded data based on current controls."""
-        self._plot_widget.clear()
+    def _on_graph_control_changed(self, graph_name: str, kind: str, value: Any) -> None:
+        """Handle control changes for a specific graph."""
+        plot_widget = self._get_current_plot_widget()
+
+        if kind == "x":
+            plot_widget.set_log_mode(x_log=value, y_log=plot_widget._show_grid_x)
+        elif kind == "y":
+            plot_widget.set_log_mode(x_log=plot_widget._show_grid_x, y_log=value)
+        elif kind == "grid":
+            plot_widget.set_grid(show_x=value[0], show_y=value[1])
+        elif kind == "legend":
+            plot_widget.set_legend(show=value)
+        elif kind == "slit_smear":
+            # Re-render with slit-smeared toggle state
+            self._on_graph_generate(graph_name)
+
+    def _on_graph_generate(self, graph_name: str) -> None:
+        """Generate the plot for a specific graph tab."""
+        controls = self._get_current_controls()
+        plot_widget = self._get_current_plot_widget()
+
+        plot_widget.clear()
 
         if not self._loaded_data:
             return
 
-        plot_type = self._controls_panel.get_plot_type()
-        x_log = self._controls_panel.get_x_log()
-        y_log = self._controls_panel.get_y_log()
+        plot_type = controls.get_plot_type()
+        x_log = controls.get_x_log()
+        y_log = controls.get_y_log()
 
         if plot_type == "image":
-            self._render_image_plot(x_log, y_log)
+            self._render_image_plot(plot_widget, x_log, y_log)
         else:
-            self._render_line_plot(x_log, y_log)
+            self._render_line_plot(plot_widget, controls, x_log, y_log)
 
-    def _render_line_plot(self, x_log: bool, y_log: bool) -> None:
-        """Render a line plot from loaded 1D SAS data."""
-        self._plot_widget.set_log_mode(x_log=x_log, y_log=y_log)
+    def _render_line_plot(
+        self,
+        plot_widget: PlotWidget,
+        controls: ControlsPanel,
+        x_log: bool,
+        y_log: bool,
+    ) -> None:
+        """Render a line plot from loaded 1D SAS data.
+
+        Args:
+            plot_widget: The target PlotWidget to render into.
+            controls: The ControlsPanel with current settings.
+            x_log: Whether X axis is logarithmic.
+            y_log: Whether Y axis is logarithmic.
+        """
+        plot_widget.set_log_mode(x_log=x_log, y_log=y_log)
+
+        # Apply grid and legend settings
+        show_grid_x, show_grid_y = controls.get_show_grid()
+        plot_widget.set_grid(show_x=show_grid_x, show_y=show_grid_y)
+        plot_widget.set_legend(controls.get_show_legend())
+
+        show_slit_smear = controls.get_show_slit_smear()
+        dataset_styles = controls.get_dataset_styles()
 
         dataset_index = 0
         all_x_min = float("inf")
         all_x_max = float("-inf")
         all_y_min = float("inf")
         all_y_max = float("-inf")
+        has_slit_smear_data = False
 
         for basename, data in self._loaded_data.items():
             # Process 1D SAS datasets
@@ -142,21 +360,30 @@ class MainWindow(QMainWindow):
                 if (x_log and np.any(x <= 0)) or (y_log and np.any(y <= 0)):
                     continue
 
-                from bernardyn.plot.plot_style import get_color, DEFAULT_SYMBOLS
-                color = get_color(dataset_index)
-                symbol = DEFAULT_SYMBOLS[dataset_index % len(DEFAULT_SYMBOLS)]
+                # Get style for this dataset
+                if dataset_index < len(dataset_styles):
+                    style = dataset_styles[dataset_index]
+                    color = style.get("color", "blue")
+                    symbol = style.get("symbol", "o")
+                    linestyle = style.get("linestyle", "-")
+                else:
+                    from bernardyn.plot.plot_style import get_color, DEFAULT_SYMBOLS
+                    color = get_color(dataset_index)
+                    symbol = DEFAULT_SYMBOLS[dataset_index % len(DEFAULT_SYMBOLS)]
+                    linestyle = "-"
 
-                self._plot_widget.add_line(
+                plot_widget.add_line(
                     x, y,
                     color=color,
                     symbol=symbol,
+                    linestyle=linestyle,
                     linewidth=1.5,
                     name=basename,
                 )
 
                 # Add error bars if available
                 if sas_data.y_err is not None:
-                    self._plot_widget.add_error_bars(x, y, sas_data.y_err, color=color)
+                    plot_widget.add_error_bars(x, y, sas_data.y_err, color=color)
 
                 # Track ranges
                 all_x_min = min(all_x_min, float(x.min()))
@@ -169,16 +396,24 @@ class MainWindow(QMainWindow):
             # Process slit-smeared data
             slit_smear = data.get("slit_smear")
             if slit_smear is not None:
+                has_slit_smear_data = True
                 x = slit_smear.x
                 y = slit_smear.y
 
                 if (x_log and np.any(x <= 0)) or (y_log and np.any(y <= 0)):
                     continue
 
+                # Only show if toggle is enabled
+                if not show_slit_smear:
+                    dataset_index += 1
+                    continue
+
                 from bernardyn.plot.plot_style import get_color, DEFAULT_SYMBOLS
                 color = get_color(dataset_index)
-                self._plot_widget.add_line(
-                    x, y, color=color, symbol="^", linewidth=1.5,
+                symbol = "^"  # Upward triangle for SMR
+
+                plot_widget.add_line(
+                    x, y, color=color, symbol=symbol, linewidth=1.5,
                     name=f"{basename} (SMR)",
                 )
 
@@ -200,8 +435,10 @@ class MainWindow(QMainWindow):
 
                 from bernardyn.plot.plot_style import get_color, DEFAULT_SYMBOLS
                 color = get_color(dataset_index)
-                self._plot_widget.add_line(
-                    x, y, color=color, symbol="v", linewidth=1.5,
+                symbol = "v"  # Downward triangle for desmear
+
+                plot_widget.add_line(
+                    x, y, color=color, symbol=symbol, linewidth=1.5,
                     name=f"{basename} (desmear)",
                 )
 
@@ -214,30 +451,47 @@ class MainWindow(QMainWindow):
 
         # Set axis ranges
         if all_x_min != float("inf"):
-            self._plot_widget.set_x_range(all_x_min, all_x_max)
+            plot_widget.set_x_range(all_x_min, all_x_max)
         if all_y_min != float("inf"):
-            self._plot_widget.set_y_range(all_y_min, all_y_max)
+            plot_widget.set_y_range(all_y_min, all_y_max)
 
         # Update axis labels from first dataset
         for basename, data in self._loaded_data.items():
             for sas_data in data.get("sas_data_list", []):
                 if len(sas_data.x) > 0:
-                    self._plot_widget.set_x_label(sas_data.x_label or "X")
-                    self._plot_widget.set_y_label(sas_data.y_label or "Y")
+                    plot_widget.set_x_label(sas_data.x_label or "X")
+                    plot_widget.set_y_label(sas_data.y_label or "Y")
                     break
 
         # Update controls panel ranges
         if all_x_min != float("inf"):
-            self._controls_panel.set_x_range(all_x_min, all_x_max)
+            controls.set_x_range(all_x_min, all_x_max)
         if all_y_min != float("inf"):
-            self._controls_panel.set_y_range(all_y_min, all_y_max)
+            controls.set_y_range(all_y_min, all_y_max)
+
+        # Update dataset count in controls
+        controls.set_dataset_count(dataset_index)
+
+        # Enable slit-smeared toggle if data has it
+        controls.set_slit_smear_available(has_slit_smear_data)
 
         # Enable controls
-        self._controls_panel.set_enabled(True)
+        controls.set_enabled(True)
 
-    def _render_image_plot(self, x_log: bool, y_log: bool) -> None:
-        """Render a 2D image plot from loaded data."""
-        self._plot_widget.set_log_mode(x_log=False, y_log=False)
+    def _render_image_plot(
+        self,
+        plot_widget: PlotWidget,
+        x_log: bool,
+        y_log: bool,
+    ) -> None:
+        """Render a 2D image plot from loaded data.
+
+        Args:
+            plot_widget: The target PlotWidget to render into.
+            x_log: X axis log state (ignored for images).
+            y_log: Y axis log state (ignored for images).
+        """
+        plot_widget.set_log_mode(x_log=False, y_log=False)
 
         for basename, data in self._loaded_data.items():
             raw_image = data.get("raw_image")
@@ -246,16 +500,16 @@ class MainWindow(QMainWindow):
                 vmin = float(np.percentile(img[img > 0], 1)) if np.any(img > 0) else float(img.min())
                 vmax = float(np.percentile(img[img > 0], 99)) if np.any(img > 0) else float(img.max())
 
-                self._plot_widget.add_image(img, vmin=vmin, vmax=vmax)
-                self._plot_widget.set_title(f"{basename} - Raw Image")
+                plot_widget.add_image(img, vmin=vmin, vmax=vmax)
+                plot_widget.set_title(f"{basename} - Raw Image")
                 break
 
         # Enable controls
-        self._controls_panel.set_enabled(True)
+        self._get_current_controls().set_enabled(True)
 
     def get_plot_widget(self) -> PlotWidget:
-        """Get the plot widget for external access."""
-        return self._plot_widget
+        """Get the plot widget for the currently active graph."""
+        return self._get_current_plot_widget()
 
     def get_data_panel(self) -> DataPanel:
         """Get the data panel for external access."""
@@ -263,4 +517,4 @@ class MainWindow(QMainWindow):
 
     def get_controls_panel(self) -> ControlsPanel:
         """Get the controls panel for external access."""
-        return self._controls_panel
+        return self._get_current_controls()

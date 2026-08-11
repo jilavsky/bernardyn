@@ -20,6 +20,7 @@ class PlotWidget(QWidget):
 
     Wraps a pyqtgraph PlotWidget with controls for:
       - Log/lin scale toggling (X axis, Y axis)
+      - Grid and legend toggles
       - Zoom reset
       - Clipboard copy (Ctrl/Cmd+C)
     """
@@ -38,6 +39,11 @@ class PlotWidget(QWidget):
 
         # Default to log-log scale (SAS standard)
         self._plot_widget.setLogMode(x=True, y=True)
+
+        # Grid and legend state
+        self._show_grid_x: bool = False
+        self._show_grid_y: bool = False
+        self._show_legend: bool = False
 
         # Add zoom reset and copy buttons
         btn_layout = QHBoxLayout()
@@ -89,6 +95,46 @@ class PlotWidget(QWidget):
     def set_log_mode(self, x_log: bool = True, y_log: bool = True) -> None:
         """Set logarithmic scale mode for axes."""
         self._plot_widget.setLogMode(x=x_log, y=y_log)
+
+    def set_grid(self, show_x: bool = False, show_y: bool = False) -> None:
+        """Show or hide grid lines on the plot.
+
+        Args:
+            show_x: Show vertical (X axis) grid lines
+            show_y: Show horizontal (Y axis) grid lines
+        """
+        self._show_grid_x = show_x
+        self._show_grid_y = show_y
+
+        # pyqtgraph uses alpha values for grid transparency
+        alpha_x = 80 if show_x else 0
+        alpha_y = 80 if show_y else 0
+        self._plot_widget.showGrid(x=show_x, y=show_y, alpha=0.5)
+
+    def get_grid(self) -> tuple:
+        """Get current grid state."""
+        return (self._show_grid_x, self._show_grid_y)
+
+    def set_legend(self, show: bool = True) -> None:
+        """Show or hide the plot legend.
+
+        Args:
+            show: Whether to display the legend
+        """
+        self._show_legend = show
+        if show:
+            self._plot_widget.addLegend()
+        else:
+            # Remove legend by clearing the plot and re-adding items
+            self._plot_widget.clear()
+            # Re-add all stored plot items with their names for legend display
+            for item in self._plot_items:
+                if hasattr(item, 'name') and item.name():
+                    self._plot_widget.addItem(item)
+
+    def get_legend(self) -> bool:
+        """Get current legend state."""
+        return self._show_legend
 
     def add_line(
         self,

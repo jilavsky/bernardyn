@@ -5,6 +5,9 @@ Provides the plot customization interface where users can:
   - Toggle log/lin scales for X and Y axes
   - Set axis ranges
   - Add/remove datasets from the plot
+  - Toggle grid and legend display
+  - Manage per-dataset styling (color, symbol, line style)
+  - Toggle slit-smeared/desmeared data display
 """
 
 import logging
@@ -13,6 +16,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDoubleSpinBox,
     QGroupBox,
@@ -33,11 +37,17 @@ class ControlsPanel(QGroupBox):
       - Plot type selection (line, image)
       - Log/lin scale toggles for X and Y axes
       - Axis range inputs (min/max)
+      - Grid and legend toggles
+      - Per-dataset styling (color, symbol, line style)
+      - Slit-smeared/desmeared data toggle
       - Generate plot button
     """
 
     # Signal emitted when user clicks "Generate Plot"
     generate_requested = Signal()
+
+    # Signal emitted when a dataset style is changed
+    dataset_style_changed = Signal(int, dict)
 
     def __init__(self, parent: Optional[Any] = None):
         super().__init__("Plot Controls", parent)
@@ -45,6 +55,13 @@ class ControlsPanel(QGroupBox):
         self._plot_type: str = "line"  # 'line' or 'image'
         self._x_log: bool = True
         self._y_log: bool = True
+        self._show_grid_x: bool = False
+        self._show_grid_y: bool = False
+        self._show_legend: bool = True
+        self._show_slit_smear: bool = False
+
+        # Per-dataset styling: list of dicts with 'color', 'symbol', 'linestyle'
+        self._dataset_styles: List[Dict[str, str]] = []
 
         # Callbacks (set by main window)
         self._on_scale_changed: Optional[Any] = None
@@ -53,7 +70,7 @@ class ControlsPanel(QGroupBox):
 
     def _setup_ui(self) -> None:
         """Build the UI layout."""
-        layout = QVBoxLayout()
+        main_layout = QVBoxLayout()
 
         # --- Plot Type section ---
         type_group = QGroupBox("Plot Type")
@@ -66,7 +83,7 @@ class ControlsPanel(QGroupBox):
         type_layout.addWidget(self._plot_type_combo)
 
         type_group.setLayout(type_layout)
-        layout.addWidget(type_group)
+        main_layout.addWidget(type_group)
 
         # --- Scale section (for line plots) ---
         scale_group = QGroupBox("Scale")
@@ -130,19 +147,112 @@ class ControlsPanel(QGroupBox):
         range_group.setLayout(range_layout)
         scale_layout.addWidget(range_group)
 
+        # Grid and legend toggles
+        display_group = QGroupBox("Display")
+        display_layout = QVBoxLayout()
+
+        self._grid_x_check = QCheckBox("X Grid")
+        self._grid_x_check.stateChanged.connect(self._on_grid_changed)
+        display_layout.addWidget(self._grid_x_check)
+
+        self._grid_y_check = QCheckBox("Y Grid")
+        self._grid_y_check.stateChanged.connect(self._on_grid_changed)
+        display_layout.addWidget(self._grid_y_check)
+
+        self._legend_check = QCheckBox("Legend")
+        self._legend_check.setChecked(True)
+        self._legend_check.stateChanged.connect(self._on_legend_changed)
+        display_layout.addWidget(self._legend_check)
+
+        # Slit-smeared toggle (initially disabled)
+        self._slit_smear_check = QCheckBox("Show Slit-Smeared")
+        self._slit_smear_check.setEnabled(False)
+        self._slit_smear_check.stateChanged.connect(self._on_slit_smear_changed)
+        display_layout.addWidget(self._slit_smear_check)
+
+        display_group.setLayout(display_layout)
+        scale_layout.addWidget(display_group)
+
         scale_group.setLayout(scale_layout)
-        layout.addWidget(scale_group)
+        main_layout.addWidget(scale_group)
+
+        # --- Dataset Styling section ---
+        style_group = QGroupBox("Dataset Styles")
+        style_layout = QVBoxLayout()
+
+        # Dataset selector
+        ds_select_layout = QHBoxLayout()
+        ds_select_layout.addWidget(QLabel("Dataset:"))
+        self._dataset_combo = QComboBox()
+        self._dataset_combo.currentIndexChanged.connect(self._on_dataset_selected)
+        ds_select_layout.addWidget(self._dataset_combo, 1)
+        style_layout.addLayout(ds_select_layout)
+
+        # Color selector
+        color_layout = QHBoxLayout()
+        color_layout.addWidget(QLabel("Color:"))
+        self._color_combo = QComboBox()
+        from bernardyn.plot.plot_style import DEFAULT_COLORS
+        for c in DEFAULT_COLORS:
+            self._color_combo.addItem(self._make_color_item(c, c))
+        self._color_combo.currentIndexChanged.connect(self._on_style_changed)
+        color_layout.addWidget(self._color_combo, 1)
+        style_layout.addLayout(color_layout)
+
+        # Symbol selector
+        symbol_layout = QHBoxLayout()
+        symbol_layout.addWidget(QLabel("Symbol:"))
+        self._symbol_combo = QComboBox()
+        from bernardyn.plot.plot_style import DEFAULT_SYMBOLS
+        for s in DEFAULT_SYMBOLS:
+            self._symbol_combo.addItem(s, s)
+        self._symbol_combo.currentIndexChanged.connect(self._on_style_changed)
+        symbol_layout.addWidget(self._symbol_combo, 1)
+        style_layout.addLayout(symbol_layout)
+
+        # Line style selector
+        linestyle_layout = QHBoxLayout()
+        linestyle_layout.addWidget(QLabel("Line:"))
+        self._linestyle_combo = QComboBox()
+        from bernardyn.plot.plot_style import DEFAULT_LINE_STYLES
+        for ls in DEFAULT_LINE_STYLES:
+            self._linestyle_combo.addItem(ls, ls)
+        self._linestyle_combo.currentIndexChanged.connect(self._on_style_changed)
+        linestyle_layout.addWidget(self._linestyle_combo, 1)
+        style_layout.addLayout(linestyle_layout)
+
+        # Add/remove dataset buttons
+        btn_row = QHBoxLayout()
+        self._add_ds_btn = QPushButton("Add Dataset")
+        self._add_ds_btn.clicked.connect(self._on_add_dataset)
+        btn_row.addWidget(self._add_ds_btn)
+
+        self._remove_ds_btn = QPushButton("Remove Selected")
+        self._remove_ds_btn.clicked.connect(self._on_remove_dataset)
+        btn_row.addWidget(self._remove_ds_btn)
+
+        style_layout.addLayout(btn_row)
+
+        style_group.setLayout(style_layout)
+        main_layout.addWidget(style_group)
 
         # --- Generate button ---
         self._generate_btn = QPushButton("Generate Plot")
         self._generate_btn.setStyleSheet("font-weight: bold; padding: 8px;")
         self._generate_btn.clicked.connect(self.generate_requested.emit)
-        layout.addWidget(self._generate_btn)
+        main_layout.addWidget(self._generate_btn)
 
         # Spacer to push controls to top
-        layout.addStretch(1)
+        main_layout.addStretch(1)
 
-        self.setLayout(layout)
+        self.setLayout(main_layout)
+
+    def _make_color_item(self, color: str, text: str) -> Any:
+        """Create a combo box item with a color preview."""
+        from PySide6.QtGui import QIcon, QPixmap, QColor
+        pixmap = QPixmap(20, 20)
+        pixmap.fill(QColor(color))
+        return QIcon(pixmap), text
 
     def _on_plot_type_changed(self, index: int) -> None:
         """Handle plot type changes."""
@@ -165,6 +275,104 @@ class ControlsPanel(QGroupBox):
         if self._on_scale_changed:
             self._on_scale_changed("auto", None)
 
+    def _on_grid_changed(self, state: int) -> None:
+        """Handle grid toggle changes."""
+        self._show_grid_x = self._grid_x_check.isChecked()
+        self._show_grid_y = self._grid_y_check.isChecked()
+        if self._on_scale_changed:
+            self._on_scale_changed("grid", (self._show_grid_x, self._show_grid_y))
+
+    def _on_legend_changed(self, state: int) -> None:
+        """Handle legend toggle changes."""
+        self._show_legend = self._legend_check.isChecked()
+        if self._on_scale_changed:
+            self._on_scale_changed("legend", self._show_legend)
+
+    def _on_slit_smear_changed(self, state: int) -> None:
+        """Handle slit-smeared toggle changes."""
+        self._show_slit_smear = self._slit_smear_check.isChecked()
+        if self._on_scale_changed:
+            self._on_scale_changed("slit_smear", self._show_slit_smear)
+
+    def _on_dataset_selected(self, index: int) -> None:
+        """Handle dataset selection change in the combo box."""
+        pass
+
+    def _on_style_changed(self, index: int) -> None:
+        """Handle per-dataset style changes."""
+        ds_index = self._dataset_combo.currentIndex()
+        if ds_index < 0 or ds_index >= len(self._dataset_styles):
+            return
+
+        style = {
+            "color": self._color_combo.currentData(),
+            "symbol": self._symbol_combo.currentData(),
+            "linestyle": self._linestyle_combo.currentData(),
+        }
+        self._dataset_styles[ds_index] = style
+        self.dataset_style_changed.emit(ds_index, style)
+
+    def _on_add_dataset(self) -> None:
+        """Add a new dataset entry to the style manager."""
+        from bernardyn.plot.plot_style import auto_style
+
+        idx = len(self._dataset_styles)
+        default_style = auto_style(idx)
+        self._dataset_styles.append(default_style)
+
+        # Add to combo box
+        name = f"Dataset {idx + 1}"
+        self._dataset_combo.addItem(name)
+        self._dataset_combo.setCurrentIndex(idx)
+
+        # Update style controls to match new dataset
+        self._update_style_controls(default_style)
+
+    def _on_remove_dataset(self) -> None:
+        """Remove the selected dataset from the style manager."""
+        idx = self._dataset_combo.currentIndex()
+        if idx < 0:
+            return
+
+        self._dataset_styles.pop(idx)
+        self._dataset_combo.removeItem(idx)
+
+        # Update remaining dataset styles to reassign auto-styles
+        for i in range(len(self._dataset_styles)):
+            from bernardyn.plot.plot_style import auto_style
+            self._dataset_styles[i] = auto_style(i)
+
+        # Update combo box names
+        self._dataset_combo.clear()
+        for i in range(len(self._dataset_styles)):
+            self._dataset_combo.addItem(f"Dataset {i + 1}")
+
+        if self._dataset_combo.count() > 0:
+            self._dataset_combo.setCurrentIndex(0)
+            self._update_style_controls(self._dataset_styles[0])
+
+    def _update_style_controls(self, style: Dict[str, str]) -> None:
+        """Update the style controls to reflect a given style dict."""
+        # Set color
+        color = style.get("color", DEFAULT_COLORS[0])
+        for i in range(self._color_combo.count()):
+            item_text = self._color_combo.itemText(i)
+            if item_text == color:
+                self._color_combo.setCurrentIndex(i)
+                break
+
+        # Set symbol
+        symbol = style.get("symbol", DEFAULT_SYMBOLS[0])
+        sym_idx = self._symbol_combo.findData(symbol)
+        if sym_idx >= 0:
+            self._symbol_combo.setCurrentIndex(sym_idx)
+
+        # Set line style
+        linestyle = style.get("linestyle", DEFAULT_LINE_STYLES[0])
+        ls_idx = self._linestyle_combo.findData(linestyle)
+        if ls_idx >= 0:
+            self._linestyle_combo.setCurrentIndex(ls_idx)
+
     def set_on_scale_changed(self, callback: Any) -> None:
         """Set the callback for scale/range changes."""
         self._on_scale_changed = callback
@@ -180,6 +388,18 @@ class ControlsPanel(QGroupBox):
     def get_y_log(self) -> bool:
         """Get the Y axis log scale state."""
         return self._y_log
+
+    def get_show_grid(self) -> tuple:
+        """Get the current grid display state."""
+        return (self._show_grid_x, self._show_grid_y)
+
+    def get_show_legend(self) -> bool:
+        """Get the current legend display state."""
+        return self._show_legend
+
+    def get_show_slit_smear(self) -> bool:
+        """Get the current slit-smeared display state."""
+        return self._show_slit_smear
 
     def set_x_range(self, xmin: float, xmax: float) -> None:
         """Set the X axis range spinboxes."""
@@ -208,5 +428,41 @@ class ControlsPanel(QGroupBox):
         self._x_max_spin.setEnabled(enabled)
         self._y_min_spin.setEnabled(enabled)
         self._y_max_spin.setEnabled(enabled)
+        self._grid_x_check.setEnabled(enabled)
+        self._grid_y_check.setEnabled(enabled)
+        self._legend_check.setEnabled(enabled)
+        self._slit_smear_check.setEnabled(enabled and self._has_slit_smear_data)
+        self._dataset_combo.setEnabled(enabled)
+        self._color_combo.setEnabled(enabled)
+        self._symbol_combo.setEnabled(enabled)
+        self._linestyle_combo.setEnabled(enabled)
+        self._add_ds_btn.setEnabled(enabled)
+        self._remove_ds_btn.setEnabled(enabled)
         self._auto_range_btn.setEnabled(enabled)
         self._generate_btn.setEnabled(enabled)
+
+    def set_slit_smear_available(self, available: bool) -> None:
+        """Enable or disable the slit-smeared toggle."""
+        self._has_slit_smear_data = available
+        self._slit_smear_check.setEnabled(available)
+
+    def set_dataset_count(self, count: int) -> None:
+        """Update the dataset combo box with the correct number of entries."""
+        # Clear and rebuild
+        self._dataset_combo.clear()
+        self._dataset_styles = []
+
+        from bernardyn.plot.plot_style import auto_style, DEFAULT_COLORS, DEFAULT_SYMBOLS, DEFAULT_LINE_STYLES
+
+        for i in range(count):
+            style = auto_style(i)
+            self._dataset_styles.append(style)
+            self._dataset_combo.addItem(f"Dataset {i + 1}")
+
+        if count > 0:
+            self._dataset_combo.setCurrentIndex(0)
+            self._update_style_controls(self._dataset_styles[0])
+
+    def get_dataset_styles(self) -> List[Dict[str, str]]:
+        """Get the current per-dataset style list."""
+        return list(self._dataset_styles)

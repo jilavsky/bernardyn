@@ -195,6 +195,8 @@ if not HAS_PYSIDE6:
         "PlotWidget set_log_mode",
         "PlotWidget add_error_bars",
         "PlotWidget add_image",
+        "PlotWidget set_grid and get_grid",
+        "PlotWidget set_legend and get_legend",
         "DataPanel can be instantiated",
         "DataPanel set_folder populates file list",
         "DataPanel regex filter works",
@@ -202,11 +204,13 @@ if not HAS_PYSIDE6:
         "ControlsPanel can be instantiated",
         "ControlsPanel default settings",
         "ControlsPanel set_enabled/disabled",
+        "ControlsPanel grid/legend/slit-smeared defaults",
         "MainWindow can be instantiated",
         "MainWindow has all panels",
         "MainWindow load and render line plot",
         "MainWindow load and render image plot",
         "MainWindow load Rh1 file with slit-smeared data",
+        "MainWindow multi-graph support",
     ]
     for t in gui_skip_tests:
         print("  SKIP: " + t)
@@ -382,9 +386,11 @@ else:
         assert data is not None
 
         window._loaded_data = {"LnG_0103.hdf": data}
-        window._render_line_plot(x_log=True, y_log=True)
+        controls = window.get_controls_panel()
+        plot_widget = window.get_plot_widget()
+        window._render_line_plot(plot_widget, controls, x_log=True, y_log=True)
 
-        assert len(window.get_plot_widget()._plot_items) > 0, "Expected plot items"
+        assert len(plot_widget._plot_items) > 0, "Expected plot items"
 
     @test("MainWindow load and render image plot")
     def _():
@@ -399,7 +405,9 @@ else:
         assert data is not None
 
         window._loaded_data = {"LnG_0103.hdf": data}
-        window._render_image_plot(x_log=False, y_log=False)
+        controls = window.get_controls_panel()
+        plot_widget = window.get_plot_widget()
+        window._render_image_plot(plot_widget, x_log=False, y_log=False)
 
     @test("MainWindow load Rh1 file with slit-smeared data")
     def _():
@@ -414,10 +422,69 @@ else:
         assert data is not None
 
         window._loaded_data = {"Rh1_0085.h5": data}
-        window._render_line_plot(x_log=True, y_log=True)
+        controls = window.get_controls_panel()
+        plot_widget = window.get_plot_widget()
+        window._render_line_plot(plot_widget, controls, x_log=True, y_log=True)
 
-        n_items = len(window.get_plot_widget()._plot_items)
+        n_items = len(plot_widget._plot_items)
         assert n_items >= 2, f"Expected at least 2 plot items (SMR + desmear), got {n_items}"
+
+    # ============================================================
+    # Phase 3: Plot Controls — Full Styling & Multi-Plot Support
+    # ============================================================
+    print("\n=== Testing Phase 3: Plot Controls ===")
+
+    @test("PlotWidget set_grid and get_grid")
+    def _():
+        from bernardyn.gui.plot_widget import PlotWidget
+
+        app = _get_qapp()
+        widget = PlotWidget()
+        widget.set_grid(show_x=True, show_y=True)
+        gx, gy = widget.get_grid()
+        assert gx is True, "Expected X grid enabled"
+        assert gy is True, "Expected Y grid enabled"
+
+    @test("PlotWidget set_legend and get_legend")
+    def _():
+        from bernardyn.gui.plot_widget import PlotWidget
+
+        app = _get_qapp()
+        widget = PlotWidget()
+        widget.set_legend(show=True)
+        assert widget.get_legend() is True, "Expected legend enabled"
+
+    @test("ControlsPanel grid/legend/slit-smeared defaults")
+    def _():
+        from bernardyn.gui.controls_panel import ControlsPanel
+
+        app = _get_qapp()
+        panel = ControlsPanel()
+        assert panel.get_show_grid() == (False, False), "Grid should default to off"
+        assert panel.get_show_legend() is True, "Legend should default to on"
+        assert panel.get_show_slit_smear() is False, "Slit-smeared should default to off"
+
+    @test("MainWindow multi-graph support")
+    def _():
+        from bernardyn.gui.main_window import MainWindow
+
+        app = _get_qapp()
+        window = MainWindow()
+
+        # Should start with 1 graph tab
+        assert len(window._graphs) == 1, f"Expected 1 graph, got {len(window._graphs)}"
+
+        # Create a second graph
+        window._create_new_graph("Graph 2")
+        assert len(window._graphs) == 2, f"Expected 2 graphs, got {len(window._graphs)}"
+
+        # Switch to the second graph
+        window._switch_to_graph(1)
+        assert window._tab_widget.currentIndex() == 1, "Expected tab index 1"
+
+        # Close the second graph
+        window._on_close_graph()
+        assert len(window._graphs) == 1, f"Expected 1 graph after close, got {len(window._graphs)}"
 
 
 # ============================================================
