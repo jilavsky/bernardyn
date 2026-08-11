@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QComboBox,
     QDockWidget,
@@ -21,7 +22,6 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QSplitter,
     QTabWidget,
-    QAction,
     QMenuBar,
 )
 
@@ -587,9 +587,43 @@ class MainWindow(QMainWindow):
                     name=basename,
                 )
 
-                # Add error bars if available
-                if sas_data.y_err is not None:
-                    plot_widget.add_error_bars(x, y, sas_data.y_err, color=color)
+                # Add error bars if available and enabled
+                show_error_bars = controls.get_show_error_bars()
+                if sas_data.y_err is not None and show_error_bars:
+                    # Ensure arrays are aligned (same length)
+                    min_len = min(len(x), len(y), len(sas_data.y_err))
+                    if min_len == 0:
+                        continue
+                    
+                    x_valid = x[:min_len]
+                    y_valid = y[:min_len]
+                    err_valid = sas_data.y_err[:min_len]
+                    
+                    # Filter out invalid error bar data (negative, NaN, Inf)
+                    valid_mask = np.isfinite(err_valid) & (err_valid >= 0)
+                    if not np.any(valid_mask):
+                        continue
+                    
+                    x_valid = x_valid[valid_mask]
+                    y_valid = y_valid[valid_mask]
+                    err_valid = err_valid[valid_mask]
+                    
+                    # Filter out extreme error bar values (more than 5x the data range)
+                    y_range = float(y_valid.max() - y_valid.min()) if len(y_valid) > 1 else 1.0
+                    max_err = y_range * 5 if y_range > 0 else float('inf')
+                    err_valid = np.clip(err_valid, 0, max_err)
+                    
+                    # For log scale plots, skip error bars for non-positive values
+                    if y_log:
+                        pos_mask = y_valid > 0
+                        if np.any(pos_mask):
+                            x_valid = x_valid[pos_mask]
+                            y_valid = y_valid[pos_mask]
+                            err_valid = err_valid[pos_mask]
+                    
+                    # Only add error bars if we have valid data after filtering
+                    if len(x_valid) > 0:
+                        plot_widget.add_error_bars(x_valid, y_valid, err_valid, color=color)
 
                 # Track ranges
                 all_x_min = min(all_x_min, float(x.min()))

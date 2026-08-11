@@ -182,29 +182,48 @@ class PlotWidget(QWidget):
         self,
         x: np.ndarray,
         y: np.ndarray,
-        y_err: np.ndarray,
+        y_err: Optional[np.ndarray] = None,
+        x_err: Optional[np.ndarray] = None,
         color: Optional[str] = None,
     ) -> pg.ErrorBarItem:
         """Add error bars to the plot.
 
         Args:
-            x: X values
-            y: Y values (tips of error bars)
-            y_err: Error magnitudes (symmetric)
+            x: X values (center of error bars)
+            y: Y values (center of error bars)
+            y_err: Y error magnitudes (symmetric). If None, no y error bars.
+            x_err: X error magnitudes (symmetric). If None, no x error bars.
             color: Error bar color
 
         Returns:
-            The created ErrorBarItem.
+            The created ErrorBarItem, or None if no errors provided.
         """
+        # If no error data provided, return None
+        if y_err is None and x_err is None:
+            return None
+
+        # Use pyqtgraph's ErrorBarItem with proper parameters
         error_item = pg.ErrorBarItem(
             x=x, y=y,
-            height=y_err,
+            height=y_err if y_err is not None else 0,
+            width=x_err if x_err is not None else 0,
             beam=0.4,
             pen=color or "w",
         )
         self._plot_widget.addItem(error_item)
         self._error_bars.append(error_item)
         return error_item
+
+    def clear_error_bars(self) -> None:
+        """Remove all error bars from the plot."""
+        for item in self._error_bars:
+            self._plot_widget.removeItem(item)
+        self._error_bars.clear()
+
+    def set_error_bars_visible(self, visible: bool) -> None:
+        """Show or hide all error bars."""
+        for item in self._error_bars:
+            item.setVisible(visible)
 
     def add_image(self, data: np.ndarray, vmin: Optional[float] = None, vmax: Optional[float] = None) -> pg.ImageItem:
         """Add a 2D image to the plot.

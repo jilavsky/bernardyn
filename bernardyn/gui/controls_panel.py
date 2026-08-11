@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 )
 
 from bernardyn.template.manager import TemplateManager, get_default_manager
+from bernardyn.plot.plot_style import DEFAULT_COLORS, DEFAULT_SYMBOLS
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +68,7 @@ class ControlsPanel(QGroupBox):
         self._show_grid_y: bool = False
         self._show_legend: bool = True
         self._show_slit_smear: bool = False
+        self._show_error_bars: bool = True
 
         # Per-dataset styling: list of dicts with 'color', 'symbol', 'linestyle'
         self._dataset_styles: List[Dict[str, str]] = []
@@ -223,8 +225,8 @@ class ControlsPanel(QGroupBox):
         z_offset_group.setLayout(z_offset_layout)
         main_layout.addWidget(z_offset_group)
 
-        # --- Scale section (for line plots) ---
-        scale_group = QGroupBox("Scale")
+        # --- Display section (for grid/legend/slit-smeared) ---
+        display_group = QGroupBox("Display")
         display_layout = QVBoxLayout()
 
         self._grid_x_check = QCheckBox("X Grid")
@@ -245,6 +247,12 @@ class ControlsPanel(QGroupBox):
         self._slit_smear_check.setEnabled(False)
         self._slit_smear_check.stateChanged.connect(self._on_slit_smear_changed)
         display_layout.addWidget(self._slit_smear_check)
+
+        # Error bars toggle (initially enabled)
+        self._error_bars_check = QCheckBox("Show Error Bars")
+        self._error_bars_check.setChecked(True)
+        self._error_bars_check.stateChanged.connect(self._on_error_bars_changed)
+        display_layout.addWidget(self._error_bars_check)
 
         display_group.setLayout(display_layout)
         scale_layout.addWidget(display_group)
@@ -270,7 +278,11 @@ class ControlsPanel(QGroupBox):
         self._color_combo = QComboBox()
         from bernardyn.plot.plot_style import DEFAULT_COLORS
         for c in DEFAULT_COLORS:
-            self._color_combo.addItem(self._make_color_item(c, c))
+            item = self._make_color_item(c, c)
+            if isinstance(item, tuple):
+                self._color_combo.addItem(*item)
+            else:
+                self._color_combo.addItem(item, c)
         self._color_combo.currentIndexChanged.connect(self._on_style_changed)
         color_layout.addWidget(self._color_combo, 1)
         style_layout.addLayout(color_layout)
@@ -385,6 +397,10 @@ class ControlsPanel(QGroupBox):
         """Handle log scale toggle changes."""
         if self._on_scale_changed:
             self._on_scale_changed("log_scale", self._log_scale_check.isChecked())
+
+    def _on_error_bars_changed(self, state: int) -> None:
+        """Handle error bars toggle changes."""
+        self._show_error_bars = self._error_bars_check.isChecked()
 
     def _on_z_offset_changed(self, value: float) -> None:
         """Handle Z offset changes."""
@@ -738,6 +754,7 @@ class ControlsPanel(QGroupBox):
             "y_range": [self._y_min_spin.value(), self._y_max_spin.value()],
             "dataset_styles": list(self._dataset_styles),
             "slit_smear_enabled": self._show_slit_smear,
+            "error_bars_enabled": self._show_error_bars,
         }
 
     def set_slit_smear_available(self, available: bool) -> None:
@@ -765,3 +782,13 @@ class ControlsPanel(QGroupBox):
     def get_dataset_styles(self) -> List[Dict[str, str]]:
         """Get the current per-dataset style list."""
         return list(self._dataset_styles)
+
+    def get_show_error_bars(self) -> bool:
+        """Get the current error bars visibility state."""
+        return self._show_error_bars
+
+    def set_show_error_bars(self, show: bool) -> None:
+        """Set the error bars visibility state."""
+        self._show_error_bars = show
+        if hasattr(self, '_error_bars_check'):
+            self._error_bars_check.setChecked(show)
