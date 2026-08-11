@@ -65,7 +65,8 @@ class DataPanel(QGroupBox):
         self._state_manager: Optional[Any] = None
 
         self._setup_ui()
-        self._load_state()
+        # _load_state() is deferred to set_state_manager() since the state manager
+        # may not be available yet (it's injected by MainWindow after construction).
 
     def _setup_ui(self) -> None:
         """Build the UI layout."""
@@ -141,6 +142,8 @@ class DataPanel(QGroupBox):
     def set_state_manager(self, state_manager: Any) -> None:
         """Set the state manager for persisting preferences."""
         self._state_manager = state_manager
+        # Now that the state manager is available, load saved preferences.
+        self._load_state()
 
     def _load_state(self) -> None:
         """Load saved preferences from state manager."""

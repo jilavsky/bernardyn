@@ -82,9 +82,6 @@ class MainWindow(QMainWindow):
         self._tab_widget = QTabWidget()
         self.setCentralWidget(self._tab_widget)
 
-        # Create the first graph tab by default
-        self._create_new_graph("Graph 1")
-
         # Left dock: Data panel
         self._data_panel = DataPanel()
         self._data_panel.set_state_manager(self._state_manager)
@@ -93,12 +90,14 @@ class MainWindow(QMainWindow):
         self._data_dock.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
         self.addDockWidget(Qt.LeftDockWidgetArea, self._data_dock)
 
-        # Right dock: Controls panel
-        self._controls_panel = ControlsPanel()
+        # Right dock: Controls panel — will be set to the current graph's controls
+        self._controls_panel = None  # tracks what is currently in the dock (for removal only)
         self._controls_dock = QDockWidget("Plot Controls", self)
-        self._controls_dock.setWidget(self._controls_panel)
         self._controls_dock.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
         self.addDockWidget(Qt.RightDockWidgetArea, self._controls_dock)
+
+        # Create the first graph tab by default (this will also update the dock controls)
+        self._create_new_graph("Graph 1")
 
     def _setup_menu_bar(self) -> None:
         """Build the menu bar with File and Graph menus."""
@@ -202,6 +201,9 @@ class MainWindow(QMainWindow):
         controls.generate_requested.connect(
             lambda: self._on_graph_generate(name)
         )
+        controls.dataset_style_changed.connect(
+            lambda idx, style: self._on_graph_generate(name)
+        )
 
         # Wire template callbacks for this graph's controls
         controls.set_template_manager(self._template_manager)
@@ -218,6 +220,9 @@ class MainWindow(QMainWindow):
 
         # Update graph list menu
         self._update_graph_list_menu()
+
+        # Show this graph's controls in the right dock
+        self._update_dock_controls()
 
         return graph_info
 
@@ -246,7 +251,24 @@ class MainWindow(QMainWindow):
         graph = self._get_current_graph()
         if graph:
             return graph[2]
-        return self._controls_panel
+        # Fallback to the dock's current widget (shouldn't normally happen)
+        if self._controls_panel is not None:
+            return self._controls_panel
+        # Last resort: create a new one (shouldn't be reached)
+        return ControlsPanel()
+
+    def _update_dock_controls(self) -> None:
+        """Update the right dock to show the current graph's controls panel.
+
+        QDockWidget.setWidget() automatically removes any existing widget,
+        so we just call it with the new controls panel. The old one is
+        reparented back to its parent (the graph tuple) and remains valid.
+        """
+        controls = self._get_current_controls()
+        if controls is not None:
+            # setWidget takes ownership and removes the previous widget automatically
+            self._controls_dock.setWidget(controls)
+            self._controls_panel = controls
 
     def _wire_signals(self) -> None:
         """Connect signals between UI components."""
@@ -285,6 +307,8 @@ class MainWindow(QMainWindow):
         """Switch the active graph tab to the given index."""
         if 0 <= index < len(self._graphs):
             self._tab_widget.setCurrentIndex(index)
+            # Update the right dock to show this graph's controls
+            self._update_dock_controls()
 
     def _on_open_file(self) -> None:
         """Handle File > Open File menu action."""
@@ -367,9 +391,15 @@ class MainWindow(QMainWindow):
         plot_widget = self._get_current_plot_widget()
 
         if kind == "x":
-            plot_widget.set_log_mode(x_log=value, y_log=plot_widget._show_grid_x)
+            plot_widget.set_log_mode(x_log=value, y_log=plot_widget.get_y_log())
         elif kind == "y":
-            plot_widget.set_log_mode(x_log=plot_widget._show_grid_x, y_log=value)
+            plot_widget.set_log_mode(x_log=plot_widget.get_x_log(), y_log=value)
+        elif kind == "x_range":
+            xmin, xmax = value
+            plot_widget.set_x_range(xmin, xmax)
+        elif kind == "y_range":
+            ymin, ymax = value
+            plot_widget.set_y_range(ymin, ymax)
         elif kind == "grid":
             plot_widget.set_grid(show_x=value[0], show_y=value[1])
         elif kind == "legend":

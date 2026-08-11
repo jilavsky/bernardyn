@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
 )
 
 from bernardyn.template.manager import TemplateManager, get_default_manager
-from bernardyn.plot.plot_style import DEFAULT_COLORS, DEFAULT_SYMBOLS
+from bernardyn.plot.plot_style import DEFAULT_COLORS, DEFAULT_LINE_STYLES, DEFAULT_SYMBOLS
 
 logger = logging.getLogger(__name__)
 
@@ -162,11 +162,13 @@ class ControlsPanel(QGroupBox):
         self._x_min_spin = QDoubleSpinBox()
         self._x_min_spin.setRange(-1e30, 1e30)
         self._x_min_spin.setDecimals(6)
+        self._x_min_spin.valueChanged.connect(self._on_x_range_changed)
         x_range_layout.addWidget(self._x_min_spin)
         x_range_layout.addWidget(QLabel("X max:"))
         self._x_max_spin = QDoubleSpinBox()
         self._x_max_spin.setRange(-1e30, 1e30)
         self._x_max_spin.setDecimals(6)
+        self._x_max_spin.valueChanged.connect(self._on_x_range_changed)
         x_range_layout.addWidget(self._x_max_spin)
         range_layout.addLayout(x_range_layout)
 
@@ -175,11 +177,13 @@ class ControlsPanel(QGroupBox):
         self._y_min_spin = QDoubleSpinBox()
         self._y_min_spin.setRange(-1e30, 1e30)
         self._y_min_spin.setDecimals(6)
+        self._y_min_spin.valueChanged.connect(self._on_y_range_changed)
         y_range_layout.addWidget(self._y_min_spin)
         y_range_layout.addWidget(QLabel("Y max:"))
         self._y_max_spin = QDoubleSpinBox()
         self._y_max_spin.setRange(-1e30, 1e30)
         self._y_max_spin.setDecimals(6)
+        self._y_max_spin.valueChanged.connect(self._on_y_range_changed)
         y_range_layout.addWidget(self._y_max_spin)
         range_layout.addLayout(y_range_layout)
 
@@ -420,6 +424,20 @@ class ControlsPanel(QGroupBox):
         self._y_log = self._y_log_check.currentData()
         if self._on_scale_changed:
             self._on_scale_changed("y", self._y_log)
+
+    def _on_x_range_changed(self, value: float) -> None:
+        """Handle X axis range changes."""
+        if self._on_scale_changed:
+            xmin = self._x_min_spin.value()
+            xmax = self._x_max_spin.value()
+            self._on_scale_changed("x_range", (xmin, xmax))
+
+    def _on_y_range_changed(self, value: float) -> None:
+        """Handle Y axis range changes."""
+        if self._on_scale_changed:
+            ymin = self._y_min_spin.value()
+            ymax = self._y_max_spin.value()
+            self._on_scale_changed("y_range", (ymin, ymax))
 
     def _on_auto_range(self) -> None:
         """Handle auto-range button click."""

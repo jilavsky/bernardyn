@@ -43,6 +43,10 @@ class PlotWidget(QWidget):
         # Default to log-log scale (SAS standard)
         self._plot_widget.setLogMode(x=True, y=True)
 
+        # Log mode state (mirrors what's set on the plot widget)
+        self._x_log: bool = True
+        self._y_log: bool = True
+
         # Grid and legend state
         self._show_grid_x: bool = False
         self._show_grid_y: bool = False
@@ -97,7 +101,17 @@ class PlotWidget(QWidget):
 
     def set_log_mode(self, x_log: bool = True, y_log: bool = True) -> None:
         """Set logarithmic scale mode for axes."""
+        self._x_log = x_log
+        self._y_log = y_log
         self._plot_widget.setLogMode(x=x_log, y=y_log)
+
+    def get_x_log(self) -> bool:
+        """Get the current X axis log mode state."""
+        return self._x_log
+
+    def get_y_log(self) -> bool:
+        """Get the current Y axis log mode state."""
+        return self._y_log
 
     def set_grid(self, show_x: bool = False, show_y: bool = False) -> None:
         """Show or hide grid lines on the plot.
