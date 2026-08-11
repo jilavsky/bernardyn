@@ -27,6 +27,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from bernardyn.template.manager import TemplateManager, get_default_manager
+
 logger = logging.getLogger(__name__)
 
 
@@ -71,12 +73,44 @@ class ControlsPanel(QGroupBox):
 
         # Callbacks (set by main window)
         self._on_scale_changed: Optional[Any] = None
+        self._on_template_applied: Optional[Any] = None
+        self._on_save_template: Optional[Any] = None
+        self._on_manage_templates_callback: Optional[Any] = None
+
+        # Template manager reference (set by main window)
+        self._template_manager: Optional[TemplateManager] = None
 
         self._setup_ui()
 
     def _setup_ui(self) -> None:
         """Build the UI layout."""
         main_layout = QVBoxLayout()
+
+        # --- Template section ---
+        template_group = QGroupBox("Templates")
+        template_layout = QVBoxLayout()
+
+        # Template selector combo box
+        tmpl_select_layout = QHBoxLayout()
+        tmpl_select_layout.addWidget(QLabel("Template:"))
+        self._template_combo = QComboBox()
+        self._template_combo.addItem("(none)", "")
+        self._template_combo.currentIndexChanged.connect(self._on_template_selected)
+        tmpl_select_layout.addWidget(self._template_combo, 1)
+        template_layout.addLayout(tmpl_select_layout)
+
+        # Save current as template button
+        self._save_template_btn = QPushButton("Save Current as Template...")
+        self._save_template_btn.clicked.connect(self._on_save_current_as_template)
+        template_layout.addWidget(self._save_template_btn)
+
+        # Manage templates button
+        self._manage_templates_btn = QPushButton("Manage Templates...")
+        self._manage_templates_btn.clicked.connect(self._on_manage_templates)
+        template_layout.addWidget(self._manage_templates_btn)
+
+        template_group.setLayout(template_layout)
+        main_layout.addWidget(template_group)
 
         # --- Plot Type section ---
         type_group = QGroupBox("Plot Type")
@@ -323,6 +357,25 @@ class ControlsPanel(QGroupBox):
         if hasattr(self, '_dataset_combo'):
             self._dataset_combo.setVisible(is_stylable)
 
+    def _on_template_selected(self, index: int) -> None:
+        """Handle template selection from the combo box."""
+        if index <= 0:
+            return  # "(none)" selected
+
+        template_name = self._template_combo.currentData()
+        if template_name and self._on_template_applied:
+            self._on_template_applied(template_name)
+
+    def _on_save_current_as_template(self) -> None:
+        """Handle 'Save Current as Template' button click."""
+        if self._on_save_template:
+            self._on_save_template()
+
+    def _on_manage_templates(self) -> None:
+        """Handle 'Manage Templates' button click."""
+        if self._on_manage_templates_callback:
+            self._on_manage_templates_callback()
+
     def _on_color_scale_changed(self, index: int) -> None:
         """Handle color scale changes."""
         if self._on_scale_changed:
@@ -535,6 +588,12 @@ class ControlsPanel(QGroupBox):
             self._log_scale_check.setEnabled(enabled)
         if hasattr(self, '_z_offset_spin') and self._z_offset_spin is not None:
             self._z_offset_spin.setEnabled(enabled)
+        if hasattr(self, '_template_combo') and self._template_combo is not None:
+            self._template_combo.setEnabled(enabled)
+        if hasattr(self, '_save_template_btn') and self._save_template_btn is not None:
+            self._save_template_btn.setEnabled(enabled)
+        if hasattr(self, '_manage_templates_btn') and self._manage_templates_btn is not None:
+            self._manage_templates_btn.setEnabled(enabled)
         self._dataset_combo.setEnabled(enabled)
         self._color_combo.setEnabled(enabled)
         self._symbol_combo.setEnabled(enabled)
@@ -543,6 +602,143 @@ class ControlsPanel(QGroupBox):
         self._remove_ds_btn.setEnabled(enabled)
         self._auto_range_btn.setEnabled(enabled)
         self._generate_btn.setEnabled(enabled)
+
+    def set_template_manager(self, manager: TemplateManager) -> None:
+        """Set the template manager for this controls panel.
+
+        Args:
+            manager: TemplateManager instance to use for template operations.
+        """
+        self._template_manager = manager
+
+    def refresh_templates(self) -> None:
+        """Refresh the template combo box with current templates."""
+        if self._template_combo is None or self._template_manager is None:
+            return
+
+        # Save current selection
+        current_data = self._template_combo.currentData()
+
+        # Clear and rebuild
+        self._template_combo.clear()
+        self._template_combo.addItem("(none)", "")
+
+        templates = self._template_manager.list_templates()
+        for name in templates:
+            self._template_combo.addItem(name, name)
+
+        # Restore selection if it still exists
+        if current_data:
+            idx = self._template_combo.findData(current_data)
+            if idx >= 0:
+                self._template_combo.setCurrentIndex(idx)
+
+    def apply_template(self, name: str) -> bool:
+        """Apply a template to the current controls.
+
+        Args:
+            name: Template name to apply.
+
+        Returns:
+            True if applied successfully, False otherwise.
+        """
+        if self._template_manager is None:
+            return False
+
+        data = self._template_manager.load_template(name)
+        if data is None:
+            return False
+
+        # Apply template settings to controls
+        self._plot_type = data.get("plot_type", "line")
+
+        # Set plot type combo
+        idx = self._plot_type_combo.findData(self._plot_type)
+        if idx >= 0:
+            self._plot_type_combo.setCurrentIndex(idx)
+
+        # Set scale controls
+        x_log = data.get("x_log", True)
+        y_log = data.get("y_log", True)
+
+        x_idx = self._x_log_check.findData(x_log)
+        if x_idx >= 0:
+            self._x_log_check.setCurrentIndex(x_idx)
+
+        y_idx = self._y_log_check.findData(y_log)
+        if y_idx >= 0:
+            self._y_log_check.setCurrentIndex(y_idx)
+
+        # Set grid/legend
+        self._show_grid_x = data.get("show_grid_x", False)
+        self._show_grid_y = data.get("show_grid_y", False)
+        self._show_legend = data.get("show_legend", True)
+
+        if hasattr(self, '_grid_x_check'):
+            self._grid_x_check.setChecked(self._show_grid_x)
+        if hasattr(self, '_grid_y_check'):
+            self._grid_y_check.setChecked(self._show_grid_y)
+        if hasattr(self, '_legend_check'):
+            self._legend_check.setChecked(self._show_legend)
+
+        # Set color scale (for image/heatmap)
+        if hasattr(self, '_color_scale_combo'):
+            color_scale = data.get("color_scale", "grayscale")
+            idx = self._color_scale_combo.findData(color_scale)
+            if idx >= 0:
+                self._color_scale_combo.setCurrentIndex(idx)
+
+        # Set Z offset (for waterfall)
+        if hasattr(self, '_z_offset_spin'):
+            z_offset = data.get("z_offset", 1.0)
+            self._z_offset_spin.setValue(z_offset)
+
+        # Set axis ranges
+        x_range = data.get("x_range", [0.0, 1.0])
+        y_range = data.get("y_range", [0.0, 1.0])
+        if len(x_range) >= 2:
+            self._x_min_spin.setValue(x_range[0])
+            self._x_max_spin.setValue(x_range[1])
+        if len(y_range) >= 2:
+            self._y_min_spin.setValue(y_range[0])
+            self._y_max_spin.setValue(y_range[1])
+
+        # Set dataset styles
+        dataset_styles = data.get("dataset_styles", [])
+        self.set_dataset_count(len(dataset_styles))
+        if dataset_styles:
+            self._dataset_styles = list(dataset_styles)
+
+        # Set slit smear toggle
+        self._show_slit_smear = data.get("slit_smear_enabled", False)
+        if hasattr(self, '_slit_smear_check'):
+            self._slit_smear_check.setChecked(self._show_slit_smear)
+
+        # Update plot type visibility
+        self._on_plot_type_changed(self._plot_type_combo.currentIndex())
+
+        return True
+
+    def get_current_template_data(self) -> Dict[str, Any]:
+        """Get the current plot state as a template data dictionary.
+
+        Returns:
+            Dictionary with all current control settings suitable for saving as a template.
+        """
+        return {
+            "plot_type": self._plot_type,
+            "x_log": self._x_log,
+            "y_log": self._y_log,
+            "show_grid_x": self._show_grid_x,
+            "show_grid_y": self._show_grid_y,
+            "show_legend": self._show_legend,
+            "color_scale": self.get_color_scale(),
+            "z_offset": self.get_z_offset(),
+            "x_range": [self._x_min_spin.value(), self._x_max_spin.value()],
+            "y_range": [self._y_min_spin.value(), self._y_max_spin.value()],
+            "dataset_styles": list(self._dataset_styles),
+            "slit_smear_enabled": self._show_slit_smear,
+        }
 
     def set_slit_smear_available(self, available: bool) -> None:
         """Enable or disable the slit-smeared toggle."""

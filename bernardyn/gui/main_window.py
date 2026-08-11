@@ -29,6 +29,7 @@ from bernardyn.data.loader import get_default_dispatcher
 from bernardyn.gui.controls_panel import ControlsPanel
 from bernardyn.gui.data_panel import DataPanel
 from bernardyn.gui.plot_widget import PlotWidget
+from bernardyn.template.manager import TemplateManager, get_default_manager
 
 logger = logging.getLogger(__name__)
 
@@ -37,10 +38,10 @@ class MainWindow(QMainWindow):
     """Main application window for Bernardyn.
 
     Layout:
-      - Menu bar with File and Graph menus
+      - Menu bar with File, Graph, and Template menus
       - Left dock: DataPanel (file browser, listbox, sort/filter)
       - Center: QTabWidget of PlotWidgets (multi-graph support)
-      - Right dock: ControlsPanel (plot type, scales, ranges, styles)
+      - Right dock: ControlsPanel (plot type, scales, ranges, styles, templates)
 
     The window wires signals between panels to create a complete
     data loading and plotting pipeline.
@@ -54,6 +55,9 @@ class MainWindow(QMainWindow):
 
         # Data loader dispatcher
         self._loader = get_default_dispatcher()
+
+        # Template manager
+        self._template_manager = get_default_manager()
 
         # Current loaded data (for re-rendering)
         self._loaded_data: Dict[str, Any] = {}
@@ -134,6 +138,19 @@ class MainWindow(QMainWindow):
         self._graph_list_menu = QMenu("Switch to Graph", self)
         graph_menu.addMenu(self._graph_list_menu)
 
+        # --- Template menu ---
+        template_menu = menubar.addMenu("Template")
+
+        save_template_action = QAction("Save Current as Template...", self)
+        save_template_action.setShortcut("Ctrl+Shift+S")
+        save_template_action.triggered.connect(self._on_save_current_as_template)
+        template_menu.addAction(save_template_action)
+
+        manage_templates_action = QAction("Manage Templates...", self)
+        manage_templates_action.setShortcut("Ctrl+M")
+        manage_templates_action.triggered.connect(self._on_manage_templates)
+        template_menu.addAction(manage_templates_action)
+
     def _create_new_graph(self, name: str) -> tuple:
         """Create a new graph tab with its own plot widget and controls.
 
@@ -150,6 +167,12 @@ class MainWindow(QMainWindow):
         controls.generate_requested.connect(
             lambda: self._on_graph_generate(name)
         )
+
+        # Wire template callbacks for this graph's controls
+        controls.set_template_manager(self._template_manager)
+        controls._on_template_applied = lambda tmpl_name: self._on_apply_template(name, tmpl_name)
+        controls._on_save_template = lambda: self._on_save_current_as_template()
+        controls._on_manage_templates_callback = lambda: self._on_manage_templates()
 
         # Add tab
         idx = self._tab_widget.addTab(plot_widget, name)
@@ -298,6 +321,68 @@ class MainWindow(QMainWindow):
         elif kind == "slit_smear":
             # Re-render with slit-smeared toggle state
             self._on_graph_generate(graph_name)
+
+    def _on_apply_template(self, graph_name: str, template_name: str) -> None:
+        """Apply a template to the current graph's controls.
+
+        Args:
+            graph_name: Name of the target graph tab.
+            template_name: Name of the template to apply.
+        """
+        controls = self._get_current_controls()
+        if controls.apply_template(template_name):
+            # Re-render the plot with the applied template settings
+            self._on_graph_generate(graph_name)
+
+    def _on_save_current_as_template(self) -> None:
+        """Handle 'Save Current as Template' menu action."""
+        from PySide6.QtWidgets import QInputDialog
+
+        controls = self._get_current_controls()
+        template_data = controls.get_current_template_data()
+
+        name, ok = QInputDialog.getText(
+            self, "Save Template", "Template name:",
+        )
+
+        if ok and name:
+            # Sanitize name
+            import os
+            safe_name = name.replace("/", "_").replace("\\", "_")
+
+            if self._template_manager.save_template(safe_name, template_data):
+                # Refresh the template combo in all controls panels
+                for _, _, ctrl in self._graphs:
+                    ctrl.refresh_templates()
+
+                QMessageBox.information(
+                    self, "Template Saved",
+                    f"Template '{safe_name}' saved successfully.",
+                )
+            else:
+                QMessageBox.warning(
+                    self, "Save Failed",
+                    f"Failed to save template '{safe_name}'.",
+                )
+
+    def _on_manage_templates(self) -> None:
+        """Handle 'Manage Templates' menu action."""
+        from bernardyn.gui.template_dialog import TemplateDialog
+
+        dialog = TemplateDialog(
+            parent=self,
+            template_manager=self._template_manager,
+        )
+
+        def on_template_selected(name: str) -> None:
+            """Handle template selection in the dialog."""
+            controls = self._get_current_controls()
+            if controls.apply_template(name):
+                # Re-render the plot with the applied template settings
+                self._on_graph_generate(self._get_current_graph()[0] if self._get_current_graph() else "Graph 1")
+
+        dialog.template_selected.connect(on_template_selected)
+        dialog.exec()
 
     def _on_graph_generate(self, graph_name: str) -> None:
         """Generate the plot for a specific graph tab."""

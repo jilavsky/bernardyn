@@ -573,6 +573,285 @@ else:
 
 
 # ============================================================
+# Phase 4: Advanced Plot Types — Waterfall & Heatmap (no GUI required)
+# ============================================================
+print("\n=== Testing Phase 4: Advanced Plot Types ===")
+
+
+@test("WaterfallPlotter add_dataset and get_plot_config")
+def _():
+    import numpy as np
+    from bernardyn.plot.waterfall_plotter import WaterfallPlotter
+
+    plotter = WaterfallPlotter()
+    x = np.array([1.0, 2.0, 3.0])
+    y = np.array([10.0, 20.0, 30.0])
+    plotter.add_dataset(x, y, order_number=5, color="red", symbol="o")
+
+    config = plotter.get_plot_config()
+    assert len(config["datasets"]) == 1, "Expected 1 dataset"
+    ds = config["datasets"][0]
+    assert ds["z_offset"] == 5.0, f"Expected z_offset=5.0, got {ds['z_offset']}"
+    assert ds["color"] == "red"
+
+
+@test("WaterfallPlotter set_z_offset")
+def _():
+    from bernardyn.plot.waterfall_plotter import WaterfallPlotter
+
+    plotter = WaterfallPlotter()
+    plotter.set_z_offset(2.5)
+    assert plotter.get_z_offset() == 2.5
+
+
+@test("HeatmapPlotter add_dataset and get_plot_config")
+def _():
+    import numpy as np
+    from bernardyn.plot.heatmap_plotter import HeatmapPlotter
+
+    plotter = HeatmapPlotter()
+    x = np.array([1.0, 2.0, 3.0])
+    y = np.array([10.0, 20.0, 30.0])
+    plotter.add_dataset(x, y, order_number=10)
+
+    config = plotter.get_plot_config()
+    assert len(config["datasets"]) == 1, "Expected 1 dataset"
+    ds = config["datasets"][0]
+    assert ds["order_number"] == 10
+
+
+@test("HeatmapPlotter color scale selection")
+def _():
+    from bernardyn.plot.heatmap_plotter import HeatmapPlotter, HEATMAP_COLOR_SCALES
+
+    plotter = HeatmapPlotter()
+    scales = plotter.get_color_scales()
+    assert len(scales) > 0, "Expected color scales"
+    assert "viridis" in HEATMAP_COLOR_SCALES
+
+
+@test("ImagePlotter multi-color-scale support")
+def _():
+    from bernardyn.plot.image_plotter import ImagePlotter, COLOR_SCALES
+
+    plotter = ImagePlotter()
+    scales = plotter.get_color_scales()
+    assert len(scales) >= 5, f"Expected at least 5 color scales, got {len(scales)}"
+    assert "grayscale" in COLOR_SCALES
+    assert "viridis" in COLOR_SCALES
+
+
+@test("ImagePlotter get_color_map returns ColorMap")
+def _():
+    import pyqtgraph as pg
+    from bernardyn.plot.image_plotter import ImagePlotter
+
+    plotter = ImagePlotter()
+    cmap = plotter.get_color_map()
+    assert cmap is not None, "Expected ColorMap object"
+
+
+@test("PlotEngine has waterfall and heatmap plotters registered")
+def _():
+    from bernardyn.plot.plot_engine import get_default_engine
+
+    engine = get_default_engine()
+    types = engine.get_available_types()
+    assert "waterfall" in types, f"Expected 'waterfall' plotter, got {types}"
+    assert "heatmap" in types, f"Expected 'heatmap' plotter, got {types}"
+
+
+# ============================================================
+# Phase 5: Template System (no GUI required)
+# ============================================================
+print("\n=== Testing Phase 5: Template System ===")
+
+
+@test("TemplateStorage save and load template round-trip")
+def _():
+    import tempfile
+    from bernardyn.template.storage import TemplateStorage
+
+    tmpdir = tempfile.mkdtemp()
+    storage = TemplateStorage(tmpdir)
+
+    data = {
+        "plot_type": "line",
+        "x_log": True,
+        "y_log": False,
+        "show_grid_x": True,
+    }
+
+    assert storage.save_template("test_tmpl", data) is True
+    loaded = storage.load_template("test_tmpl")
+    assert loaded is not None, "Expected template to be loaded"
+    assert loaded["plot_type"] == "line"
+    assert loaded["x_log"] is True
+    assert loaded["y_log"] is False
+    assert loaded["show_grid_x"] is True
+
+
+@test("TemplateStorage delete_template removes file")
+def _():
+    import tempfile
+    from bernardyn.template.storage import TemplateStorage
+
+    tmpdir = tempfile.mkdtemp()
+    storage = TemplateStorage(tmpdir)
+
+    storage.save_template("to_delete", {"plot_type": "line"})
+    assert storage.template_exists("to_delete") is True
+
+    assert storage.delete_template("to_delete") is True
+    assert storage.template_exists("to_delete") is False
+
+
+@test("TemplateStorage list_templates returns sorted names")
+def _():
+    import tempfile
+    from bernardyn.template.storage import TemplateStorage
+
+    tmpdir = tempfile.mkdtemp()
+    storage = TemplateStorage(tmpdir)
+
+    storage.save_template("charlie", {"plot_type": "line"})
+    storage.save_template("alpha", {"plot_type": "image"})
+    storage.save_template("bravo", {"plot_type": "waterfall"})
+
+    templates = storage.list_templates()
+    assert len(templates) == 3, f"Expected 3 templates, got {len(templates)}"
+    assert templates == sorted(templates), "Expected sorted list"
+
+
+@test("TemplateStorage load_template returns None for missing template")
+def _():
+    import tempfile
+    from bernardyn.template.storage import TemplateStorage
+
+    tmpdir = tempfile.mkdtemp()
+    storage = TemplateStorage(tmpdir)
+
+    result = storage.load_template("nonexistent")
+    assert result is None, "Expected None for missing template"
+
+
+@test("TemplateManager save/load/rename/delete round-trip")
+def _():
+    import tempfile
+    from bernardyn.template.manager import TemplateManager
+
+    tmpdir = tempfile.mkdtemp()
+    mgr = TemplateManager(template_dir=tmpdir)
+
+    data = {"plot_type": "line", "x_log": True, "y_log": True}
+    assert mgr.save_template("my_tmpl", data) is True
+
+    loaded = mgr.load_template("my_tmpl")
+    assert loaded is not None
+    assert loaded["plot_type"] == "line"
+
+    # Rename
+    assert mgr.rename_template("my_tmpl", "renamed_tmpl") is True
+    assert mgr.template_exists("my_tmpl") is False
+    assert mgr.template_exists("renamed_tmpl") is True
+
+    # Delete
+    assert mgr.delete_template("renamed_tmpl") is True
+    assert mgr.template_exists("renamed_tmpl") is False
+
+
+@test("TemplateManager list_templates returns names")
+def _():
+    import tempfile
+    from bernardyn.template.manager import TemplateManager
+
+    tmpdir = tempfile.mkdtemp()
+    mgr = TemplateManager(template_dir=tmpdir)
+
+    mgr.save_template("tmpl_a", {"plot_type": "line"})
+    mgr.save_template("tmpl_b", {"plot_type": "image"})
+
+    templates = mgr.list_templates()
+    assert len(templates) == 2
+    assert "tmpl_a" in templates
+    assert "tmpl_b" in templates
+
+
+@test("TemplateManager get_default_template returns valid dict")
+def _():
+    from bernardyn.template.manager import TemplateManager
+
+    mgr = TemplateManager(template_dir=tempfile.mkdtemp())
+    default = mgr.get_default_template()
+
+    assert "plot_type" in default
+    assert "x_log" in default
+    assert "y_log" in default
+    assert "show_grid_x" in default
+    assert "dataset_styles" in default
+
+
+@test("TemplateManager import/export template")
+def _():
+    import tempfile
+    from bernardyn.template.manager import TemplateManager
+
+    tmpdir = tempfile.mkdtemp()
+    mgr = TemplateManager(template_dir=tmpdir)
+
+    # Save a template
+    data = {"plot_type": "heatmap", "color_scale": "viridis"}
+    mgr.save_template("source_tmpl", data)
+
+    # Export to external file
+    export_path = tempfile.mktemp(suffix=".json")
+    assert mgr.export_template("source_tmpl", export_path) is True
+
+    # Import as a new template
+    assert mgr.import_template(export_path, "imported_tmpl") is True
+    loaded = mgr.load_template("imported_tmpl")
+    assert loaded is not None
+    assert loaded["plot_type"] == "heatmap"
+
+
+@test("TemplateManager rename_template returns False for missing template")
+def _():
+    import tempfile
+    from bernardyn.template.manager import TemplateManager
+
+    tmpdir = tempfile.mkdtemp()
+    mgr = TemplateManager(template_dir=tmpdir)
+
+    result = mgr.rename_template("nonexistent", "new_name")
+    assert result is False, "Expected False for missing template rename"
+
+
+@test("TemplateManager export_template returns False for missing template")
+def _():
+    import tempfile
+    from bernardyn.template.manager import TemplateManager
+
+    tmpdir = tempfile.mkdtemp()
+    mgr = TemplateManager(template_dir=tmpdir)
+
+    result = mgr.export_template("nonexistent", "/tmp/out.json")
+    assert result is False, "Expected False for missing template export"
+
+
+@test("TemplateManager get_default_manager returns singleton")
+def _():
+    from bernardyn.template.manager import TemplateManager, get_default_manager
+
+    # Reset the global singleton for testing
+    import bernardyn.template.manager as mgr_module
+    mgr_module._default_manager = None
+
+    m1 = get_default_manager()
+    m2 = get_default_manager()
+    assert m1 is m2, "Expected same instance from get_default_manager"
+
+
+# ============================================================
 # Summary
 # ============================================================
 print("\n" + "=" * 60)
