@@ -30,6 +30,7 @@ from bernardyn.gui.controls_panel import ControlsPanel
 from bernardyn.gui.data_panel import DataPanel
 from bernardyn.gui.plot_widget import PlotWidget
 from bernardyn.template.manager import TemplateManager, get_default_manager
+from bernardyn.utils.state_manager import StateManager
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +60,9 @@ class MainWindow(QMainWindow):
         # Template manager
         self._template_manager = get_default_manager()
 
+        # State manager for persisting preferences (last folder, regex filter, etc.)
+        self._state_manager = StateManager()
+
         # Current loaded data (for re-rendering)
         self._loaded_data: Dict[str, Any] = {}
 
@@ -83,6 +87,7 @@ class MainWindow(QMainWindow):
 
         # Left dock: Data panel
         self._data_panel = DataPanel()
+        self._data_panel.set_state_manager(self._state_manager)
         self._data_dock = QDockWidget("Data Files", self)
         self._data_dock.setWidget(self._data_panel)
         self._data_dock.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
@@ -248,6 +253,27 @@ class MainWindow(QMainWindow):
         # Data panel -> load and plot selected files (applied to current graph)
         self._data_panel.files_selected.connect(self._on_files_selected)
 
+    def closeEvent(self, event: Any) -> None:
+        """Handle window close — save state before exiting."""
+        # Save data panel preferences (last folder, regex filter, sort mode)
+        if hasattr(self, '_data_panel'):
+            self._data_panel._save_state()
+
+        # Save plot controls preferences (grid, legend, log scale)
+        for _, _, controls in self._graphs:
+            template_data = controls.get_current_template_data()
+            for key, value in template_data.items():
+                self._state_manager.set(f"plot_{key}", value)
+
+        # Save window geometry
+        self._state_manager.set("window_geometry", bytes(self.saveGeometry()).hex())
+
+        # Save error bars preference
+        for _, controls in [(g[0], g[2]) for g in self._graphs]:
+            self._state_manager.set("error_bars_enabled", controls.get_show_error_bars())
+
+        event.accept()
+
     def _update_graph_list_menu(self) -> None:
         """Update the graph list submenu in the menu bar."""
         self._graph_list_menu.clear()
@@ -351,6 +377,12 @@ class MainWindow(QMainWindow):
         elif kind == "slit_smear":
             # Re-render with slit-smeared toggle state
             self._on_graph_generate(graph_name)
+        elif kind == "error_bars":
+            # Clear or show error bars without full re-render
+            if value:
+                self._on_graph_generate(graph_name)
+            else:
+                plot_widget.clear_error_bars()
 
     def _on_apply_template(self, graph_name: str, template_name: str) -> None:
         """Apply a template to the current graph's controls.
@@ -589,7 +621,8 @@ class MainWindow(QMainWindow):
 
                 # Add error bars if available and enabled
                 show_error_bars = controls.get_show_error_bars()
-                if sas_data.y_err is not None and show_error_bars:
+                # Skip error bars in log-log mode — pyqtgraph ErrorBarItem does not handle log scales
+                if sas_data.y_err is not None and show_error_bars and not (x_log or y_log):
                     # Ensure arrays are aligned (same length)
                     min_len = min(len(x), len(y), len(sas_data.y_err))
                     if min_len == 0:
@@ -612,14 +645,6 @@ class MainWindow(QMainWindow):
                     y_range = float(y_valid.max() - y_valid.min()) if len(y_valid) > 1 else 1.0
                     max_err = y_range * 5 if y_range > 0 else float('inf')
                     err_valid = np.clip(err_valid, 0, max_err)
-                    
-                    # For log scale plots, skip error bars for non-positive values
-                    if y_log:
-                        pos_mask = y_valid > 0
-                        if np.any(pos_mask):
-                            x_valid = x_valid[pos_mask]
-                            y_valid = y_valid[pos_mask]
-                            err_valid = err_valid[pos_mask]
                     
                     # Only add error bars if we have valid data after filtering
                     if len(x_valid) > 0:

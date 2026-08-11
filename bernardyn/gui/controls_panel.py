@@ -401,6 +401,8 @@ class ControlsPanel(QGroupBox):
     def _on_error_bars_changed(self, state: int) -> None:
         """Handle error bars toggle changes."""
         self._show_error_bars = self._error_bars_check.isChecked()
+        if self._on_scale_changed:
+            self._on_scale_changed("error_bars", self._show_error_bars)
 
     def _on_z_offset_changed(self, value: float) -> None:
         """Handle Z offset changes."""

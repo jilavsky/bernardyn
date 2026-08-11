@@ -37,6 +37,9 @@ class PlotWidget(QWidget):
         # Enable anti-aliasing for smoother lines
         self._plot_widget.setAntialiasing(True)
 
+        # Set white background for better visibility
+        self._plot_widget.setBackground('w')
+
         # Default to log-log scale (SAS standard)
         self._plot_widget.setLogMode(x=True, y=True)
 
