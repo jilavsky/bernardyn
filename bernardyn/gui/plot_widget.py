@@ -79,6 +79,29 @@ class PlotWidget(QWidget):
         self._plot_items = []
         self._error_bars = []
 
+    def update_line_style(self, index: int, color: Optional[str] = None, symbol: Optional[str] = None, linestyle: Optional[str] = None) -> bool:
+        """Update the style of a specific line plot item without clearing.
+
+        Args:
+            index: Index of the plot item to update
+            color: New color (hex string)
+            symbol: New marker symbol
+            linestyle: New line style
+
+        Returns:
+            True if updated successfully, False if index out of range
+        """
+        if 0 <= index < len(self._plot_items):
+            item = self._plot_items[index]
+            if color or linestyle:
+                pen = self._make_pen(color, linestyle)
+                item.setPen(pen)
+            if symbol:
+                pg_symbol = self._map_symbol(symbol)
+                item.setSymbol(pg_symbol)
+            return True
+        return False
+
     def set_title(self, title: str) -> None:
         """Set the plot title."""
         self._plot_widget.setTitle(title)

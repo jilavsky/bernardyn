@@ -202,7 +202,10 @@ class MainWindow(QMainWindow):
             lambda: self._on_graph_generate(name)
         )
         controls.dataset_style_changed.connect(
-            lambda idx, style: self._on_graph_generate(name)
+            lambda idx, style: self._on_graph_update_style(name, idx, style)
+        )
+        controls.legend_changed.connect(
+            lambda idx, text: self._on_graph_generate(name)
         )
 
         # Wire template callbacks for this graph's controls
@@ -413,6 +416,51 @@ class MainWindow(QMainWindow):
                 self._on_graph_generate(graph_name)
             else:
                 plot_widget.clear_error_bars()
+        elif kind == "z_offset":
+            # Re-render waterfall with new offset
+            self._on_graph_generate(graph_name)
+        elif kind == "color_scale":
+            # Re-render image/heatmap with new color scale
+            self._on_graph_generate(graph_name)
+        elif kind == "log_scale":
+            # Re-render image/heatmap with log scale toggle
+            self._on_graph_generate(graph_name)
+
+    def _on_graph_update_style(self, graph_name: str, idx: int, style: Dict[str, str]) -> None:
+        """Update a specific dataset's style in the plot without full re-render.
+
+        Args:
+            graph_name: Name of the target graph tab.
+            idx: Index of the dataset to update.
+            style: Dict with 'color', 'symbol', 'linestyle' keys.
+        """
+        plot_widget = self._get_current_plot_widget()
+
+        # Map style to pyqtgraph values
+        color = style.get("color", "blue")
+        symbol = style.get("symbol", "o")
+        linestyle = style.get("linestyle", "-")
+
+        # Update the plot item in place
+        if idx < len(plot_widget._plot_items):
+            item = plot_widget._plot_items[idx]
+
+            # Update pen (color + linestyle)
+            from bernardyn.plot.plot_style import map_symbol_to_pyqtgraph, map_linestyle_to_pyqtgraph
+            pg_color = pg.mkColor(color) if color else None
+            pen_style_map = {
+                "-": pg.QtCore.Qt.SolidLine,
+                "--": pg.QtCore.Qt.DashLine,
+                ".": pg.QtCore.Qt.DotLine,
+                "-.": pg.QtCore.Qt.DashDotLine,
+            }
+            pen_style = pen_style_map.get(linestyle, pg.QtCore.Qt.SolidLine)
+            pen = pg.mkPen(color=pg_color, width=1.5, style=pen_style)
+            item.setPen(pen)
+
+            # Update symbol
+            pg_symbol = map_symbol_to_pyqtgraph(symbol)
+            item.setSymbol(pg_symbol)
 
     def _on_apply_template(self, graph_name: str, template_name: str) -> None:
         """Apply a template to the current graph's controls.
@@ -758,14 +806,19 @@ class MainWindow(QMainWindow):
                     plot_widget.set_y_label(sas_data.y_label or "Y")
                     break
 
-        # Update controls panel ranges
-        if all_x_min != float("inf"):
+        # Update controls panel ranges (only if not already set to current values)
+        cur_xmin, cur_xmax = controls.get_x_range()
+        if abs(cur_xmin - all_x_min) > 1e-10 or abs(cur_xmax - all_x_max) > 1e-10:
             controls.set_x_range(all_x_min, all_x_max)
-        if all_y_min != float("inf"):
+        cur_ymin, cur_ymax = controls.get_y_range()
+        if abs(cur_ymin - all_y_min) > 1e-10 or abs(cur_ymax - all_y_max) > 1e-10:
             controls.set_y_range(all_y_min, all_y_max)
 
-        # Update dataset count in controls
-        controls.set_dataset_count(dataset_index)
+        # Update dataset count in controls (only if count changed to preserve user styles)
+        controls.set_dataset_count_if_changed(dataset_index)
+
+        # Update legend names from loaded data attributes
+        self._update_legend_names(controls, dataset_index)
 
         # Enable slit-smeared toggle if data has it
         controls.set_slit_smear_available(has_slit_smear_data)
@@ -957,3 +1010,41 @@ class MainWindow(QMainWindow):
     def get_controls_panel(self) -> ControlsPanel:
         """Get the controls panel for external access."""
         return self._get_current_controls()
+
+    def _update_legend_names(self, controls: ControlsPanel, dataset_index: int) -> None:
+        """Update legend names in the controls panel from loaded data attributes.
+
+        Only sets defaults for datasets that don't have user-defined names yet.
+        """
+        legend_names = controls.get_legend_names()
+
+        # Build a list of default names from loaded data
+        defaults = []
+        idx = 0
+        for basename, data in self._loaded_data.items():
+            for sas_data in data.get("sas_data_list", []):
+                if idx < dataset_index:
+                    defaults.append(basename)
+                    idx += 1
+
+            # Process slit-smeared data
+            slit_smear = data.get("slit_smear")
+            if slit_smear is not None:
+                has_slit = True
+                idx += 1
+
+            # Process desmeared data
+            desmear = data.get("desmear")
+            if desmear is not None:
+                idx += 1
+
+        # Update legend inputs with defaults where user hasn't set a name
+        for i in range(min(len(defaults), len(legend_names))):
+            if not legend_names[i].strip():
+                controls._legend_inputs[i].setText(defaults[i])
+
+        # If we have more datasets than legend inputs, add new ones
+        while len(legend_names) < dataset_index:
+            idx = len(legend_names)
+            default_name = f"Dataset {idx + 1}"
+            controls._add_legend_input(idx, default_name)
