@@ -12,6 +12,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 import numpy as np
+import pyqtgraph as pg
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (

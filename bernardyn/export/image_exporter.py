@@ -7,6 +7,9 @@ built-in export functionality with resolution control.
 import logging
 from typing import Any, Optional
 
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QPainter, QPixmap
+
 logger = logging.getLogger(__name__)
 
 

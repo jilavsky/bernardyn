@@ -2,21 +2,6 @@
 
 This document outlines identified bugs and proposed improvements for the Bernardyn codebase, to be addressed in a separate session.
 
-## 1. Critical Bugs (Crashes)
-These issues cause application crashes or `NameError` exceptions during specific user actions.
-
-### A. Missing Imports in Image Exporter
-*   **File**: `bernardyn/export/image_exporter.py`
-*   **Issue**: The `export` method uses `Qt`, `QPainter`, and `QPixmap` when exporting to JPG, but these are not imported at the top of the file or within the function scope.
-*   **Proposed Fix**: Add necessary imports from `PySide6.QtCore`, `PySide6.QtGui`, and `PySide6.QtWidgets`.
-
-### B. Missing pyqtgraph Import in Main Window
-*   **File**: `bernardyn/gui/main_window.py`
-*   **Issue**: The `_on_graph_update_style` method references `pg` (e.g., `pg.mkColor`, `pg.QtCore.Qt.SolidLine`), but `pyqtgraph` is not imported as `pg`.
-*   **Proposed Fix**: Add `import pyqtgraph as pg` to the top of the file.
-
----
-
 ## 2. Functional Bugs & Incomplete Implementations
 These issues affect application behavior and feature completeness without causing immediate crashes.
 
