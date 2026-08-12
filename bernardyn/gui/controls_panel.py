@@ -572,11 +572,11 @@ class ControlsPanel(QGroupBox):
         if idx < 0:
             return
 
+        # Preserve existing legend names before rebuilding
+        old_legend_names = self.get_legend_names()
+
         # Remove from styles list
         self._dataset_styles.pop(idx)
-
-        # Remove from combo box
-        self._dataset_combo.removeItem(idx)
 
         # Remove legend input
         self._remove_legend_input(idx)
@@ -591,10 +591,21 @@ class ControlsPanel(QGroupBox):
         for i in range(len(self._dataset_styles)):
             self._dataset_combo.addItem(f"Dataset {i + 1}")
 
-        # Rebuild all legend inputs
+        # Rebuild all legend inputs preserving existing names
         self._clear_all_legend_inputs()
         for i in range(len(self._dataset_styles)):
-            self._add_legend_input(i, f"Dataset {i + 1}")
+            # Preserve name if it exists for this index (skip removed one)
+            if i < len(old_legend_names):
+                preserved_name = old_legend_names[i]
+                # If we're after the removed index, shift names down
+                if i >= idx:
+                    # Names are already shifted by removal, just use as-is
+                    default_name = preserved_name if preserved_name.strip() else f"Dataset {i + 1}"
+                else:
+                    default_name = preserved_name if preserved_name.strip() else f"Dataset {i + 1}"
+            else:
+                default_name = f"Dataset {i + 1}"
+            self._add_legend_input(i, default_name)
 
         if self._dataset_combo.count() > 0:
             self._dataset_combo.setCurrentIndex(0)

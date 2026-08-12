@@ -843,10 +843,12 @@ class MainWindow(QMainWindow):
         color_scale = controls.get_color_scale()
         log_scale = controls.get_log_scale()
 
+        has_image_data = False
         for basename, data in self._loaded_data.items():
             raw_image = data.get("raw_image")
             if raw_image is not None and raw_image.data.size > 0:
                 img = raw_image.data
+                has_image_data = True
 
                 # Apply log scale if requested
                 if log_scale:
@@ -858,6 +860,15 @@ class MainWindow(QMainWindow):
                 plot_widget.add_image(img, vmin=vmin, vmax=vmax)
                 plot_widget.set_title(f"{basename} - Raw Image ({color_scale})")
                 break
+
+        if not has_image_data:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(
+                self,
+                "No Image Data",
+                "No compatible 2D image data found for the selected files. "
+                "The plot has been cleared.",
+            )
 
         # Enable controls
         controls.set_enabled(True)
@@ -934,6 +945,14 @@ class MainWindow(QMainWindow):
 
             # Update controls panel dataset count
             controls.set_dataset_count(dataset_index)
+        else:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(
+                self,
+                "No Waterfall Data",
+                "No compatible 1D SAS data found for waterfall plot. "
+                "The plot has been cleared.",
+            )
 
         # Enable controls
         controls.set_enabled(True)
@@ -996,6 +1015,14 @@ class MainWindow(QMainWindow):
 
             # Update controls panel dataset count
             controls.set_dataset_count(dataset_index)
+        else:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(
+                self,
+                "No Heatmap Data",
+                "No compatible 1D SAS data found for heatmap plot. "
+                "The plot has been cleared.",
+            )
 
         # Enable controls
         controls.set_enabled(True)

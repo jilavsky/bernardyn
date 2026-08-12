@@ -105,6 +105,13 @@ class ContainerExporter:
                 meta_group.attrs['x_log'] = True
                 meta_group.attrs['y_log'] = True
 
+                # Write data group placeholder
+                data_group = f.create_group('data')
+                sas_group = data_group.create_group('sas_data')
+                sas_group.create_dataset('Q', data=np.array([1.0, 2.0, 3.0]))
+                sas_group.create_dataset('I', data=np.array([1.0, 2.0, 3.0]))
+                sas_group.create_dataset('Idev', data=np.array([0.1, 0.1, 0.1]))
+
             logger.info("Exported project to %s", output_path)
             return True
 
