@@ -87,8 +87,17 @@ class ImageExporter:
             else:
                 # Fallback to renderToPixmap for unknown formats
                 pixmap = pg_widget.renderToPixmap()
-                pixmap.save(output_path)
-
+                # Determine format from extension, default to PNG
+                ext_format_map = {
+                    '.png': 'PNG',
+                    '.jpg': 'JPEG',
+                    '.jpeg': 'JPEG',
+                    '.bmp': 'BMP',
+                    '.tiff': 'TIFF',
+                    '.tif': 'TIFF',
+                }
+                fmt = ext_format_map.get(ext, 'PNG')
+                pixmap.save(output_path, fmt)
             logger.info("Exported plot to %s", output_path)
             return True
 

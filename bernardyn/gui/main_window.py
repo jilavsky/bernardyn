@@ -30,6 +30,7 @@ from bernardyn.data.loader import get_default_dispatcher
 from bernardyn.gui.controls_panel import ControlsPanel
 from bernardyn.gui.data_panel import DataPanel
 from bernardyn.gui.plot_widget import PlotWidget
+from bernardyn.plot.plot_style import map_symbol_to_pyqtgraph, map_linestyle_to_pyqtgraph
 from bernardyn.template.manager import TemplateManager, get_default_manager
 from bernardyn.utils.state_manager import StateManager
 
@@ -447,7 +448,6 @@ class MainWindow(QMainWindow):
             item = plot_widget._plot_items[idx]
 
             # Update pen (color + linestyle)
-            from bernardyn.plot.plot_style import map_symbol_to_pyqtgraph, map_linestyle_to_pyqtgraph
             pg_color = pg.mkColor(color) if color else None
             pen_style_map = {
                 "-": pg.QtCore.Qt.SolidLine,
