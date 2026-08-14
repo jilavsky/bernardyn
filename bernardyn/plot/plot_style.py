@@ -63,6 +63,12 @@ LINE_STYLES = {
 
 DEFAULT_LINE_STYLES = ["-", "--", ".-.", "-."]
 
+# Default line width for plot lines
+DEFAULT_LINEWIDTH = 1.5
+
+# Default symbol size
+DEFAULT_SYMBOL_SIZE = 4
+
 
 def get_color(index: int) -> str:
     """Get a color from the default palette by index.

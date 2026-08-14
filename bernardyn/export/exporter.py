@@ -120,9 +120,11 @@ _default_dispatcher = ExportDispatcher()
 
 from bernardyn.export.image_exporter import ImageExporter  # noqa: E402
 from bernardyn.export.clipboard_exporter import ClipboardExporter  # noqa: E402
+from bernardyn.export.container_exporter import ContainerExporter  # noqa: E402
 
 _default_dispatcher.register(ImageExporter())
 _default_dispatcher.register(ClipboardExporter())
+_default_dispatcher.register(ContainerExporter())
 
 
 def get_exporter(format_name: str) -> Optional[Exporter]:

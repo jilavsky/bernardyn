@@ -59,18 +59,25 @@ class LoaderDispatcher:
         """Load data from a file using the appropriate loader.
 
         Returns the loaded data dict, or None if no loader can handle it.
+        Raises RuntimeError if a loader was found but failed to load.
         """
         loader = self.get_loader(filepath)
         if loader is None:
             logger.error("No loader available for file: %s", filepath)
             return None
 
+        logger.info("Loading %s with %s", filepath, type(loader).__name__)
         try:
-            logger.info("Loading %s with %s", filepath, type(loader).__name__)
-            return loader.load(filepath)
+            result = loader.load(filepath)
         except Exception as e:
             logger.error("Error loading %s with %s: %s", filepath, type(loader).__name__, e)
+            raise RuntimeError(f"Failed to load {filepath} using {type(loader).__name__}: {e}") from e
+
+        if result is None or result == {}:
+            logger.error("Loader %s returned empty result for %s", type(loader).__name__, filepath)
             return None
+
+        return result
 
     def list_supported_extensions(self) -> List[str]:
         """Get all file extensions supported by registered loaders."""

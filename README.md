@@ -51,7 +51,7 @@ print(bernardyn.__version__)
 ### Setting up the development environment
 
 ```bash
-pip install -e \[.dev\]
+pip install -e ".[dev]"
 ```
 
 ### Running tests

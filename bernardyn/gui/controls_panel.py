@@ -665,12 +665,6 @@ class ControlsPanel(QGroupBox):
                 default_name = old_texts[i]
             self._add_legend_input(i, default_name)
 
-    def _clear_all_legend_inputs(self) -> None:
-        """Clear all legend input widgets from the layout."""
-        for legend_input in self._legend_inputs:
-            legend_input.deleteLater()
-        self._legend_inputs.clear()
-
     def _update_style_controls(self, style: Dict[str, str]) -> None:
         """Update the style controls to reflect a given style dict."""
         # Set color
