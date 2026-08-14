@@ -324,9 +324,13 @@ class MainWindow(QMainWindow):
             "HDF5 Files (*.hdf *.h5);;ASCII Files (*.txt *.csv);;All Files (*)",
         )
         if filepath:
-            self._data_panel.set_folder("/".join(filepath.split("/")[:-1]))
+            # Use os.path for cross-platform path manipulation
+            import os
+            folder = os.path.dirname(filepath)
+            filename = os.path.basename(filepath)
+            self._data_panel.set_folder(folder)
             # Select the file in the listbox and trigger loading
-            self._data_panel.set_regex_filter("^" + filepath.split("/")[-1] + "$")
+            self._data_panel.set_regex_filter("^" + filename + "$")
             self._on_files_selected([filepath])
 
     def _on_open_folder(self) -> None:

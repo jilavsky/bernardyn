@@ -45,10 +45,15 @@ class AsciiLoader:
         """Check if this loader can handle the given file."""
         return any(filepath.lower().endswith(ext) for ext in self.SUPPORTED_EXTENSIONS)
 
-    def load(self, filepath: str) -> Optional[AsciiData]:
+    def load(self, filepath: str) -> Dict[str, Any]:
         """Load data from an ASCII file.
 
-        Returns AsciiData or None if loading fails.
+        Returns a dict with at least:
+          - 'type': str identifying the data type
+          - 'filepath': the source file path
+          - 'data': the parsed AsciiData object
+
+        Returns an empty dict if loading fails.
         """
         data = AsciiData()
         data.source_file = filepath
@@ -65,7 +70,7 @@ class AsciiLoader:
 
             if not lines:
                 logger.warning("No data found in %s", filepath)
-                return None
+                return {}
 
             # Try to parse all lines as numeric data
             parsed_rows = []
@@ -83,7 +88,7 @@ class AsciiLoader:
 
             if not parsed_rows:
                 logger.warning("Could not parse any numeric data from %s", filepath)
-                return None
+                return {}
 
             array = np.array(parsed_rows)
             data.x = array[:, 0]
@@ -105,12 +110,22 @@ class AsciiLoader:
                             data.y_label = parts[1].split()[1]
                         break
 
-            return data
+            return {
+                'type': 'ascii_1d',
+                'filepath': filepath,
+                'data': data,
+            }
 
         except Exception as e:
             logger.error("Error loading ASCII file %s: %s", filepath, e)
-            return None
+            return {}
 
     def load_1d(self, filepath: str) -> Optional[AsciiData]:
-        """Convenience method to load 1D data from an ASCII file."""
-        return self.load(filepath)
+        """Convenience method to load 1D data from an ASCII file.
+
+        Returns the AsciiData object, or None if loading fails.
+        """
+        result = self.load(filepath)
+        if result:
+            return result.get('data')
+        return None

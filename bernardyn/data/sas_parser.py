@@ -323,12 +323,16 @@ def parse_hdf5_file(filepath: str) -> Dict[str, Any]:
             if sasdata_group is not None:
                 result["sas_data"][entry_name] = parse_sas_data(sasdata_group)
 
-        raw_image = find_raw_image(f["entry"])
-        if raw_image is not None:
-            result["raw_image"] = raw_image
+        # Use the first entry for raw image and slit smear search
+        # (these are typically per-entry, not per-sasdata)
+        if entries:
+            first_entry = entries[0]
+            raw_image = find_raw_image(f[first_entry])
+            if raw_image is not None:
+                result["raw_image"] = raw_image
 
-        slit_smear, desmear = find_slit_smear_groups(f["entry"])
-        result["slit_smear"] = slit_smear
-        result["desmear"] = desmear
+            slit_smear, desmear = find_slit_smear_groups(f[first_entry])
+            result["slit_smear"] = slit_smear
+            result["desmear"] = desmear
 
     return result
