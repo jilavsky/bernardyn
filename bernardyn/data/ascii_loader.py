@@ -16,6 +16,7 @@ class AsciiData:
     """Container for loaded ASCII data."""
 
     def __init__(self):
+        """Initialize an empty AsciiData container."""
         self.x: np.ndarray = np.array([])
         self.y: np.ndarray = np.array([])
         self.y_err: Optional[np.ndarray] = None

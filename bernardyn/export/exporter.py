@@ -41,6 +41,7 @@ class ExportDispatcher:
     """
 
     def __init__(self):
+        """Initialize the exporter dispatcher with an empty registry."""
         self._exporters: Dict[str, Exporter] = {}
 
     def register(self, exporter: Exporter) -> None:

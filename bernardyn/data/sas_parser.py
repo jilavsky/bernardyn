@@ -34,6 +34,7 @@ class SasData:
     """Container for parsed 1D SAS data with metadata."""
 
     def __init__(self):
+        """Initialize an empty SasData container."""
         self.x: np.ndarray = np.array([])       # X values (e.g., Q)
         self.y: np.ndarray = np.array([])       # Y values (e.g., I)
         self.y_err: Optional[np.ndarray] = None  # Y uncertainties (e.g., Idev)
@@ -57,6 +58,7 @@ class RawImageData:
     """Container for raw 2D detector image data."""
 
     def __init__(self):
+        """Initialize an empty RawImageData container."""
         self.data: np.ndarray = np.array([])  # 2D array
         self.attributes: Dict[str, Any] = {}
 

@@ -38,6 +38,7 @@ class LoaderDispatcher:
     """
 
     def __init__(self):
+        """Initialize the loader dispatcher with an empty loader list."""
         self._loaders: List[Loader] = []
 
     def register(self, loader: Loader) -> None:

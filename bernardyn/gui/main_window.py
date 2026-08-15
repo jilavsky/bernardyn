@@ -378,7 +378,8 @@ class MainWindow(QMainWindow):
             try:
                 data = self._loader.load(filepath)
                 if data is not None:
-                    basename = filepath.split("/")[-1]
+                    import os
+                    basename = os.path.basename(filepath)
                     self._loaded_data[basename] = data
             except Exception as e:
                 logger.error("Error loading %s: %s", filepath, e)
