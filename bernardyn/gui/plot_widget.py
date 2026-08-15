@@ -165,11 +165,10 @@ class PlotWidget(QWidget):
         if show:
             self._plot_widget.addLegend()
         else:
-            # Remove legend by hiding it without clearing plot items.
-            # This preserves _plot_items references intact.
+            # Remove legend by removing it from plot items to avoid stale references
             legend = self._plot_widget.getLegend()
             if legend is not None:
-                legend.setVisible(False)
+                self._plot_widget.removeItem(legend)
 
     def get_legend(self) -> bool:
         """Get current legend state."""

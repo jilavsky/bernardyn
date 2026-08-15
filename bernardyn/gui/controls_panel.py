@@ -87,6 +87,7 @@ class ControlsPanel(QGroupBox):
 
         # Legend name inputs (one per dataset)
         self._legend_inputs: List[QLineEdit] = []
+        self._legend_rows: List[QHBoxLayout] = []
 
         # Callbacks (set by main window)
         self._on_scale_changed: Optional[Any] = None
@@ -274,6 +275,7 @@ class ControlsPanel(QGroupBox):
         # ===================================================================
         style_group = QGroupBox("Dataset Styles")
         style_layout = QVBoxLayout()
+        self._style_group = style_group
 
         # Dataset selector row
         ds_select_layout = QHBoxLayout()
@@ -284,7 +286,7 @@ class ControlsPanel(QGroupBox):
         style_layout.addLayout(ds_select_layout)
 
         # Color, Symbol, Line on one line (33% each)
-        style_row = QHBoxLayout()
+        self._style_row = QHBoxLayout()
 
         color_layout = QHBoxLayout()
         color_layout.addWidget(QLabel("Color:"))
@@ -300,7 +302,7 @@ class ControlsPanel(QGroupBox):
             self._color_combo.setItemData(idx, c, Qt.UserRole + 1)
         self._color_combo.currentIndexChanged.connect(self._on_style_changed)
         color_layout.addWidget(self._color_combo, 1)
-        style_row.addLayout(color_layout)
+        self._style_row.addLayout(color_layout)
 
         symbol_layout = QHBoxLayout()
         symbol_layout.addWidget(QLabel("Symbol:"))
@@ -309,7 +311,7 @@ class ControlsPanel(QGroupBox):
             self._symbol_combo.addItem(s, s)
         self._symbol_combo.currentIndexChanged.connect(self._on_style_changed)
         symbol_layout.addWidget(self._symbol_combo, 1)
-        style_row.addLayout(symbol_layout)
+        self._style_row.addLayout(symbol_layout)
 
         linestyle_layout = QHBoxLayout()
         linestyle_layout.addWidget(QLabel("Line:"))
@@ -318,13 +320,13 @@ class ControlsPanel(QGroupBox):
             self._linestyle_combo.addItem(ls, ls)
         self._linestyle_combo.currentIndexChanged.connect(self._on_style_changed)
         linestyle_layout.addWidget(self._linestyle_combo, 1)
-        style_row.addLayout(linestyle_layout)
+        self._style_row.addLayout(linestyle_layout)
 
-        style_layout.addLayout(style_row)
+        style_layout.addLayout(self._style_row)
 
         # Legend name inputs (one per dataset, added dynamically)
-        legend_label = QLabel("Legend Names:")
-        style_layout.addWidget(legend_label)
+        self._legend_label = QLabel("Legend Names:")
+        style_layout.addWidget(self._legend_label)
         self._legends_scroll = QVBoxLayout()
         style_layout.addLayout(self._legends_scroll)
 
@@ -414,6 +416,14 @@ class ControlsPanel(QGroupBox):
         is_stylable = self._plot_type in ("line", "waterfall")
         if hasattr(self, '_dataset_combo') and self._dataset_combo is not None:
             self._dataset_combo.setVisible(is_stylable)
+        if hasattr(self, '_style_row') and self._style_row is not None:
+            self._style_row.setVisible(is_stylable)
+        if hasattr(self, '_legend_label') and self._legend_label is not None:
+            self._legend_label.setVisible(is_stylable)
+        if hasattr(self, '_legends_scroll') and self._legends_scroll is not None:
+            self._legends_scroll.setVisible(is_stylable)
+        if hasattr(self, '_style_group') and self._style_group is not None:
+            self._style_group.setVisible(is_stylable)
 
     def _on_plot_type_changed(self, index: int) -> None:
         """Handle plot type changes — show/hide relevant controls."""
@@ -625,27 +635,44 @@ class ControlsPanel(QGroupBox):
 
         self._legends_scroll.addLayout(row_layout)
         self._legend_inputs.append(legend_input)
+        self._legend_rows.append(row_layout)
 
     def _remove_legend_input(self, index: int) -> None:
         """Remove the legend input for the given dataset index."""
         if 0 <= index < len(self._legend_inputs):
             legend_input = self._legend_inputs.pop(index)
-            # Get the parent layout (the row QHBoxLayout inside _legends_scroll QVBoxLayout)
-            parent_layout = legend_input.parentWidget().layout() if legend_input.parentWidget() else None
-            if parent_layout:
-                parent_layout.removeWidget(legend_input)
+            row_layout = self._legend_rows.pop(index)
+            
+            # Remove the row layout from the scroll layout
+            self._legends_scroll.removeItem(row_layout)
+            # Delete the layout and its widgets
+            while row_layout.count():
+                child = row_layout.takeAt(0)
+                if child.widget():
+                    child.widget().setParent(None)
+                    child.widget().deleteLater()
+            
             legend_input.setParent(None)
             legend_input.deleteLater()
 
     def _clear_all_legend_inputs(self) -> None:
         """Clear all legend input widgets from the layout."""
-        for legend_input in self._legend_inputs:
-            parent_layout = legend_input.parentWidget().layout() if legend_input.parentWidget() else None
-            if parent_layout:
-                parent_layout.removeWidget(legend_input)
-            legend_input.setParent(None)
-            legend_input.deleteLater()
+        # Clear in reverse order to avoid index issues
+        for i in range(len(self._legend_inputs) - 1, -1, -1):
+            row_layout = self._legend_rows[i]
+            legend_input = self._legend_inputs[i]
+            
+            # Remove the row layout from the scroll layout
+            self._legends_scroll.removeItem(row_layout)
+            # Delete the layout and its widgets
+            while row_layout.count():
+                child = row_layout.takeAt(0)
+                if child.widget():
+                    child.widget().setParent(None)
+                    child.widget().deleteLater()
+        
         self._legend_inputs.clear()
+        self._legend_rows.clear()
 
     def _rebuild_legend_inputs(self, count: int) -> None:
         """Rebuild all legend input widgets to match the given dataset count.

@@ -88,8 +88,9 @@ class StateManager:
         Returns:
             The stored value, or default if not present.
         """
-        # Always load from disk to get latest saved values
-        self.load()
+        # Load only if state hasn't been loaded yet
+        if not self._state:
+            self.load()
 
         return self._state.get(key, default)
 

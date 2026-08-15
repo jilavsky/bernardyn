@@ -623,9 +623,17 @@ class MainWindow(QMainWindow):
         plot_widget = self._get_current_plot_widget()
 
         plot_widget.clear()
+        
+        # Reset controls state based on plot type
+        plot_type = controls.get_plot_type()
+        if plot_type in ("image", "heatmap"):
+            controls.set_dataset_count(0)
+            controls.set_show_error_bars(False)
 
         if not self._loaded_data:
             return
+
+        plot_type = controls.get_plot_type()
 
         plot_type = controls.get_plot_type()
         x_log = controls.get_x_log()
