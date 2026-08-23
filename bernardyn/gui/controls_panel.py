@@ -416,12 +416,8 @@ class ControlsPanel(QGroupBox):
         is_stylable = self._plot_type in ("line", "waterfall")
         if hasattr(self, '_dataset_combo') and self._dataset_combo is not None:
             self._dataset_combo.setVisible(is_stylable)
-        if hasattr(self, '_style_row') and self._style_row is not None:
-            self._style_row.setVisible(is_stylable)
         if hasattr(self, '_legend_label') and self._legend_label is not None:
             self._legend_label.setVisible(is_stylable)
-        if hasattr(self, '_legends_scroll') and self._legends_scroll is not None:
-            self._legends_scroll.setVisible(is_stylable)
         if hasattr(self, '_style_group') and self._style_group is not None:
             self._style_group.setVisible(is_stylable)
 
@@ -628,6 +624,9 @@ class ControlsPanel(QGroupBox):
 
         legend_input = QLineEdit(default_name)
         legend_input.setPlaceholderText(f"Legend for dataset {index + 1}")
+        legend_input.blockSignals(True)
+        legend_input.setText(default_name)
+        legend_input.blockSignals(False)
         legend_input.textChanged.connect(
             lambda text, idx=index: self._on_legend_input_changed(idx, text)
         )

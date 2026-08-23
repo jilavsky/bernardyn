@@ -220,7 +220,7 @@ def _():
         f.write("3.0 6.0\n")
 
     loader = AsciiLoader()
-    data = loader.load(tmpfile)
+    data = loader.load_1d(tmpfile)
     assert data is not None, "Expected loaded data"
     assert len(data.x) == 3, f"Expected 3 points, got {len(data.x)}"
     assert len(data.y) == 3
@@ -239,7 +239,7 @@ def _():
         f.write("2.0,4.0,0.2\n")
 
     loader = AsciiLoader()
-    data = loader.load(tmpfile)
+    data = loader.load_1d(tmpfile)
     assert data is not None, "Expected loaded data"
     assert len(data.x) == 2
     assert data.y_err is not None, "Expected error bars for 3-col file"

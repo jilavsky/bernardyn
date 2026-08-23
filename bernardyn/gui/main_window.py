@@ -9,6 +9,7 @@ toggles, and slit-smeared/desmeared data display.
 """
 
 import logging
+import os
 from typing import Any, Dict, List, Optional
 
 import numpy as np
@@ -183,7 +184,7 @@ class MainWindow(QMainWindow):
         export_menu.addSeparator()
 
         save_project_action = QAction("Save Project...", self)
-        save_project_action.setShortcut("Ctrl+Shift+S")
+        save_project_action.setShortcut("Ctrl+Shift+P")
         save_project_action.triggered.connect(self._on_save_project)
         export_menu.addAction(save_project_action)
 
@@ -319,13 +320,15 @@ class MainWindow(QMainWindow):
         """Handle File > Open File menu action."""
         from PySide6.QtWidgets import QFileDialog
 
+        # Get last data folder from state manager for dialog start location
+        last_folder = self._state_manager.last_data_folder
+        start_dir = last_folder if last_folder and os.path.isdir(last_folder) else ""
+        
         filepath, _ = QFileDialog.getOpenFileName(
-            self, "Open Data File", "",
+            self, "Open Data File", start_dir,
             "HDF5 Files (*.hdf *.h5);;ASCII Files (*.txt *.csv);;All Files (*)",
         )
         if filepath:
-            # Use os.path for cross-platform path manipulation
-            import os
             folder = os.path.dirname(filepath)
             filename = os.path.basename(filepath)
             self._data_panel.set_folder(folder)
@@ -337,9 +340,13 @@ class MainWindow(QMainWindow):
         """Handle File > Open Folder menu action."""
         from PySide6.QtWidgets import QFileDialog
 
+        # Get last data folder from state manager for dialog start location
+        last_folder = self._state_manager.last_data_folder
+        start_dir = last_folder if last_folder and os.path.isdir(last_folder) else (self._data_panel.get_current_folder() or "")
+        
         folder = QFileDialog.getExistingDirectory(
             self, "Select Data Folder",
-            self._data_panel.get_current_folder() or "/home",
+            start_dir,
         )
         if folder:
             self._data_panel.set_folder(folder)
@@ -372,13 +379,16 @@ class MainWindow(QMainWindow):
         if not filepaths:
             return
 
+        # Save last used folder to state
+        folder = os.path.dirname(filepaths[0])
+        self._state_manager.last_data_folder = folder
+
         # Load all selected files
         self._loaded_data = {}
         for filepath in filepaths:
             try:
                 data = self._loader.load(filepath)
                 if data is not None:
-                    import os
                     basename = os.path.basename(filepath)
                     self._loaded_data[basename] = data
             except Exception as e:
@@ -395,11 +405,17 @@ class MainWindow(QMainWindow):
             if current_graph:
                 name, plot_widget, controls = current_graph
                 self._on_graph_generate(name)
+                # Auto-range after loading new data
+                plot_widget.autoRange()
 
     def _on_graph_control_changed(self, graph_name: str, kind: str, value: Any) -> None:
         """Handle control changes for a specific graph."""
         plot_widget = self._get_current_plot_widget()
 
+        if kind == "auto":
+            # Auto-range: reset plot to auto-scale
+            plot_widget.autoRange()
+            return
         if kind == "x":
             plot_widget.set_log_mode(x_log=value, y_log=plot_widget.get_y_log())
         elif kind == "y":
@@ -493,7 +509,6 @@ class MainWindow(QMainWindow):
 
         if ok and name:
             # Sanitize name
-            import os
             safe_name = name.replace("/", "_").replace("\\", "_")
 
             if self._template_manager.save_template(safe_name, template_data):
@@ -624,6 +639,7 @@ class MainWindow(QMainWindow):
 
         plot_widget.clear()
         
+        # Auto-range the plot after data changes
         # Reset controls state based on plot type
         plot_type = controls.get_plot_type()
         if plot_type in ("image", "heatmap"):
@@ -682,7 +698,8 @@ class MainWindow(QMainWindow):
 
         for basename, data in self._loaded_data.items():
             # Process 1D SAS datasets
-            for sas_data in data.get("sas_data_list", []):
+            # Use enumerate to track dataset index properly
+            for idx, sas_data in enumerate(data.get("sas_data_list", [])):
                 x = sas_data.x
                 y = sas_data.y
 
@@ -690,16 +707,19 @@ class MainWindow(QMainWindow):
                 if (x_log and np.any(x <= 0)) or (y_log and np.any(y <= 0)):
                     continue
 
+                # Track current dataset index for styling
+                current_index = dataset_index
+                
                 # Get style for this dataset
-                if dataset_index < len(dataset_styles):
-                    style = dataset_styles[dataset_index]
+                if current_index < len(dataset_styles):
+                    style = dataset_styles[current_index]
                     color = style.get("color", "blue")
                     symbol = style.get("symbol", "o")
                     linestyle = style.get("linestyle", "-")
                 else:
                     from bernardyn.plot.plot_style import get_color, DEFAULT_SYMBOLS
-                    color = get_color(dataset_index)
-                    symbol = DEFAULT_SYMBOLS[dataset_index % len(DEFAULT_SYMBOLS)]
+                    color = get_color(current_index)
+                    symbol = DEFAULT_SYMBOLS[current_index % len(DEFAULT_SYMBOLS)]
                     linestyle = "-"
 
                 plot_widget.add_line(
@@ -713,8 +733,7 @@ class MainWindow(QMainWindow):
 
                 # Add error bars if available and enabled
                 show_error_bars = controls.get_show_error_bars()
-                # Skip error bars in log-log mode — pyqtgraph ErrorBarItem does not handle log scales
-                if sas_data.y_err is not None and show_error_bars and not (x_log or y_log):
+                if sas_data.y_err is not None and show_error_bars:
                     # Ensure arrays are aligned (same length)
                     min_len = min(len(x), len(y), len(sas_data.y_err))
                     if min_len == 0:
@@ -758,12 +777,10 @@ class MainWindow(QMainWindow):
                 y = slit_smear.y
 
                 if (x_log and np.any(x <= 0)) or (y_log and np.any(y <= 0)):
-                    continue
-
-                # Only show if toggle is enabled
-                if not show_slit_smear:
+                    pass  # Skip to the desmear block below
+                elif not show_slit_smear:
                     dataset_index += 1
-                    continue
+                    pass  # Skip to the desmear block below
 
                 from bernardyn.plot.plot_style import get_color, DEFAULT_SYMBOLS
                 color = get_color(dataset_index)
@@ -843,18 +860,23 @@ class MainWindow(QMainWindow):
     def _render_image_plot(
         self,
         plot_widget: PlotWidget,
-        controls: ControlsPanel,
+        controls: Optional[ControlsPanel] = None,
+        x_log: bool = False,
+        y_log: bool = False,
     ) -> None:
         """Render a 2D image plot from loaded data.
 
         Args:
             plot_widget: The target PlotWidget to render into.
             controls: The ControlsPanel with current settings (color scale, log).
+                Optional; when omitted, defaults are used (grayscale, no log).
+            x_log: Ignored for image plots (images are always linear axes).
+            y_log: Ignored for image plots (images are always linear axes).
         """
         plot_widget.set_log_mode(x_log=False, y_log=False)
 
-        color_scale = controls.get_color_scale()
-        log_scale = controls.get_log_scale()
+        color_scale = controls.get_color_scale() if controls is not None else "grayscale"
+        log_scale = controls.get_log_scale() if controls is not None else False
 
         has_image_data = False
         for basename, data in self._loaded_data.items():
@@ -870,7 +892,7 @@ class MainWindow(QMainWindow):
                 vmin = float(np.percentile(img[img > 0], 1)) if np.any(img > 0) else float(img.min())
                 vmax = float(np.percentile(img[img > 0], 99)) if np.any(img > 0) else float(img.max())
 
-                plot_widget.add_image(img, vmin=vmin, vmax=vmax)
+                plot_widget.add_image(img, vmin=vmin, vmax=vmax, color_scale=color_scale)
                 plot_widget.set_title(f"{basename} - Raw Image ({color_scale})")
                 break
 
@@ -884,7 +906,8 @@ class MainWindow(QMainWindow):
             )
 
         # Enable controls
-        controls.set_enabled(True)
+        if controls is not None:
+            controls.set_enabled(True)
 
     def _render_waterfall_plot(
         self,
@@ -1017,7 +1040,7 @@ class MainWindow(QMainWindow):
 
         # Render heatmap lines (scatter plot with color mapping)
         if heatmap_datasets:
-            plot_widget.add_heatmap_lines(heatmap_datasets)
+            plot_widget.add_heatmap_lines(heatmap_datasets, color_scale=color_scale)
 
             # Set axis labels
             for basename, data in self._loaded_data.items():
@@ -1080,9 +1103,16 @@ class MainWindow(QMainWindow):
                 idx += 1
 
         # Update legend inputs with defaults where user hasn't set a name
-        for i in range(min(len(defaults), len(legend_names))):
-            if not legend_names[i].strip():
-                controls._legend_inputs[i].setText(defaults[i])
+        # Use temporary signal blocking to prevent recursion during legend updates
+        was_blocked = controls._legend_inputs[0].signalsBlocked() if controls._legend_inputs else False
+        try:
+            for i in range(min(len(defaults), len(legend_names))):
+                if not legend_names[i].strip():
+                    controls._legend_inputs[i].blockSignals(True)
+                    controls._legend_inputs[i].setText(defaults[i])
+                    controls._legend_inputs[i].blockSignals(False)
+        finally:
+            pass
 
         # If we have more datasets than legend inputs, add new ones
         while len(legend_names) < dataset_index:

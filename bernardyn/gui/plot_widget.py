@@ -263,26 +263,58 @@ class PlotWidget(QWidget):
         for item in self._error_bars:
             item.setVisible(visible)
 
-    def add_image(self, data: np.ndarray, vmin: Optional[float] = None, vmax: Optional[float] = None) -> pg.ImageItem:
+    def add_image(
+        self,
+        data: np.ndarray,
+        vmin: Optional[float] = None,
+        vmax: Optional[float] = None,
+        color_scale: str = "grayscale",
+    ) -> pg.ImageItem:
         """Add a 2D image to the plot.
 
         Args:
             data: 2D numpy array
             vmin: Minimum value for color mapping (auto if None)
             vmax: Maximum value for color mapping (auto if None)
+            color_scale: Name of the color scale to apply (grayscale,
+                viridis, jet, hot, cool, spring, summer, autumn, winter).
 
         Returns:
             The created ImageItem.
         """
         image_item = pg.ImageItem(image=data)
-        if vmin is not None:
-            image_item.setLookupTable(pg.ColorMap([0, 1], ["black", "white"]).map(np.linspace(0, 1, 256), mode="qcolor"))
+
+        # Build the lookup table (colormap) matching the requested color scale
+        lut = self._build_lut(color_scale)
+        if lut is not None:
+            image_item.setLookupTable(lut)
+
         self._plot_widget.addItem(image_item)
 
         if vmin is not None and vmax is not None:
             image_item.setLevels([vmin, vmax])
 
         return image_item
+
+    def _build_lut(self, color_scale: str = "grayscale") -> Optional[np.ndarray]:
+        """Create a 256-entry lookup table for the given color scale.
+
+        Args:
+            color_scale: Name of the color scale.
+
+        Returns:
+            A 256x4 uint8 array (RGBA) usable as a pyqtgraph lookup table,
+            or None if the scale is unknown.
+        """
+        from bernardyn.plot.image_plotter import _build_color_map
+
+        cmap = _build_color_map(color_scale)
+        if cmap is None:
+            logger.warning("Unknown color scale %r, falling back to grayscale", color_scale)
+            cmap = _build_color_map("grayscale")
+        if cmap is None:
+            return None
+        return cmap.map(np.linspace(0, 1, 256), mode="qcolor")
 
     def add_waterfall_lines(
         self,
@@ -341,18 +373,20 @@ class PlotWidget(QWidget):
         datasets: List[Dict[str, Any]],
         x_log: bool = False,
         y_log: bool = False,
+        color_scale: str = "grayscale",
     ) -> List[pg.PlotDataItem]:
         """Add heatmap plot lines with order number on Y axis.
 
-        Each dataset is rendered as a line where X is the horizontal
-        axis, order number is the vertical position, and intensity
-        values are mapped to color.
+        Each dataset is rendered as a scatter plot where X is the
+        horizontal axis, order number is the vertical position, and
+        intensity values are mapped to color using the requested scale.
 
         Args:
             datasets: List of dataset dicts with 'x', 'y', and
                 'order_number' keys.
             x_log: Use logarithmic X scale
             y_log: Use logarithmic Y scale
+            color_scale: Name of the color scale for intensity mapping.
 
         Returns:
             List of created PlotDataItem objects.
@@ -364,13 +398,13 @@ class PlotWidget(QWidget):
         color_min = float(np.min(all_y)) if all_y.size > 0 else 0.0
         color_max = float(np.max(all_y)) if all_y.size > 0 else 1.0
 
+        # Build the color map once from the selected scale
+        cmap = self._build_heatmap_color_map(color_scale)
+
         for ds in datasets:
             x = np.asarray(ds["x"], dtype=np.float64)
             y = np.asarray(ds["y"], dtype=np.float64)
             order_num = ds.get("order_number", 0)
-
-            # Create scatter plot with color mapping by intensity
-            from pyqtgraph import ScatterPlotItem, ColorMap
 
             # Normalize intensity to 0-1 range for color mapping
             if color_max > color_min:
@@ -382,8 +416,8 @@ class PlotWidget(QWidget):
             sizes = np.full(len(x), 3.0)
             pos = np.column_stack([x, np.full_like(x, order_num)])
 
-            # Use viridis-like gradient
-            colors = pg.ColorMap([0, 1], [(68, 1, 84), (33, 145, 140), (253, 231, 37)]).map(norm_y, mode="qcolor")
+            # Use the selected colormap (falls back to viridis-like gradient)
+            colors = cmap.map(norm_y, mode="qcolor")
 
             scatter = ScatterPlotItem(
                 pos=pos,
@@ -400,6 +434,26 @@ class PlotWidget(QWidget):
         self._plot_widget.setLabel("left", "Order Number")
 
         return items
+
+    def _build_heatmap_color_map(self, color_scale: str = "grayscale") -> "pg.ColorMap":
+        """Return a pyqtgraph ColorMap for the given heatmap color scale.
+
+        Falls back to a viridis-like gradient for unknown scales.
+        """
+        from pyqtgraph import ColorMap
+
+        scale_map = {
+            "grayscale": ColorMap([0, 1], [(68, 1, 84), (253, 231, 37)]),
+            "viridis": ColorMap([0, 0.5, 1], [(68, 1, 84), (33, 145, 140), (253, 231, 37)]),
+            "jet": ColorMap([0, 0.25, 0.5, 0.75, 1], [(0, 0, 255), (0, 255, 255), (0, 255, 0), (255, 255, 0), (255, 0, 0)]),
+            "hot": ColorMap([0, 0.5, 1], [(0, 0, 0), (255, 165, 0), (255, 255, 0)]),
+            "cool": ColorMap([0, 1], [(0, 255, 255), (255, 0, 255)]),
+            "spring": ColorMap([0, 1], [(255, 0, 255), (0, 255, 128)]),
+            "summer": ColorMap([0, 1], [(0, 255, 0), (255, 255, 0)]),
+            "autumn": ColorMap([0, 1], [(255, 0, 0), (255, 255, 0)]),
+            "winter": ColorMap([0, 1], [(0, 0, 255), (0, 255, 255)]),
+        }
+        return scale_map.get(color_scale, scale_map["viridis"])
 
     def reset_zoom(self) -> None:
         """Reset zoom to show all data."""

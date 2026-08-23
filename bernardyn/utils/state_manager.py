@@ -38,7 +38,9 @@ class StateManager:
         """
         self._state_dir = state_dir or self.DEFAULT_STATE_DIR
         self._state_file = os.path.join(self._state_dir, state_file or self.DEFAULT_STATE_FILE)
-        self._state: Dict[str, Any] = dict(self.DEFAULTS)
+        # Start empty so load() is triggered on first access. Defaults are
+        # merged in during load() (or on first get when no file exists yet).
+        self._state: Dict[str, Any] = {}
 
     def _ensure_dir(self) -> None:
         """Ensure the state directory exists."""
