@@ -455,6 +455,15 @@ class PlotWidget(QWidget):
         }
         return scale_map.get(color_scale, scale_map["viridis"])
 
+    def autoRange(self, *args: Any, **kwargs: Any) -> None:
+        """Delegate autoRange to the underlying pyqtgraph PlotWidget.
+
+        Exposes the same auto-scaling behavior on the wrapper so callers
+        (e.g. the file-loading pipeline) can request auto-range without
+        reaching into the inner pyqtgraph widget.
+        """
+        self._plot_widget.autoRange(*args, **kwargs)
+
     def reset_zoom(self) -> None:
         """Reset zoom to show all data."""
         self._plot_widget.autoRange()

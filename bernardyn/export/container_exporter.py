@@ -307,6 +307,7 @@ class ContainerExporter:
             Dictionary with loaded datasets.
         """
         import numpy as np
+        import h5py
 
         result = {}
 

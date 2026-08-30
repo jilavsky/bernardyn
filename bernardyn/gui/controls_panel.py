@@ -198,7 +198,7 @@ class ControlsPanel(QGroupBox):
         scale_layout.addWidget(range_group)
 
         # Color scale selector (for image and heatmap plots) - initially hidden
-        color_scale_group = QGroupBox("Color Scale")
+        self._color_scale_group = QGroupBox("Color Scale")
         color_scale_layout = QVBoxLayout()
 
         self._color_scale_combo = QComboBox()
@@ -213,12 +213,12 @@ class ControlsPanel(QGroupBox):
         self._log_scale_check.stateChanged.connect(self._on_log_scale_changed)
         color_scale_layout.addWidget(self._log_scale_check)
 
-        color_scale_group.setLayout(color_scale_layout)
-        color_scale_group.setVisible(False)  # Hidden by default for line plots
-        scale_layout.addWidget(color_scale_group)
+        self._color_scale_group.setLayout(color_scale_layout)
+        self._color_scale_group.setVisible(False)    # Hidden by default for line plots
+        scale_layout.addWidget(self._color_scale_group)
 
         # Z Offset section (for waterfall plots) - initially hidden
-        z_offset_group = QGroupBox("Z Offset")
+        self._z_offset_group = QGroupBox("Z Offset")
         z_offset_layout = QVBoxLayout()
 
         self._z_offset_spin = QDoubleSpinBox()
@@ -229,9 +229,9 @@ class ControlsPanel(QGroupBox):
         self._z_offset_spin.valueChanged.connect(self._on_z_offset_changed)
         z_offset_layout.addWidget(self._z_offset_spin)
 
-        z_offset_group.setLayout(z_offset_layout)
-        z_offset_group.setVisible(False)  # Hidden by default for line plots
-        scale_layout.addWidget(z_offset_group)
+        self._z_offset_group.setLayout(z_offset_layout)
+        self._z_offset_group.setVisible(False)    # Hidden by default for line plots
+        scale_layout.addWidget(self._z_offset_group)
 
         scale_group.setLayout(scale_layout)
         main_layout.addWidget(scale_group)
@@ -397,22 +397,22 @@ class ControlsPanel(QGroupBox):
         is_image_or_heatmap = self._plot_type in ("image", "heatmap")
         is_waterfall = self._plot_type == "waterfall"
 
-        # Color scale group (image/heatmap only)
+         # Color scale group (image/heatmap only)
         if hasattr(self, '_color_scale_combo') and self._color_scale_combo is not None:
             self._color_scale_combo.setVisible(is_image_or_heatmap)
         if hasattr(self, '_log_scale_check') and self._log_scale_check is not None:
             self._log_scale_check.setVisible(is_image_or_heatmap)
-        # Show/hide the entire color scale group
-        if hasattr(self, 'color_scale_group'):
-            self.color_scale_group.setVisible(is_image_or_heatmap)
+         # Show/hide the entire color scale group
+        if hasattr(self, '_color_scale_group'):
+            self._color_scale_group.setVisible(is_image_or_heatmap)
 
-        # Z offset group (waterfall only)
+         # Z offset group (waterfall only)
         if hasattr(self, '_z_offset_spin') and self._z_offset_spin is not None:
             self._z_offset_spin.setVisible(is_waterfall)
-        if hasattr(self, 'z_offset_group'):
-            self.z_offset_group.setVisible(is_waterfall)
+        if hasattr(self, '_z_offset_group'):
+            self._z_offset_group.setVisible(is_waterfall)
 
-        # Dataset styling (line and waterfall only)
+         # Dataset styling (line and waterfall only)
         is_stylable = self._plot_type in ("line", "waterfall")
         if hasattr(self, '_dataset_combo') and self._dataset_combo is not None:
             self._dataset_combo.setVisible(is_stylable)

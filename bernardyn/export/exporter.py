@@ -68,20 +68,27 @@ class ExportDispatcher:
         import os
         ext = os.path.splitext(filepath)[1].lower()
 
-        # Map extensions to format names
+         # Map output extensions to the registered exporter format names.
+         # ImageExporter reports get_format_name() == 'image' and handles all
+         # raster/vector image formats; ContainerExporter reports 'container'.
         ext_to_format = {
-            '.png': 'png',
-            '.jpg': 'jpeg',
-            '.jpeg': 'jpeg',
-            '.svg': 'svg',
-            '.pdf': 'pdf',
+             '.png': 'image',
+             '.jpg': 'image',
+             '.jpeg': 'image',
+             '.svg': 'image',
+             '.pdf': 'image',
+             '.bmp': 'image',
+             '.tif': 'image',
+             '.tiff': 'image',
+             '.hdf': 'container',
+             '.hdf5': 'container',
         }
 
         format_name = ext_to_format.get(ext)
         if format_name:
             return self._exporters.get(format_name)
 
-        # Try exact match
+         # Fallback: try an exact name match (e.g., 'clipboard', 'container').
         return self._exporters.get(filepath.lower())
 
     def get_available_formats(self) -> List[str]:
@@ -119,13 +126,21 @@ class ExportDispatcher:
 # Global export dispatcher with default exporters registered
 _default_dispatcher = ExportDispatcher()
 
-from bernardyn.export.image_exporter import ImageExporter  # noqa: E402
-from bernardyn.export.clipboard_exporter import ClipboardExporter  # noqa: E402
-from bernardyn.export.container_exporter import ContainerExporter  # noqa: E402
-
-_default_dispatcher.register(ImageExporter())
-_default_dispatcher.register(ClipboardExporter())
+# ContainerExporter only needs h5py/numpy, so it is always available.
+from bernardyn.export.container_exporter import ContainerExporter    # noqa: E402
 _default_dispatcher.register(ContainerExporter())
+
+# ImageExporter and ClipboardExporter depend on PySide6, which is optional for
+# non-interactive use (e.g. headless container export or testing). Import them
+# lazily and register only when available so the rest of the export system
+# (e.g. HDF5 container export) works without a Qt installation.
+try:
+    from bernardyn.export.image_exporter import ImageExporter    # noqa: E402,F401
+    _default_dispatcher.register(ImageExporter())
+    from bernardyn.export.clipboard_exporter import ClipboardExporter    # noqa: E402,F401
+    _default_dispatcher.register(ClipboardExporter())
+except ImportError as exc:
+    logger.warning("Image/Clipboard exporters unavailable (PySide6 not installed?): %s", exc)
 
 
 def get_exporter(format_name: str) -> Optional[Exporter]:

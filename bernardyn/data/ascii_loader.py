@@ -5,6 +5,7 @@ Handles optional header lines and comment lines starting with '#'.
 """
 
 import logging
+import os
 from typing import Any, Dict, List, Optional
 
 import numpy as np
@@ -91,14 +92,14 @@ class AsciiLoader:
                 logger.warning("Could not parse any numeric data from %s", filepath)
                 return {}
 
-            array = np.array(parsed_rows)
+            array = np.array(parsed_rows, dtype=float)
             data.x = array[:, 0]
             data.y = array[:, 1]
 
             if array.shape[1] >= 3:
                 data.y_err = array[:, 2]
 
-            # Try to extract labels from first non-numeric line
+             # Try to extract labels from first non-numeric line
             if lines:
                 for line in lines[:5]:
                     parts = line.split(None, 1) if len(line.split()) > 1 else [line]
@@ -111,11 +112,18 @@ class AsciiLoader:
                             data.y_label = parts[1].split()[1]
                         break
 
+            # Return using the same contract as Hdf5Loader so the GUI renderers
+            # (which iterate 'sas_data_list') can process ASCII data too.
             return {
-                'type': 'ascii_1d',
-                'filepath': filepath,
-                'data': data,
-            }
+                 'type': 'ascii_1d',
+                 'filepath': filepath,
+                 'data': data,
+                 'sas_data_list': [data],
+                 'raw_image': None,
+                 'slit_smear': None,
+                 'desmear': None,
+                 'sas_entries': [os.path.basename(filepath)],
+             }
 
         except Exception as e:
             logger.error("Error loading ASCII file %s: %s", filepath, e)
