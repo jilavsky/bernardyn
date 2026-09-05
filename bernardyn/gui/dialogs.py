@@ -518,7 +518,8 @@ class AnnotationDialog(QDialog):
         self.setSizeGripEnabled(True)
         self.kind = QComboBox(self)
         for value in AnnotationKind:
-            self.kind.addItem(value.value.replace("_", " ").title(), value)
+            # Store the plain string: that is what Qt keeps either way.
+            self.kind.addItem(value.value.replace("_", " ").title(), value.value)
         position = annotation.position if annotation else (default_position or (1.0, 1.0))
         end = annotation.end if annotation and annotation.end else (default_end or (2.0, 2.0))
         self.text = QLineEdit(annotation.text if annotation else "", self)
@@ -539,7 +540,7 @@ class AnnotationDialog(QDialog):
         self.z_order.setRange(-10_000, 10_000)
         self.z_order.setValue(annotation.z_order if annotation else 10)
         if annotation:
-            self.kind.setCurrentIndex(self.kind.findData(annotation.kind))
+            self.kind.setCurrentIndex(self.kind.findData(annotation.kind.value))
         form = QFormLayout()
         form.addRow("Type:", self.kind)
         form.addRow("Text:", self.text)
@@ -577,7 +578,10 @@ class AnnotationDialog(QDialog):
         return spin
 
     def value(self) -> Annotation:
-        kind = self.kind.currentData()
+        # currentData() returns the plain string Qt stored in the item data,
+        # never the AnnotationKind member that was put in -- see the warning
+        # above AnnotationKind in core/models.py.  Convert explicitly.
+        kind = AnnotationKind(self.kind.currentData())
         end = (self.end_x.value(), self.end_y.value()) if kind is AnnotationKind.ARROW else None
         options = {
             "kind": kind,

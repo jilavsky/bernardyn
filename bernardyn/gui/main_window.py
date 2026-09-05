@@ -346,8 +346,16 @@ class MainWindow(QMainWindow):
 
     def _render_page(self, page: GraphPage, graph: GraphDocument) -> None:
         page.render(graph, self.controller.snapshots.get(graph.id, {}))
+        messages: list[str] = []
         if page.fallback_reason:
-            self.statusBar().showMessage(f"OpenGL unavailable; showing 2D fallback: {page.fallback_reason}")
+            messages.append(f"OpenGL unavailable; showing 2D fallback: {page.fallback_reason}")
+        # Curves, annotations and axis ranges are drawn independently.  Report
+        # anything the renderer could not draw: Qt swallows exceptions raised
+        # inside slots, so an unreported failure just looks like missing work.
+        messages.extend(page.render_warnings)
+        if messages:
+            log.warning("; ".join(messages))
+            self.statusBar().showMessage(" | ".join(messages))
 
     def _render_graph(self, graph_id: str) -> None:
         graph = self.controller.workspace.graph(graph_id)

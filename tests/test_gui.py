@@ -6,7 +6,7 @@ import pytest
 from PySide6.QtCore import Qt
 
 from bernardyn.core.models import Annotation, AnnotationKind, Dataset, GraphDocument, PlotSeries
-from bernardyn.gui.dialogs import DataFileSelectorDialog, LocationDialog
+from bernardyn.gui.dialogs import AnnotationDialog, DataFileSelectorDialog, LocationDialog
 from bernardyn.gui.graph_page import GraphPage
 from bernardyn.gui.main_window import MainWindow
 from bernardyn.io.file_browser import files_in_folder, make_file_matcher, sort_paths
@@ -214,7 +214,8 @@ def test_inspector_tabs_and_annotations_default_inside_data_and_render(qapp):
     assert isinstance(page, GraphPage)
     text_items = [item for item in page.renderer.getPlotItem().items if isinstance(item, pg.TextItem)]
     assert len(text_items) == 1
-    assert text_items[0].zValue() == 100_000
+    # Above every curve, and offset by the annotation's own z_order.
+    assert text_items[0].zValue() == 100_010  # base overlay z + default z_order
     window.controller.workspace.dirty = False
     window.close()
 
@@ -253,7 +254,7 @@ def test_2d_update_replaces_recomputed_snapshot_data(qapp):
     widget = Plot2DWidget()
     widget.render(graph, {snapshot.series_id: snapshot})
     replacement = replace(snapshot, y=np.array([30.0, 40.0]))
-    widget.update(graph, {snapshot.series_id: replacement})
+    widget.apply_graph(graph, {snapshot.series_id: replacement})
     np.testing.assert_allclose(widget._curve_items[snapshot.series_id].yData, [30, 40])
     widget.close()
     window.controller.workspace.dirty = False
@@ -336,3 +337,57 @@ def test_opengl_framebuffer_capture_when_context_is_available(qapp, tmp_path):
     renderer.save_image(jpeg, 640)
     assert jpeg.read_bytes().startswith(b"\xff\xd8")
     renderer.close()
+
+
+def test_annotation_dialog_returns_real_enum_kinds(qapp):
+    """Qt hands back a str-based enum from item data as a plain str.
+
+    ``QComboBox.addItem(label, AnnotationKind.TEXT)`` stores a QVariant, and
+    ``currentData()`` returns ``"text"`` -- so every ``kind is
+    AnnotationKind.TEXT`` test downstream silently failed and the renderer
+    drew nothing at all, while the annotation sat in the document looking
+    perfectly correct.
+    """
+    for kind in AnnotationKind:
+        dialog = AnnotationDialog(default_position=(1.0, 2.0), default_end=(2.0, 3.0))
+        dialog.kind.setCurrentIndex(dialog.kind.findData(kind.value))
+        annotation = dialog.value()
+        assert isinstance(annotation.kind, AnnotationKind)
+        assert annotation.kind is kind
+        dialog.close()
+
+
+def test_every_annotation_kind_reaches_the_canvas(qapp):
+    """Each kind must produce scene items -- no branch may fall through.
+
+    The kind is deliberately passed as the bare string Qt yields from combo
+    box item data, not as an enum member: that is the shape the Add button
+    actually produced, and the renderer used to draw nothing for it.
+    """
+    dataset = Dataset(q=[1.0, 2.0, 3.0], intensity=[10.0, 20.0, 30.0])
+    for kind in AnnotationKind:
+        window = MainWindow()
+        window.controller.add_dataset(dataset)
+        graph = window.controller.workspace.graphs[0]
+        graph = replace(
+            graph,
+            x_axis=replace(graph.x_axis, log=False),
+            y_axis=replace(graph.y_axis, log=False),
+            annotations=(
+                Annotation(str(kind.value), (2.0, 20.0), end=(2.5, 25.0), text="sample"),
+            ),
+        )
+        window.controller.update_graph(graph, recompute=True)
+        window._render_graph(graph.id)
+        page = window.tabs.currentWidget()
+        assert isinstance(page, GraphPage)
+        drawn = [
+            item
+            for item in page.renderer.getPlotItem().items
+            if not isinstance(item, pg.PlotDataItem)
+        ]
+        assert drawn, f"{kind} produced no scene item"
+        assert page.render_warnings == []
+        assert graph.annotations[0].kind is kind
+        window.controller.workspace.dirty = False
+        window.close()

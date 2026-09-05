@@ -38,7 +38,7 @@ def test_twenty_large_curves_initial_render_and_style_update_targets(qapp):
         ),
     )
     started = time.perf_counter()
-    widget.update(changed, snapshots)
+    widget.apply_graph(changed, snapshots)
     qapp.processEvents()
     style_elapsed = time.perf_counter() - started
     widget.close()

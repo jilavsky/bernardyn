@@ -30,6 +30,11 @@ dependencies = [
     "h5py>=3.0",
     "PyOpenGL>=3.1.7",
     "pyirena[qtplot]>=1.1.0b12,<2",
+    # Imported directly by the renderers, so pinned here rather than left to
+    # PyIrena.  PySide6 6.9.1 is excluded: QGraphicsItem.setParentItem fails
+    # silently in that release and pyqtgraph plots come out empty.
+    "pyqtgraph>=0.13.7",
+    "PySide6>=6.8,!=6.9.1",
 ]
 
 [project.optional-dependencies]

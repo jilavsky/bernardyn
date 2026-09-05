@@ -2,4 +2,7 @@
 numpy>=2
 h5py>=3
 PyOpenGL>=3.1.7
+pyqtgraph>=0.13.7
+# PySide6 6.9.1 breaks QGraphicsItem.setParentItem; plots render empty.
+PySide6>=6.8,!=6.9.1
 pyirena[qtplot]>=1.1.0b12,<2

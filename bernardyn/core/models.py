@@ -55,6 +55,30 @@ def json_value(value: Any) -> Any:
     return str(value)
 
 
+# WARNING -- these are ``str``-based enums, and that has one sharp edge.
+#
+# Qt stores widget item data as a QVariant, and a str subclass is convertible
+# to QString, so Qt converts it.  Put a member in and a plain str comes back:
+#
+#     combo.addItem("Text", AnnotationKind.TEXT)
+#     combo.currentData()          # -> 'text', a str, NOT AnnotationKind.TEXT
+#
+# Equality still holds ('text' == AnnotationKind.TEXT), so this hides well.
+# Identity does not, and `is` against an enum member is the natural thing to
+# write.  That combination silently broke every annotation added through the
+# Add button: the renderer's `kind is AnnotationKind.TEXT` chain matched no
+# branch, drew nothing, and raised nothing, while the annotation sat in the
+# document looking perfectly correct.  A saved-and-reloaded graph worked,
+# because from_dict() reconstructs the member -- which made it look like a
+# rendering bug rather than a data one.
+#
+# Rules, so this cannot come back:
+#   * Every dataclass below coerces its own kind field in __post_init__.
+#     Construct these types with anything str-like and get a real member back.
+#   * Anything reading kind out of a Qt widget converts explicitly:
+#     AnnotationKind(combo.currentData()), never the bare value.
+#   * Prefer storing plain `.value` strings in Qt item data, since that is
+#     what Qt keeps regardless.
 class DatasetKind(str, Enum):
     CURVE_1D = "curve_1d"
     IMAGE_2D = "image_2d"
@@ -84,6 +108,8 @@ class Dataset:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "id", _valid_id(self.id))
+        # See the warning above DatasetKind: coerce so `is` comparisons hold.
+        object.__setattr__(self, "kind", DatasetKind(self.kind))
         q = _array(self.q, name="q")
         if not len(q):
             raise ValueError("dataset arrays cannot be empty")
@@ -204,6 +230,10 @@ class Annotation:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "id", _valid_id(self.id))
+        # See the warning above AnnotationKind.  Coercing here, at the single
+        # boundary every annotation passes through, is what lets the renderer
+        # rely on `kind` being a real member and compare it with `is`.
+        object.__setattr__(self, "kind", AnnotationKind(self.kind))
         if self.kind is AnnotationKind.ARROW and self.end is None:
             raise ValueError("arrow annotations require an end point")
 

@@ -37,6 +37,7 @@ class GraphPage(QWidget):
         self.renderer = None
         self._renderer_id = ""
         self.fallback_reason: str | None = None
+        self.render_warnings: list[str] = []
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(0, 0, 0, 0)
         self._build_renderer(graph)
@@ -70,8 +71,11 @@ class GraphPage(QWidget):
                 for index, view in enumerate(graph.series)
                 if (snapshot := snapshots.get(view.id)) is not None
             }
-        update = getattr(self.renderer, "update", None) or self.renderer.render
-        update(graph, rendered_snapshots)
+        # ``apply_graph``, never ``update``: QWidget.update is Qt's repaint
+        # slot and every widget has one, so getattr would silently find it.
+        refresh = getattr(self.renderer, "apply_graph", None) or self.renderer.render
+        refresh(graph, rendered_snapshots)
+        self.render_warnings = list(getattr(self.renderer, "render_warnings", []))
 
     def capture_preview(self) -> bytes:
         capture = getattr(self.renderer, "capture_snapshot", None)

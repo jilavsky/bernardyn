@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import logging
 import math
 from dataclasses import replace
 from pathlib import Path
@@ -16,7 +17,13 @@ from PySide6.QtGui import QColor, QFont, QPainter
 from PySide6.QtSvg import QSvgGenerator
 from PySide6.QtWidgets import QApplication
 
-from bernardyn.core.models import AnnotationKind, GraphDocument, PlotSeries, SeriesStyle
+from bernardyn.core.models import Annotation, AnnotationKind, GraphDocument, PlotSeries, SeriesStyle
+
+log = logging.getLogger(__name__)
+
+# Annotations sit above every curve, error bar and legend.  The document's
+# own ``z_order`` only orders annotations against each other.
+ANNOTATION_BASE_Z = 100_000
 
 LINE_STYLES = {
     "none": Qt.PenStyle.NoPen,
@@ -93,10 +100,16 @@ class Plot2DWidget(pg.PlotWidget):
         self._legend = None
         self._curve_items: dict[str, pg.PlotDataItem] = {}
         self._error_items: dict[str, pg.ErrorBarItem] = {}
+        # Problems met during the last render.  Curves, annotations and axis
+        # ranges are drawn independently, so a failure in one must be
+        # reported rather than silently truncating the rest of the plot.
+        self.render_warnings: list[str] = []
+        self._annotation_items: list[tuple[Annotation, object]] = []
 
     def render(self, graph: GraphDocument, snapshots: Mapping[str, PlotSeries]) -> None:
         self._graph = graph
         self._snapshots = dict(snapshots)
+        self.render_warnings = []
         plot = self.getPlotItem()
         # PlotDataItem clipping/downsampling is view-dependent. Leaving
         # PyQtGraph's persistent auto-range enabled makes the view rescale
@@ -173,31 +186,66 @@ class Plot2DWidget(pg.PlotWidget):
             if not view.visible or view.id not in snapshots:
                 continue
             snapshot = snapshots[view.id]
-            style = view.style
-            symbol = None if style.symbol in (None, "none") else style.symbol
-            item = pg.PlotDataItem(
-                snapshot.x,
-                snapshot.y,
-                name=snapshot.label,
-                pen=_pen(style),
-                symbol=symbol,
-                symbolSize=style.symbol_size,
-                symbolPen=pg.mkPen(_color(style.color, style.opacity)),
-                symbolBrush=pg.mkBrush(_color(style.color, style.opacity)),
-                connect="finite",
-            )
-            plot.addItem(item)
-            self._curve_items[view.id] = item
-            item.setDownsampling(auto=True, method="peak")
-            item.setClipToView(True)
-            if style.show_error_bars and (snapshot.dx is not None or snapshot.dy is not None):
-                error = self._add_error_bars(graph, snapshot, style)
-                if error is not None:
-                    self._error_items[view.id] = error
-        self._add_annotations(graph)
-        self._apply_ranges(graph)
+            try:
+                self._add_series(plot, graph, view.id, snapshot, view.style)
+            except Exception as exc:  # pragma: no cover - depends on Qt/PyQtGraph
+                # A curve that cannot be drawn must not take the annotations
+                # and the axis ranges down with it: those are drawn after this
+                # loop, and Qt swallows exceptions raised inside slots.
+                log.exception("Could not draw series %r", snapshot.label)
+                self.render_warnings.append(f"Could not draw {snapshot.label!r}: {exc}")
+        try:
+            self._add_annotations(graph)
+        except Exception as exc:  # pragma: no cover - depends on Qt/PyQtGraph
+            log.exception("Could not draw annotations")
+            self.render_warnings.append(f"Could not draw annotations: {exc}")
+        try:
+            self._apply_ranges(graph)
+        except Exception as exc:  # pragma: no cover - depends on Qt/PyQtGraph
+            log.exception("Could not apply axis ranges")
+            self.render_warnings.append(f"Could not apply axis ranges: {exc}")
+        # Only meaningful once the axis ranges are final.
+        try:
+            self._review_annotations(graph)
+        except Exception:  # pragma: no cover - diagnostics must never break a plot
+            log.exception("Could not review annotation placement")
 
-    def update(self, graph: GraphDocument, snapshots: Mapping[str, PlotSeries]) -> None:
+    def _add_series(
+        self,
+        plot: pg.PlotItem,
+        graph: GraphDocument,
+        series_id: str,
+        snapshot: PlotSeries,
+        style: SeriesStyle,
+    ) -> None:
+        symbol = None if style.symbol in (None, "none") else style.symbol
+        item = pg.PlotDataItem(
+            snapshot.x,
+            snapshot.y,
+            name=snapshot.label,
+            pen=_pen(style),
+            symbol=symbol,
+            symbolSize=style.symbol_size,
+            symbolPen=pg.mkPen(_color(style.color, style.opacity)),
+            symbolBrush=pg.mkBrush(_color(style.color, style.opacity)),
+            connect="finite",
+        )
+        plot.addItem(item)
+        self._curve_items[series_id] = item
+        item.setDownsampling(auto=True, method="peak")
+        item.setClipToView(True)
+        if style.show_error_bars and (snapshot.dx is not None or snapshot.dy is not None):
+            error = self._add_error_bars(graph, snapshot, style)
+            if error is not None:
+                self._error_items[series_id] = error
+
+    def apply_graph(self, graph: GraphDocument, snapshots: Mapping[str, PlotSeries]) -> None:
+        """Refresh the plot for ``graph``, restyling in place where possible.
+
+        Deliberately not named ``update``: that is Qt's own repaint slot on
+        QWidget, and overriding it with a different signature breaks every
+        caller that schedules a repaint the normal way.
+        """
         if not self._can_update_style_only(graph, snapshots):
             self.render(graph, snapshots)
             return
@@ -280,59 +328,172 @@ class Plot2DWidget(pg.PlotWidget):
 
     def _add_annotations(self, graph: GraphDocument) -> None:
         plot = self.getPlotItem()
+        self._annotation_items = []
+        log.debug("drawing %d annotation(s)", len(graph.annotations))
+        for annotation in graph.annotations:
+            try:
+                self._add_annotation(plot, graph, annotation)
+            except Exception as exc:  # pragma: no cover - depends on Qt/PyQtGraph
+                log.exception("Could not draw annotation %r", annotation.id)
+                label = annotation.text or annotation.kind.value
+                self.render_warnings.append(f"Could not draw annotation {label!r}: {exc}")
+
+    def _add_annotation(
+        self, plot: pg.PlotItem, graph: GraphDocument, annotation: Annotation
+    ) -> None:
         # Annotations are plot-view overlays, not canvas decorations.  Keep
         # them out of automatic range calculations and above every curve,
-        # error bar, legend, and the plot background.
-        overlay_z = 100_000
+        # error bar, legend, and the plot background.  The document's own
+        # z_order only orders annotations against each other.
+        overlay_z = ANNOTATION_BASE_Z + annotation.z_order
 
         def add_overlay(item) -> None:
             item.setZValue(overlay_z)
             plot.addItem(item, ignoreBounds=True)
+            self._annotation_items.append((annotation, item))
 
-        for annotation in graph.annotations:
-            color = _color(annotation.color)
-            x, y = annotation.position
-            x = math.log10(x) if graph.x_axis.log and x > 0 else x
-            y = math.log10(y) if graph.y_axis.log and y > 0 else y
-            if annotation.kind is AnnotationKind.TEXT:
-                item = pg.TextItem(annotation.text, color=color, anchor=(0, 1))
-                item.setFont(QFont(graph.typography.family, annotation.font_size))
-                item.setPos(x, y)
-                add_overlay(item)
-            elif annotation.kind is AnnotationKind.HLINE:
-                add_overlay(
-                    pg.InfiniteLine(
-                        pos=y,
-                        angle=0,
-                        pen=pg.mkPen(color, width=annotation.line_width),
-                        movable=False,
-                    )
+        color = _color(annotation.color)
+        x, y = self._plot_position(graph, annotation.position)
+        if annotation.kind is AnnotationKind.TEXT:
+            item = pg.TextItem(annotation.text, color=color, anchor=(0, 1))
+            item.setFont(QFont(graph.typography.family, annotation.font_size))
+            item.setPos(x, y)
+            add_overlay(item)
+        elif annotation.kind is AnnotationKind.HLINE:
+            add_overlay(
+                pg.InfiniteLine(
+                    pos=y,
+                    angle=0,
+                    pen=pg.mkPen(color, width=annotation.line_width),
+                    movable=False,
                 )
-            elif annotation.kind is AnnotationKind.VLINE:
-                add_overlay(
-                    pg.InfiniteLine(
-                        pos=x,
-                        angle=90,
-                        pen=pg.mkPen(color, width=annotation.line_width),
-                        movable=False,
-                    )
+            )
+        elif annotation.kind is AnnotationKind.VLINE:
+            add_overlay(
+                pg.InfiniteLine(
+                    pos=x,
+                    angle=90,
+                    pen=pg.mkPen(color, width=annotation.line_width),
+                    movable=False,
                 )
-            elif annotation.kind is AnnotationKind.ARROW and annotation.end is not None:
-                end_x, end_y = annotation.end
-                end_x = math.log10(end_x) if graph.x_axis.log and end_x > 0 else end_x
-                end_y = math.log10(end_y) if graph.y_axis.log and end_y > 0 else end_y
-                add_overlay(
-                    pg.PlotCurveItem(
-                        [x, end_x],
-                        [y, end_y],
-                        pen=pg.mkPen(color, width=annotation.line_width),
-                    )
+            )
+        elif annotation.kind is AnnotationKind.ARROW:
+            if annotation.end is None:  # pragma: no cover - blocked by the model
+                raise ValueError("arrow annotation has no end point")
+            end_x, end_y = self._plot_position(graph, annotation.end)
+            add_overlay(
+                pg.PlotCurveItem(
+                    [x, end_x],
+                    [y, end_y],
+                    pen=pg.mkPen(color, width=annotation.line_width),
                 )
-                angle = math.degrees(math.atan2(end_y - y, end_x - x))
-                arrow = pg.ArrowItem(
-                    pos=(end_x, end_y), angle=180 - angle, brush=color, pen=color
+            )
+            angle = math.degrees(math.atan2(end_y - y, end_x - x))
+            arrow = pg.ArrowItem(
+                pos=(end_x, end_y), angle=180 - angle, brush=color, pen=color
+            )
+            add_overlay(arrow)
+        else:
+            # No branch matched, so nothing was drawn.  Never let that pass
+            # quietly: an annotation that is in the document but not on the
+            # canvas looks identical to a rendering bug from every side.
+            message = (
+                f"Annotation kind {annotation.kind!r} was not drawn "
+                f"(no renderer branch matched)"
+            )
+            log.warning(message)
+            self.render_warnings.append(message)
+
+    @staticmethod
+    def _plot_position(
+        graph: GraphDocument, position: tuple[float, float]
+    ) -> tuple[float, float]:
+        """Data coordinates in the plot's own units (log10 on log axes)."""
+        x, y = position
+        x = math.log10(x) if graph.x_axis.log and x > 0 else x
+        y = math.log10(y) if graph.y_axis.log and y > 0 else y
+        return x, y
+
+    def _review_annotations(self, graph: GraphDocument) -> None:
+        """Report annotations the view will not actually show.
+
+        Annotations are added with ``ignoreBounds=True`` so they never stretch
+        the axes, and a ViewBox clips its children.  An annotation placed
+        outside the plotted range is therefore built correctly, added to the
+        scene correctly, and still invisible -- which is the single most
+        confusing way for this to fail, because every check short of looking
+        at the pixels says the annotation is present.
+        """
+        if not self._annotation_items:
+            return
+        (x_low, x_high), (y_low, y_high) = self.getPlotItem().vb.viewRange()
+        log.debug(
+            "annotation review: view x=[%.6g, %.6g] y=[%.6g, %.6g] (plot units%s)",
+            x_low,
+            x_high,
+            y_low,
+            y_high,
+            ", log10" if graph.x_axis.log or graph.y_axis.log else "",
+        )
+        for annotation, item in self._annotation_items:
+            if not isinstance(item, (pg.TextItem, pg.InfiniteLine, pg.PlotCurveItem)):
+                continue  # the arrow head shares its annotation with the shaft
+            x, y = self._plot_position(graph, annotation.position)
+            label = annotation.text or annotation.kind.value
+            # A horizontal rule spans every x, a vertical rule every y.
+            needs_x = annotation.kind is not AnnotationKind.HLINE
+            needs_y = annotation.kind is not AnnotationKind.VLINE
+            outside = []
+            if needs_x and not x_low <= x <= x_high:
+                outside.append(f"x={annotation.position[0]:g}")
+            if needs_y and not y_low <= y <= y_high:
+                outside.append(f"y={annotation.position[1]:g}")
+            log.debug(
+                "annotation %s kind=%s data=%s plot=(%.6g, %.6g) outside=%s",
+                annotation.id,
+                annotation.kind.value,
+                annotation.position,
+                x,
+                y,
+                outside or "no",
+            )
+            if outside:
+                message = (
+                    f"Annotation {label!r} is outside the plotted range "
+                    f"({', '.join(outside)}); it is drawn but nothing is visible"
                 )
-                add_overlay(arrow)
+                log.warning(message)
+                self.render_warnings.append(message)
+                continue
+            if isinstance(item, pg.TextItem):
+                self._fit_text_inside(item, label, x_high, y_high)
+            log.debug("annotation %r drawn at (%.6g, %.6g)", label, x, y)
+
+    def _fit_text_inside(
+        self, item: pg.TextItem, label: str, x_high: float, y_high: float
+    ) -> None:
+        """Flip a label's anchor so the ViewBox does not clip it away.
+
+        The default anchor draws text up and to the right of its point, so a
+        label placed at the right or top edge of the data is clipped to
+        nothing even though its anchor point is inside the plot.
+        """
+        bounds = item.mapRectToView(item.boundingRect())
+        # View coordinates run upwards, so compare against both edges rather
+        # than assuming which of top/bottom is numerically larger.
+        text_right = max(bounds.left(), bounds.right())
+        text_top = max(bounds.top(), bounds.bottom())
+        anchor_x = 1.0 if text_right > x_high else 0.0
+        anchor_y = 0.0 if text_top > y_high else 1.0
+        if (anchor_x, anchor_y) == (0.0, 1.0):
+            return
+        item.setAnchor(pg.Point(anchor_x, anchor_y))
+        log.debug(
+            "annotation %r re-anchored to (%g, %g): its text ran past the plot edge",
+            label,
+            anchor_x,
+            anchor_y,
+        )
 
     def _apply_ranges(self, graph: GraphDocument) -> None:
         plot = self.getPlotItem()

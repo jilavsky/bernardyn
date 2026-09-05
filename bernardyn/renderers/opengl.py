@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import math
 from pathlib import Path
 from typing import Mapping
@@ -12,6 +13,8 @@ from PySide6.QtGui import QImage, QMatrix4x4
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
 from bernardyn.core.models import GraphDocument, PlotSeries
+
+log = logging.getLogger(__name__)
 
 
 def opengl_available() -> tuple[bool, str]:
@@ -64,10 +67,22 @@ class OpenGLPlotWidget(QWidget):
         self._graph: GraphDocument | None = None
         self._snapshots: dict[str, PlotSeries] = {}
         self._renderer_data: dict[str, np.ndarray] = {}
+        self.render_warnings: list[str] = []
 
     def render(self, graph: GraphDocument, snapshots: Mapping[str, PlotSeries]) -> None:
         self._graph = graph
         self._snapshots = dict(snapshots)
+        # The 3D renderers draw no annotations.  Say so rather than dropping
+        # them without a word: a missing label otherwise looks like a bug in
+        # the annotation itself.
+        self.render_warnings = (
+            [
+                f"{len(graph.annotations)} annotation(s) are not drawn by the "
+                f"3D renderer; switch the graph to the 2D plot to see them"
+            ]
+            if graph.annotations
+            else []
+        )
         for item in self._items:
             try:
                 self.view.removeItem(item)
@@ -85,9 +100,17 @@ class OpenGLPlotWidget(QWidget):
             elevation=float(camera.get("elevation", 25.0)),
             azimuth=float(camera.get("azimuth", -45.0)),
         )
+        # These are plain strings from a combo box, never enum members, so
+        # they are compared with == and are not exposed to the str-enum trap
+        # documented above AnnotationKind in core/models.py.  An unrecognised
+        # value still silently drew a waterfall, so report it instead.
         mode = graph.renderer_config.get(
             "mode", "surface" if graph.renderer_id == "opengl_surface" else "waterfall"
         )
+        if mode not in ("surface", "waterfall"):
+            message = f"Unknown 3D mode {mode!r}; drawing a waterfall instead"
+            log.warning(message)
+            self.render_warnings.append(message)
         visible = [
             (view, snapshots[view.id])
             for view in graph.series
@@ -100,7 +123,8 @@ class OpenGLPlotWidget(QWidget):
         if bool(graph.renderer_config.get("show_grid", True)):
             self._add_axes(len(visible))
 
-    update = render
+    # Deliberately not named ``update``: that is Qt's own repaint slot.
+    apply_graph = render
 
     def _display_coordinates(
         self, graph: GraphDocument, snapshot: PlotSeries
