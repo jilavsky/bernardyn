@@ -24,10 +24,12 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
+    QWidget,
 )
 
 from bernardyn.core.models import Annotation, AnnotationKind
@@ -513,6 +515,7 @@ class AnnotationDialog(QDialog):
         super().__init__(parent)
         self.annotation = annotation
         self.setWindowTitle("Graph annotation")
+        self.setSizeGripEnabled(True)
         self.kind = QComboBox(self)
         for value in AnnotationKind:
             self.kind.addItem(value.value.replace("_", " ").title(), value)
@@ -554,10 +557,17 @@ class AnnotationDialog(QDialog):
         )
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
+        form_widget = QWidget(self)
+        form_widget.setLayout(form)
+        scroll = QScrollArea(self)
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(form_widget)
+        scroll.setMaximumHeight(300)
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel("Coordinates are in the plotted data units; defaults are placed within the data."))
-        layout.addLayout(form)
+        layout.addWidget(scroll, 1)
         layout.addWidget(buttons)
+        self.resize(460, 420)
 
     def _spin(self, value: float) -> QDoubleSpinBox:
         spin = QDoubleSpinBox(self)

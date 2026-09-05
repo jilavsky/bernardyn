@@ -178,26 +178,19 @@ class InspectorWidget(QScrollArea):
         form.addRow("Y label:", self.y_label)
         form.addRow("Axes:", log_row)
         form.addRow("Ranges:", auto_row)
-        form.addRow("X minimum:", self.axis_x_min)
-        form.addRow("X maximum:", self.axis_x_max)
-        form.addRow("Y minimum:", self.axis_y_min)
-        form.addRow("Y maximum:", self.axis_y_max)
+        form.addRow("X range:", self._paired_row("Min", self.axis_x_min, "Max", self.axis_x_max, group))
+        form.addRow("Y range:", self._paired_row("Min", self.axis_y_min, "Max", self.axis_y_max, group))
         form.addRow("Grid:", grid_row)
-        form.addRow("Axis thickness:", self.axis_thickness)
-        form.addRow("Axis color:", self.axis_color)
+        form.addRow("Axes:", self._paired_row("Width", self.axis_thickness, "Color", self.axis_color, group))
         form.addRow("Legend:", self.legend)
         form.addRow("Legend position:", self.legend_position)
         form.addRow("Legend frame:", self.legend_frame)
         form.addRow("Legend columns:", self.legend_columns)
         form.addRow("Font family:", self.font_family)
-        form.addRow("Title font size:", self.title_font_size)
-        form.addRow("Axis-label font size:", self.font_size)
-        form.addRow("Tick font size:", self.tick_font_size)
-        form.addRow("Legend font size:", self.legend_font_size)
-        form.addRow("Canvas width (px):", self.canvas_width)
-        form.addRow("Canvas height (px):", self.canvas_height)
-        form.addRow("Output width (in):", self.width_in)
-        form.addRow("Output height (in):", self.height_in)
+        form.addRow("Font sizes:", self._paired_row("Title", self.title_font_size, "Axis", self.font_size, group))
+        form.addRow("", self._paired_row("Ticks", self.tick_font_size, "Legend", self.legend_font_size, group))
+        form.addRow("Canvas (px):", self._paired_row("Width", self.canvas_width, "Height", self.canvas_height, group))
+        form.addRow("Output (in):", self._paired_row("Width", self.width_in, "Height", self.height_in, group))
         form.addRow("Output DPI:", self.dpi)
         form.addRow("Background:", self.background)
         return group
@@ -250,6 +243,7 @@ class InspectorWidget(QScrollArea):
         group = QGroupBox("Datasets in graph", self)
         layout = QVBoxLayout(group)
         self.series_list = QListWidget(group)
+        self.series_list.setMaximumHeight(240)
         self.series_list.currentItemChanged.connect(self._series_selected)
         self.series_list.itemChanged.connect(self._series_visibility)
         layout.addWidget(self.series_list)
@@ -306,14 +300,11 @@ class InspectorWidget(QScrollArea):
         self.q_max.editingFinished.connect(self._edit_series_transform)
         form.addRow("Legend label:", self.series_label)
         form.addRow("Color:", self.color)
-        form.addRow("Line:", self.line_style)
-        form.addRow("Line width:", self.line_width)
-        form.addRow("Symbol:", self.symbol)
-        form.addRow("Symbol size:", self.symbol_size)
+        form.addRow("Line:", self._paired_row("Style", self.line_style, "Width", self.line_width, group))
+        form.addRow("Symbol:", self._paired_row("Type", self.symbol, "Size", self.symbol_size, group))
         form.addRow("Opacity:", self.opacity)
-        form.addRow("Error bars:", self.error_bars)
-        form.addRow("Error color:", self.error_color)
-        form.addRow("Error width:", self.error_width)
+        form.addRow("Errors:", self._paired_row("Show", self.error_bars, "Color", self.error_color, group))
+        form.addRow("", self._paired_row("Width", self.error_width, "", None, group))
         form.addRow("Multiplier:", self.multiplier)
         form.addRow("Offset:", self.offset)
         form.addRow("Q minimum:", self.q_min)
@@ -325,6 +316,28 @@ class InspectorWidget(QScrollArea):
             self.error_color, self.error_width, self.q_min, self.q_max,
         ]
         return group
+
+    @staticmethod
+    def _paired_row(
+        first_label: str,
+        first: QWidget,
+        second_label: str,
+        second: QWidget | None,
+        parent: QWidget,
+    ) -> QWidget:
+        """A compact row for two small, related inspector controls."""
+        row = QWidget(parent)
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(5)
+        if first_label:
+            layout.addWidget(QLabel(f"{first_label}:", row))
+        layout.addWidget(first, 1)
+        if second is not None:
+            if second_label:
+                layout.addWidget(QLabel(f"{second_label}:", row))
+            layout.addWidget(second, 1)
+        return row
 
     def _build_annotation_group(self) -> QGroupBox:
         group = QGroupBox("Annotations", self)

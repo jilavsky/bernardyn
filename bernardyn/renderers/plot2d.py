@@ -46,7 +46,10 @@ class PublicationAxisItem(pg.AxisItem):
             if displayed == 0:
                 labels.append("0")
             elif 1e-4 <= magnitude <= 1e3:
-                labels.append(f"{displayed:.{places}f}".rstrip("0").rstrip("."))
+                text = f"{displayed:.{places}f}"
+                # Do not remove significant zeroes from integer ticks:
+                # 100 must not become 1.
+                labels.append(text.rstrip("0").rstrip(".") if "." in text else text)
             else:
                 labels.append(f"{displayed:.3e}")
         return labels

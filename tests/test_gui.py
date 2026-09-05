@@ -187,6 +187,7 @@ def test_publication_axis_uses_direct_numbers_before_scientific_notation(qapp):
         "1000",
         "1.000e+04",
     ]
+    assert axis.tickStrings([10, 100, 1000], 1.0, 10) == ["10", "100", "1000"]
     assert not axis.autoSIPrefix
 
 
