@@ -1,1 +1,23 @@
-"\"\"\"Bernardyn - Scientific data analysis and visualization tool.\"\"\"\n\n__version__ = \"0.1.0\"\n__author__ = \"Bernardyn Contributors\"\n"
+"""Bernardyn scientific plotting workbench."""
+
+from bernardyn.core.models import (
+    Annotation,
+    Dataset,
+    DatasetKind,
+    GraphDocument,
+    PlotSeries,
+    SeriesView,
+    Workspace,
+)
+
+__all__ = [
+    "Annotation",
+    "Dataset",
+    "DatasetKind",
+    "GraphDocument",
+    "PlotSeries",
+    "SeriesView",
+    "Workspace",
+]
+
+__version__ = "1.0.0b1"

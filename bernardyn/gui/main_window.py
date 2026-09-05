@@ -1,1121 +1,789 @@
-"""Main window for Bernardyn.
+"""Controller-driven Bernardyn desktop workbench."""
 
-Wires together the data panel (left), plot widget (center), and
-controls panel (right) into a functional GUI. Handles the data
-loading pipeline: file selection -> load -> plot display.
+from __future__ import annotations
 
-Supports multi-graph layouts, per-dataset styling, grid/legend
-toggles, and slit-smeared/desmeared data display.
-"""
-
+import base64
+import json
 import logging
-import os
-from typing import Any, Dict, List, Optional
+from dataclasses import replace
+from pathlib import Path
 
-import numpy as np
-import pyqtgraph as pg
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction
+from PySide6.QtCore import QObject, QRunnable, QStandardPaths, Qt, QThreadPool, Signal
+from PySide6.QtGui import QAction, QCloseEvent, QKeySequence, QUndoCommand, QUndoStack
 from PySide6.QtWidgets import (
-    QComboBox,
+    QAbstractItemView,
     QDockWidget,
+    QFileDialog,
+    QInputDialog,
+    QListWidget,
+    QListWidgetItem,
     QMainWindow,
-    QMenu,
     QMessageBox,
-    QSplitter,
+    QPushButton,
     QTabWidget,
-    QMenuBar,
+    QVBoxLayout,
+    QWidget,
 )
 
-from bernardyn.data.loader import get_default_dispatcher
-from bernardyn.gui.controls_panel import ControlsPanel
-from bernardyn.gui.data_panel import DataPanel
-from bernardyn.gui.plot_widget import PlotWidget
-from bernardyn.plot.plot_style import map_symbol_to_pyqtgraph, map_linestyle_to_pyqtgraph
-from bernardyn.template.manager import TemplateManager, get_default_manager
-from bernardyn.utils.state_manager import StateManager
+from bernardyn.core.controller import PALETTE, ApplicationController
+from bernardyn.core.models import GraphDocument
+from bernardyn.gui.dialogs import (
+    GraphSelectionDialog,
+    HDFMappingDialog,
+    LocationDialog,
+    SeriesTransformParameterDialog,
+)
+from bernardyn.gui.graph_page import GraphPage, PreviewPage
+from bernardyn.gui.inspector import InspectorWidget
+from bernardyn.io.container import load_package
+from bernardyn.io.igor import export_datasets_to_h5xp
+from bernardyn.renderers import builtin_renderers
+from bernardyn.template.graph_templates import apply_template, load_template, save_template
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
+
+
+def _metadata_number(value, key: str) -> float | None:
+    if not isinstance(value, dict):
+        return None
+    for name, item in value.items():
+        if str(name).lower() == key.lower():
+            try:
+                return float(item)
+            except (TypeError, ValueError):
+                pass
+    for item in value.values():
+        found = _metadata_number(item, key)
+        if found is not None:
+            return found
+    return None
+
+
+class WorkerSignals(QObject):
+    loaded = Signal(object, str)
+    failed = Signal(str)
+    finished = Signal(object)
+
+
+class SourceLoadWorker(QRunnable):
+    def __init__(self, controller, location, graph_id, q_unit, error_fraction) -> None:
+        super().__init__()
+        self.controller = controller
+        self.location = location
+        self.graph_id = graph_id
+        self.q_unit = q_unit
+        self.error_fraction = error_fraction
+        self.signals = WorkerSignals()
+        self.cancelled = False
+
+    def run(self) -> None:
+        try:
+            if self.cancelled:
+                return
+            record = self.controller.sources.load_location(
+                self.location,
+                q_unit=self.q_unit,
+                error_fraction=self.error_fraction,
+            )
+            if not self.cancelled:
+                self.signals.loaded.emit(record, self.graph_id)
+        except Exception as exc:
+            self.signals.failed.emit(f"{self.location.display_name}: {exc}")
+        finally:
+            self.signals.finished.emit(self)
+
+
+class GraphEditCommand(QUndoCommand):
+    def __init__(self, window, before: GraphDocument, after: GraphDocument, recompute: bool, text: str):
+        super().__init__(text)
+        self.window = window
+        self.before = before
+        self.after = after
+        self.recompute = recompute
+
+    def redo(self) -> None:
+        self.window._commit_graph(self.after, self.recompute)
+
+    def undo(self) -> None:
+        self.window._commit_graph(self.before, self.recompute)
 
 
 class MainWindow(QMainWindow):
-    """Main application window for Bernardyn.
-
-    Layout:
-      - Menu bar with File, Graph, and Template menus
-      - Left dock: DataPanel (file browser, listbox, sort/filter)
-      - Center: QTabWidget of PlotWidgets (multi-graph support)
-      - Right dock: ControlsPanel (plot type, scales, ranges, styles, templates)
-
-    The window wires signals between panels to create a complete
-    data loading and plotting pipeline.
-    """
-
-    def __init__(self, parent: Optional[Any] = None):
+    def __init__(self, parent=None) -> None:
         super().__init__(parent)
-
         self.setWindowTitle("Bernardyn")
-        self.resize(1400, 900)
+        self.resize(1500, 900)
+        self.controller = ApplicationController()
+        self.renderers = builtin_renderers()
+        self.thread_pool = QThreadPool.globalInstance()
+        self._workers: set[SourceLoadWorker] = set()
+        self.undo_stack = QUndoStack(self)
+        self.tabs = QTabWidget(self)
+        self.tabs.setTabsClosable(True)
+        self.tabs.currentChanged.connect(self._active_tab_changed)
+        self.tabs.tabCloseRequested.connect(self._close_tab)
+        self.setCentralWidget(self.tabs)
+        self.dataset_list = QListWidget(self)
+        self.dataset_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.dataset_list.itemDoubleClicked.connect(lambda _: self._add_existing_dataset())
+        self.inspector = InspectorWidget(self.controller.transforms, self)
+        self.inspector.graphChanged.connect(self._queue_graph_change)
+        self.inspector.transformRequested.connect(self._set_transform)
+        self._build_docks()
+        self._build_actions()
+        self._build_menus()
+        self.statusBar().showMessage("Ready")
+        self._rebuild_tabs()
 
-        # Data loader dispatcher
-        self._loader = get_default_dispatcher()
+    def _build_docks(self) -> None:
+        data_dock = QDockWidget("Data catalog", self)
+        data_widget = QWidget(data_dock)
+        layout = QVBoxLayout(data_widget)
+        open_button = QPushButton("Open data…", data_widget)
+        open_button.clicked.connect(self._open_data)
+        add_button = QPushButton("Add selected to graph", data_widget)
+        add_button.clicked.connect(self._add_existing_dataset)
+        remove_button = QPushButton("Remove selected", data_widget)
+        remove_button.clicked.connect(self._remove_datasets)
+        cancel_button = QPushButton("Cancel loading", data_widget)
+        cancel_button.clicked.connect(self._cancel_loading)
+        layout.addWidget(open_button)
+        layout.addWidget(self.dataset_list, 1)
+        layout.addWidget(add_button)
+        layout.addWidget(remove_button)
+        layout.addWidget(cancel_button)
+        data_dock.setWidget(data_widget)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, data_dock)
 
-        # Template manager
-        self._template_manager = get_default_manager()
+        inspector_dock = QDockWidget("Graph inspector", self)
+        inspector_dock.setWidget(self.inspector)
+        inspector_dock.setMinimumWidth(340)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, inspector_dock)
 
-        # State manager for persisting preferences (last folder, regex filter, etc.)
-        self._state_manager = StateManager()
+    def _action(self, text, slot, shortcut=None) -> QAction:
+        action = QAction(text, self)
+        action.triggered.connect(slot)
+        if shortcut:
+            action.setShortcut(shortcut)
+        return action
 
-        # Current loaded data (for re-rendering)
-        self._loaded_data: Dict[str, Any] = {}
-
-        # Multi-graph support: list of (name, plot_widget, controls) tuples
-        self._graphs: List[tuple] = []
-
-        # Build the UI
-        self._setup_ui()
-        self._wire_signals()
-
-    def _setup_ui(self) -> None:
-        """Build the main window layout."""
-        # --- Menu bar ---
-        self._setup_menu_bar()
-
-        # Central widget: QTabWidget for multi-graph support
-        self._tab_widget = QTabWidget()
-        self.setCentralWidget(self._tab_widget)
-
-        # Left dock: Data panel
-        self._data_panel = DataPanel()
-        self._data_panel.set_state_manager(self._state_manager)
-        self._data_dock = QDockWidget("Data Files", self)
-        self._data_dock.setWidget(self._data_panel)
-        self._data_dock.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
-        self.addDockWidget(Qt.LeftDockWidgetArea, self._data_dock)
-
-        # Right dock: Controls panel — will be set to the current graph's controls
-        self._controls_panel = None  # tracks what is currently in the dock (for removal only)
-        self._controls_dock = QDockWidget("Plot Controls", self)
-        self._controls_dock.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
-        self.addDockWidget(Qt.RightDockWidgetArea, self._controls_dock)
-
-        # Create the first graph tab by default (this will also update the dock controls)
-        self._create_new_graph("Graph 1")
-
-    def _setup_menu_bar(self) -> None:
-        """Build the menu bar with File and Graph menus."""
-        menubar = self.menuBar()
-
-        # --- File menu ---
-        file_menu = menubar.addMenu("File")
-
-        open_action = QAction("Open File...", self)
-        open_action.setShortcut("Ctrl+O")
-        open_action.triggered.connect(self._on_open_file)
-        file_menu.addAction(open_action)
-
-        open_folder_action = QAction("Open Folder...", self)
-        open_folder_action.setShortcut("Ctrl+Shift+O")
-        open_folder_action.triggered.connect(self._on_open_folder)
-        file_menu.addAction(open_folder_action)
-
-        file_menu.addSeparator()
-
-        exit_action = QAction("Exit", self)
-        exit_action.setShortcut("Ctrl+Q")
-        exit_action.triggered.connect(self.close)
-        file_menu.addAction(exit_action)
-
-        # --- Graph menu ---
-        graph_menu = menubar.addMenu("Graph")
-
-        add_graph_action = QAction("New Graph...", self)
-        add_graph_action.setShortcut("Ctrl+T")
-        add_graph_action.triggered.connect(self._on_new_graph)
-        graph_menu.addAction(add_graph_action)
-
-        close_graph_action = QAction("Close Graph", self)
-        close_graph_action.setShortcut("Ctrl+W")
-        close_graph_action.triggered.connect(self._on_close_graph)
-        graph_menu.addAction(close_graph_action)
-
-        graph_menu.addSeparator()
-
-        # Graph list submenu
-        self._graph_list_menu = QMenu("Switch to Graph", self)
-        graph_menu.addMenu(self._graph_list_menu)
-
-        # --- Template menu ---
-        template_menu = menubar.addMenu("Template")
-
-        save_template_action = QAction("Save Current as Template...", self)
-        save_template_action.setShortcut("Ctrl+Shift+S")
-        save_template_action.triggered.connect(self._on_save_current_as_template)
-        template_menu.addAction(save_template_action)
-
-        manage_templates_action = QAction("Manage Templates...", self)
-        manage_templates_action.setShortcut("Ctrl+M")
-        manage_templates_action.triggered.connect(self._on_manage_templates)
-        template_menu.addAction(manage_templates_action)
-
-        # --- Export menu ---
-        export_menu = menubar.addMenu("Export")
-
-        export_png_action = QAction("Export as PNG...", self)
-        export_png_action.setShortcut("Ctrl+Shift+E")
-        export_png_action.triggered.connect(lambda: self._on_export_file("png"))
-        export_menu.addAction(export_png_action)
-
-        export_svg_action = QAction("Export as SVG...", self)
-        export_svg_action.triggered.connect(lambda: self._on_export_file("svg"))
-        export_menu.addAction(export_svg_action)
-
-        export_pdf_action = QAction("Export as PDF...", self)
-        export_pdf_action.triggered.connect(lambda: self._on_export_file("pdf"))
-        export_menu.addAction(export_pdf_action)
-
-        export_menu.addSeparator()
-
-        copy_clipboard_action = QAction("Copy to Clipboard", self)
-        copy_clipboard_action.setShortcut("Ctrl+C")
-        copy_clipboard_action.triggered.connect(self._on_copy_to_clipboard)
-        export_menu.addAction(copy_clipboard_action)
-
-        export_menu.addSeparator()
-
-        save_project_action = QAction("Save Project...", self)
-        save_project_action.setShortcut("Ctrl+Shift+P")
-        save_project_action.triggered.connect(self._on_save_project)
-        export_menu.addAction(save_project_action)
-
-    def _create_new_graph(self, name: str) -> tuple:
-        """Create a new graph tab with its own plot widget and controls.
-
-        Returns:
-            Tuple of (name, plot_widget, controls_panel).
-        """
-        plot_widget = PlotWidget()
-        controls = ControlsPanel()
-
-        # Wire this graph's controls to the plot widget
-        controls.set_on_scale_changed(
-            lambda kind, value: self._on_graph_control_changed(name, kind, value)
+    def _build_actions(self) -> None:
+        self.new_workspace_action = self._action("New workspace", self._new_workspace, QKeySequence.StandardKey.New)
+        self.open_data_action = self._action("Open data…", self._open_data, QKeySequence.StandardKey.Open)
+        self.workspace_properties_action = self._action(
+            "Workspace properties…", self._workspace_properties
         )
-        controls.generate_requested.connect(
-            lambda: self._on_graph_generate(name)
+        self.open_package_action = self._action("Open package…", self._open_package, "Ctrl+Shift+O")
+        self.import_graph_action = self._action("Import graph from package…", self._import_graph)
+        self.save_action = self._action("Save", self._save, QKeySequence.StandardKey.Save)
+        self.save_as_action = self._action("Save workspace package as…", self._save_workspace_as, QKeySequence.StandardKey.SaveAs)
+        self.save_graph_action = self._action("Save graph package…", self._save_graph)
+        self.export_image_action = self._action("Export image…", self._export_image, "Ctrl+E")
+        self.export_csv_action = self._action("Export displayed data as CSV…", self._export_csv)
+        self.export_itx_action = self._action("Export displayed data as Igor ITX…", self._export_itx)
+        self.export_h5xp_action = self._action("Export canonical data to Igor h5xp…", self._export_h5xp)
+        self.copy_action = self._action("Copy graph", self._copy_graph, QKeySequence.StandardKey.Copy)
+        self.new_2d_action = self._action("New 2D graph", lambda: self._new_graph("plot2d"))
+        self.new_waterfall_action = self._action("New 3D waterfall", lambda: self._new_graph("opengl_waterfall"))
+        self.new_surface_action = self._action("New 3D surface", lambda: self._new_graph("opengl_surface"))
+        self.recompute_action = self._action("Recompute with current version", self._recompute_graph)
+        self.color_preset_action = self._action(
+            "Color preset", lambda: self._apply_series_preset("color")
         )
-        controls.dataset_style_changed.connect(
-            lambda idx, style: self._on_graph_update_style(name, idx, style)
+        self.bw_preset_action = self._action(
+            "Black and white preset", lambda: self._apply_series_preset("bw")
         )
-        controls.legend_changed.connect(
-            lambda idx, text: self._on_graph_generate(name)
+        self.rainbow_preset_action = self._action(
+            "Rainbow preset", lambda: self._apply_series_preset("rainbow")
+        )
+        self.save_template_action = self._action("Save graph template…", self._save_template)
+        self.apply_template_action = self._action("Apply graph template…", self._apply_template)
+        self.delete_template_action = self._action("Delete graph template…", self._delete_template)
+        self.undo_action = self.undo_stack.createUndoAction(self, "Undo")
+        self.undo_action.setShortcut(QKeySequence.StandardKey.Undo)
+        self.redo_action = self.undo_stack.createRedoAction(self, "Redo")
+        self.redo_action.setShortcut(QKeySequence.StandardKey.Redo)
+
+    def _build_menus(self) -> None:
+        file_menu = self.menuBar().addMenu("&File")
+        for action in (
+            self.new_workspace_action, self.workspace_properties_action,
+            self.open_data_action, self.open_package_action,
+            self.import_graph_action, None, self.save_action, self.save_as_action,
+            self.save_graph_action, None, self.export_image_action, self.export_csv_action,
+            self.export_itx_action, self.export_h5xp_action,
+        ):
+            file_menu.addSeparator() if action is None else file_menu.addAction(action)
+        edit_menu = self.menuBar().addMenu("&Edit")
+        edit_menu.addActions([self.undo_action, self.redo_action, self.copy_action])
+        graph_menu = self.menuBar().addMenu("&Graph")
+        graph_menu.addActions(
+            [self.new_2d_action, self.new_waterfall_action, self.new_surface_action, self.recompute_action]
+        )
+        preset_menu = graph_menu.addMenu("Series presets")
+        preset_menu.addActions(
+            [self.color_preset_action, self.bw_preset_action, self.rainbow_preset_action]
+        )
+        template_menu = self.menuBar().addMenu("&Templates")
+        template_menu.addActions(
+            [self.save_template_action, self.apply_template_action, self.delete_template_action]
         )
 
-        # Wire template callbacks for this graph's controls
-        controls.set_template_manager(self._template_manager)
-        controls._on_template_applied = lambda tmpl_name: self._on_apply_template(name, tmpl_name)
-        controls._on_save_template = lambda: self._on_save_current_as_template()
-        controls._on_manage_templates_callback = lambda: self._on_manage_templates()
+    def _current_page(self):
+        return self.tabs.currentWidget()
 
-        # Add tab
-        idx = self._tab_widget.addTab(plot_widget, name)
-        self._tab_widget.setCurrentIndex(idx)
-
-        graph_info = (name, plot_widget, controls)
-        self._graphs.append(graph_info)
-
-        # Update graph list menu
-        self._update_graph_list_menu()
-
-        # Show this graph's controls in the right dock
-        self._update_dock_controls()
-
-        return graph_info
-
-    def _get_current_graph(self) -> Optional[tuple]:
-        """Get the currently active graph tuple."""
-        if not self._graphs:
+    def _current_graph(self) -> GraphDocument | None:
+        page = self._current_page()
+        if page is None or not hasattr(page, "graph_id"):
             return None
-        current_idx = self._tab_widget.currentIndex()
-        if 0 <= current_idx < len(self._graphs):
-            return self._graphs[current_idx]
-        # Fallback: last graph
-        return self._graphs[-1] if self._graphs else None
-
-    def _get_current_plot_widget(self) -> PlotWidget:
-        """Get the plot widget for the currently active graph."""
-        graph = self._get_current_graph()
-        if graph:
-            return graph[1]
-        # Fallback to first graph's plot widget
-        if self._graphs:
-            return self._graphs[0][1]
-        return PlotWidget()
-
-    def _get_current_controls(self) -> ControlsPanel:
-        """Get the controls panel for the currently active graph."""
-        graph = self._get_current_graph()
-        if graph:
-            return graph[2]
-        # Fallback to the dock's current widget (shouldn't normally happen)
-        if self._controls_panel is not None:
-            return self._controls_panel
-        # Last resort: create a new one (shouldn't be reached)
-        return ControlsPanel()
-
-    def _update_dock_controls(self) -> None:
-        """Update the right dock to show the current graph's controls panel.
-
-        QDockWidget.setWidget() automatically removes any existing widget,
-        so we just call it with the new controls panel. The old one is
-        reparented back to its parent (the graph tuple) and remains valid.
-        """
-        controls = self._get_current_controls()
-        if controls is not None:
-            # setWidget takes ownership and removes the previous widget automatically
-            self._controls_dock.setWidget(controls)
-            self._controls_panel = controls
-
-    def _wire_signals(self) -> None:
-        """Connect signals between UI components."""
-        # Data panel -> load and plot selected files (applied to current graph)
-        self._data_panel.files_selected.connect(self._on_files_selected)
-
-    def closeEvent(self, event: Any) -> None:
-        """Handle window close — save state before exiting."""
-        # Save data panel preferences (last folder, regex filter, sort mode)
-        if hasattr(self, '_data_panel'):
-            self._data_panel._save_state()
-
-        # Save plot controls preferences (grid, legend, log scale)
-        for _, _, controls in self._graphs:
-            template_data = controls.get_current_template_data()
-            for key, value in template_data.items():
-                self._state_manager.set(f"plot_{key}", value)
-
-        # Save window geometry
-        self._state_manager.set("window_geometry", bytes(self.saveGeometry()).hex())
-
-        # Save error bars preference
-        for _, controls in [(g[0], g[2]) for g in self._graphs]:
-            self._state_manager.set("error_bars_enabled", controls.get_show_error_bars())
-
-        event.accept()
-
-    def _update_graph_list_menu(self) -> None:
-        """Update the graph list submenu in the menu bar."""
-        self._graph_list_menu.clear()
-        for i, (name, plot_widget, controls) in enumerate(self._graphs):
-            action = self._graph_list_menu.addAction(name)
-            action.triggered.connect(lambda checked, idx=i: self._switch_to_graph(idx))
-
-    def _switch_to_graph(self, index: int) -> None:
-        """Switch the active graph tab to the given index."""
-        if 0 <= index < len(self._graphs):
-            self._tab_widget.setCurrentIndex(index)
-            # Update the right dock to show this graph's controls
-            self._update_dock_controls()
-
-    def _on_open_file(self) -> None:
-        """Handle File > Open File menu action."""
-        from PySide6.QtWidgets import QFileDialog
-
-        # Get last data folder from state manager for dialog start location
-        last_folder = self._state_manager.last_data_folder
-        start_dir = last_folder if last_folder and os.path.isdir(last_folder) else ""
-        
-        filepath, _ = QFileDialog.getOpenFileName(
-            self, "Open Data File", start_dir,
-            "HDF5 Files (*.hdf *.h5);;ASCII Files (*.txt *.csv);;All Files (*)",
-        )
-        if filepath:
-            folder = os.path.dirname(filepath)
-            filename = os.path.basename(filepath)
-            self._data_panel.set_folder(folder)
-            # Select the file in the listbox and trigger loading
-            self._data_panel.set_regex_filter("^" + filename + "$")
-            self._on_files_selected([filepath])
-
-    def _on_open_folder(self) -> None:
-        """Handle File > Open Folder menu action."""
-        from PySide6.QtWidgets import QFileDialog
-
-        # Get last data folder from state manager for dialog start location
-        last_folder = self._state_manager.last_data_folder
-        start_dir = last_folder if last_folder and os.path.isdir(last_folder) else (self._data_panel.get_current_folder() or "")
-        
-        folder = QFileDialog.getExistingDirectory(
-            self, "Select Data Folder",
-            start_dir,
-        )
-        if folder:
-            self._data_panel.set_folder(folder)
-
-    def _on_new_graph(self) -> None:
-        """Handle Graph > New Graph menu action."""
-        # Name the new graph based on existing count
-        idx = len(self._graphs) + 1
-        self._create_new_graph(f"Graph {idx}")
-
-    def _on_close_graph(self) -> None:
-        """Handle Graph > Close Graph menu action."""
-        if len(self._graphs) <= 1:
-            QMessageBox.information(
-                self, "Close Graph",
-                "Cannot close the last graph tab.",
-            )
-            return
-
-        current_idx = self._tab_widget.currentIndex()
-        if 0 <= current_idx < len(self._graphs):
-            name, plot_widget, controls = self._graphs.pop(current_idx)
-            plot_widget.deleteLater()
-            controls.deleteLater()
-            self._tab_widget.removeTab(current_idx)
-            self._update_graph_list_menu()
-
-    def _on_files_selected(self, filepaths: List[str]) -> None:
-        """Handle file selection from the data panel."""
-        if not filepaths:
-            return
-
-        # Save last used folder to state
-        folder = os.path.dirname(filepaths[0])
-        self._state_manager.last_data_folder = folder
-
-        # Load all selected files
-        self._loaded_data = {}
-        for filepath in filepaths:
-            try:
-                data = self._loader.load(filepath)
-                if data is not None:
-                    basename = os.path.basename(filepath)
-                    self._loaded_data[basename] = data
-            except Exception as e:
-                logger.error("Error loading %s: %s", filepath, e)
-                QMessageBox.warning(
-                    self,
-                    "Load Error",
-                    f"Failed to load {filepath}:\n{str(e)}",
-                )
-
-        # Auto-generate plot with loaded data on the current graph
-        if self._loaded_data:
-            current_graph = self._get_current_graph()
-            if current_graph:
-                name, plot_widget, controls = current_graph
-                self._on_graph_generate(name)
-                # Auto-range after loading new data
-                plot_widget.autoRange()
-
-    def _on_graph_control_changed(self, graph_name: str, kind: str, value: Any) -> None:
-        """Handle control changes for a specific graph."""
-        plot_widget = self._get_current_plot_widget()
-
-        if kind == "auto":
-            # Auto-range: reset plot to auto-scale
-            plot_widget.autoRange()
-            return
-        if kind == "x":
-            plot_widget.set_log_mode(x_log=value, y_log=plot_widget.get_y_log())
-        elif kind == "y":
-            plot_widget.set_log_mode(x_log=plot_widget.get_x_log(), y_log=value)
-        elif kind == "x_range":
-            xmin, xmax = value
-            plot_widget.set_x_range(xmin, xmax)
-        elif kind == "y_range":
-            ymin, ymax = value
-            plot_widget.set_y_range(ymin, ymax)
-        elif kind == "grid":
-            plot_widget.set_grid(show_x=value[0], show_y=value[1])
-        elif kind == "legend":
-            plot_widget.set_legend(show=value)
-        elif kind == "slit_smear":
-            # Re-render with slit-smeared toggle state
-            self._on_graph_generate(graph_name)
-        elif kind == "error_bars":
-            # Clear or show error bars without full re-render
-            if value:
-                self._on_graph_generate(graph_name)
-            else:
-                plot_widget.clear_error_bars()
-        elif kind == "z_offset":
-            # Re-render waterfall with new offset
-            self._on_graph_generate(graph_name)
-        elif kind == "color_scale":
-            # Re-render image/heatmap with new color scale
-            self._on_graph_generate(graph_name)
-        elif kind == "log_scale":
-            # Re-render image/heatmap with log scale toggle
-            self._on_graph_generate(graph_name)
-
-    def _on_graph_update_style(self, graph_name: str, idx: int, style: Dict[str, str]) -> None:
-        """Update a specific dataset's style in the plot without full re-render.
-
-        Args:
-            graph_name: Name of the target graph tab.
-            idx: Index of the dataset to update.
-            style: Dict with 'color', 'symbol', 'linestyle' keys.
-        """
-        plot_widget = self._get_current_plot_widget()
-
-        # Map style to pyqtgraph values
-        color = style.get("color", "blue")
-        symbol = style.get("symbol", "o")
-        linestyle = style.get("linestyle", "-")
-
-        # Update the plot item in place
-        if idx < len(plot_widget._plot_items):
-            item = plot_widget._plot_items[idx]
-
-            # Update pen (color + linestyle)
-            pg_color = pg.mkColor(color) if color else None
-            pen_style_map = {
-                "-": pg.QtCore.Qt.SolidLine,
-                "--": pg.QtCore.Qt.DashLine,
-                ".": pg.QtCore.Qt.DotLine,
-                "-.": pg.QtCore.Qt.DashDotLine,
-            }
-            pen_style = pen_style_map.get(linestyle, pg.QtCore.Qt.SolidLine)
-            pen = pg.mkPen(color=pg_color, width=1.5, style=pen_style)
-            item.setPen(pen)
-
-            # Update symbol
-            pg_symbol = map_symbol_to_pyqtgraph(symbol)
-            item.setSymbol(pg_symbol)
-
-    def _on_apply_template(self, graph_name: str, template_name: str) -> None:
-        """Apply a template to the current graph's controls.
-
-        Args:
-            graph_name: Name of the target graph tab.
-            template_name: Name of the template to apply.
-        """
-        controls = self._get_current_controls()
-        if controls.apply_template(template_name):
-            # Re-render the plot with the applied template settings
-            self._on_graph_generate(graph_name)
-
-    def _on_save_current_as_template(self) -> None:
-        """Handle 'Save Current as Template' menu action."""
-        from PySide6.QtWidgets import QInputDialog
-
-        controls = self._get_current_controls()
-        template_data = controls.get_current_template_data()
-
-        name, ok = QInputDialog.getText(
-            self, "Save Template", "Template name:",
-        )
-
-        if ok and name:
-            # Sanitize name
-            safe_name = name.replace("/", "_").replace("\\", "_")
-
-            if self._template_manager.save_template(safe_name, template_data):
-                # Refresh the template combo in all controls panels
-                for _, _, ctrl in self._graphs:
-                    ctrl.refresh_templates()
-
-                QMessageBox.information(
-                    self, "Template Saved",
-                    f"Template '{safe_name}' saved successfully.",
-                )
-            else:
-                QMessageBox.warning(
-                    self, "Save Failed",
-                    f"Failed to save template '{safe_name}'.",
-                )
-
-    def _on_manage_templates(self) -> None:
-        """Handle 'Manage Templates' menu action."""
-        from bernardyn.gui.template_dialog import TemplateDialog
-
-        dialog = TemplateDialog(
-            parent=self,
-            template_manager=self._template_manager,
-        )
-
-        def on_template_selected(name: str) -> None:
-            """Handle template selection in the dialog."""
-            controls = self._get_current_controls()
-            if controls.apply_template(name):
-                # Re-render the plot with the applied template settings
-                self._on_graph_generate(self._get_current_graph()[0] if self._get_current_graph() else "Graph 1")
-
-        dialog.template_selected.connect(on_template_selected)
-        dialog.exec()
-
-    def _on_export_file(self, fmt: str = "png") -> None:
-        """Handle 'Export as ...' menu action.
-
-        Args:
-            fmt: Default file format ('png', 'svg', 'pdf').
-        """
-        from PySide6.QtWidgets import QFileDialog
-
-        ext_map = {
-            "png": ("PNG Files (*.png)", "*.png"),
-            "svg": ("SVG Files (*.svg)", "*.svg"),
-            "pdf": ("PDF Files (*.pdf)", "*.pdf"),
-        }
-
-        filter_str, default_ext = ext_map.get(fmt, ("All Files (*.*)", "*.*"))
-        default_name = f"bernardyn_plot.{default_ext[1:]}"
-
-        filepath, _ = QFileDialog.getSaveFileName(
-            self, f"Export Plot as {fmt.upper()}", default_name, filter_str,
-        )
-
-        if filepath:
-            from bernardyn.export.exporter import get_default_dispatcher
-
-            plot_widget = self._get_current_plot_widget()
-            dispatcher = get_default_dispatcher()
-            success = dispatcher.export(plot_widget, filepath)
-
-            if success:
-                QMessageBox.information(
-                    self, "Export Successful",
-                    f"Plot exported to {filepath}",
-                )
-            else:
-                QMessageBox.warning(
-                    self, "Export Failed",
-                    f"Failed to export plot to {filepath}",
-                )
-
-    def _on_copy_to_clipboard(self) -> None:
-        """Handle 'Copy to Clipboard' menu action."""
-        from PySide6.QtWidgets import QMessageBox
-
-        plot_widget = self._get_current_plot_widget()
-        from bernardyn.export.exporter import get_default_dispatcher
-
-        dispatcher = get_default_dispatcher()
-        success = dispatcher.export(plot_widget, "clipboard")
-
-        if success:
-            QMessageBox.information(
-                self, "Copied",
-                "Plot copied to clipboard.",
-            )
-        else:
-            QMessageBox.warning(
-                self, "Copy Failed",
-                "Failed to copy plot to clipboard.",
-            )
-
-    def _on_save_project(self) -> None:
-        """Handle 'Save Project' menu action — export as .hdf5 container."""
-        from PySide6.QtWidgets import QFileDialog, QMessageBox
-
-        filepath, _ = QFileDialog.getSaveFileName(
-            self, "Save Project", "bernardyn_project.hdf5",
-            "HDF5 Files (*.hdf *.h5)",
-        )
-
-        if filepath:
-            from bernardyn.export.container_exporter import get_container_exporter
-
-            plot_widget = self._get_current_plot_widget()
-            exporter = get_container_exporter()
-            success = exporter.export(plot_widget, filepath)
-
-            if success:
-                QMessageBox.information(
-                    self, "Project Saved",
-                    f"Project saved to {filepath}",
-                )
-            else:
-                QMessageBox.warning(
-                    self, "Save Failed",
-                    f"Failed to save project to {filepath}",
-                )
-
-    def _on_graph_generate(self, graph_name: str) -> None:
-        """Generate the plot for a specific graph tab."""
-        controls = self._get_current_controls()
-        plot_widget = self._get_current_plot_widget()
-
-        plot_widget.clear()
-        
-        # Auto-range the plot after data changes
-        # Reset controls state based on plot type
-        plot_type = controls.get_plot_type()
-        if plot_type in ("image", "heatmap"):
-            controls.set_dataset_count(0)
-            controls.set_show_error_bars(False)
-
-        if not self._loaded_data:
-            return
-
-        plot_type = controls.get_plot_type()
-
-        plot_type = controls.get_plot_type()
-        x_log = controls.get_x_log()
-        y_log = controls.get_y_log()
-
-        if plot_type == "image":
-            self._render_image_plot(plot_widget, controls)
-        elif plot_type == "waterfall":
-            self._render_waterfall_plot(plot_widget, controls)
-        elif plot_type == "heatmap":
-            self._render_heatmap_plot(plot_widget, controls)
-        else:
-            self._render_line_plot(plot_widget, controls, x_log, y_log)
-
-    def _render_line_plot(
-        self,
-        plot_widget: PlotWidget,
-        controls: ControlsPanel,
-        x_log: bool,
-        y_log: bool,
-    ) -> None:
-        """Render a line plot from loaded 1D SAS data.
-
-        Args:
-            plot_widget: The target PlotWidget to render into.
-            controls: The ControlsPanel with current settings.
-            x_log: Whether X axis is logarithmic.
-            y_log: Whether Y axis is logarithmic.
-        """
-        plot_widget.set_log_mode(x_log=x_log, y_log=y_log)
-
-        # Apply grid and legend settings
-        show_grid_x, show_grid_y = controls.get_show_grid()
-        plot_widget.set_grid(show_x=show_grid_x, show_y=show_grid_y)
-        plot_widget.set_legend(controls.get_show_legend())
-
-        show_slit_smear = controls.get_show_slit_smear()
-        dataset_styles = controls.get_dataset_styles()
-
-        dataset_index = 0
-        all_x_min = float("inf")
-        all_x_max = float("-inf")
-        all_y_min = float("inf")
-        all_y_max = float("-inf")
-        has_slit_smear_data = False
-
-        for basename, data in self._loaded_data.items():
-            # Process 1D SAS datasets
-            # Use enumerate to track dataset index properly
-            for idx, sas_data in enumerate(data.get("sas_data_list", [])):
-                x = sas_data.x
-                y = sas_data.y
-
-                # Skip datasets with non-positive values for log scale
-                if (x_log and np.any(x <= 0)) or (y_log and np.any(y <= 0)):
-                    continue
-
-                # Track current dataset index for styling
-                current_index = dataset_index
-                
-                # Get style for this dataset
-                if current_index < len(dataset_styles):
-                    style = dataset_styles[current_index]
-                    color = style.get("color", "blue")
-                    symbol = style.get("symbol", "o")
-                    linestyle = style.get("linestyle", "-")
-                else:
-                    from bernardyn.plot.plot_style import get_color, DEFAULT_SYMBOLS
-                    color = get_color(current_index)
-                    symbol = DEFAULT_SYMBOLS[current_index % len(DEFAULT_SYMBOLS)]
-                    linestyle = "-"
-
-                plot_widget.add_line(
-                    x, y,
-                    color=color,
-                    symbol=symbol,
-                    linestyle=linestyle,
-                    linewidth=1.5,
-                    name=basename,
-                )
-
-                # Add error bars if available and enabled
-                show_error_bars = controls.get_show_error_bars()
-                if sas_data.y_err is not None and show_error_bars:
-                    # Ensure arrays are aligned (same length)
-                    min_len = min(len(x), len(y), len(sas_data.y_err))
-                    if min_len == 0:
-                        continue
-                    
-                    x_valid = x[:min_len]
-                    y_valid = y[:min_len]
-                    err_valid = sas_data.y_err[:min_len]
-                    
-                    # Filter out invalid error bar data (negative, NaN, Inf)
-                    valid_mask = np.isfinite(err_valid) & (err_valid >= 0)
-                    if not np.any(valid_mask):
-                        continue
-                    
-                    x_valid = x_valid[valid_mask]
-                    y_valid = y_valid[valid_mask]
-                    err_valid = err_valid[valid_mask]
-                    
-                    # Filter out extreme error bar values (more than 5x the data range)
-                    y_range = float(y_valid.max() - y_valid.min()) if len(y_valid) > 1 else 1.0
-                    max_err = y_range * 5 if y_range > 0 else float('inf')
-                    err_valid = np.clip(err_valid, 0, max_err)
-                    
-                    # Only add error bars if we have valid data after filtering
-                    if len(x_valid) > 0:
-                        plot_widget.add_error_bars(x_valid, y_valid, err_valid, color=color)
-
-                # Track ranges
-                all_x_min = min(all_x_min, float(x.min()))
-                all_x_max = max(all_x_max, float(x.max()))
-                all_y_min = min(all_y_min, float(y.min()))
-                all_y_max = max(all_y_max, float(y.max()))
-
-                dataset_index += 1
-
-            # Process slit-smeared data
-            slit_smear = data.get("slit_smear")
-            if slit_smear is not None:
-                has_slit_smear_data = True
-                x = slit_smear.x
-                y = slit_smear.y
-
-                if (x_log and np.any(x <= 0)) or (y_log and np.any(y <= 0)):
-                    pass  # Skip to the desmear block below
-                elif not show_slit_smear:
-                    dataset_index += 1
-                    pass  # Skip to the desmear block below
-
-                from bernardyn.plot.plot_style import get_color, DEFAULT_SYMBOLS
-                color = get_color(dataset_index)
-                symbol = "^"  # Upward triangle for SMR
-
-                plot_widget.add_line(
-                    x, y, color=color, symbol=symbol, linewidth=1.5,
-                    name=f"{basename} (SMR)",
-                )
-
-                all_x_min = min(all_x_min, float(x.min()))
-                all_x_max = max(all_x_max, float(x.max()))
-                all_y_min = min(all_y_min, float(y.min()))
-                all_y_max = max(all_y_max, float(y.max()))
-
-                dataset_index += 1
-
-            # Process desmeared data
-            desmear = data.get("desmear")
-            if desmear is not None:
-                x = desmear.x
-                y = desmear.y
-
-                if (x_log and np.any(x <= 0)) or (y_log and np.any(y <= 0)):
-                    continue
-
-                from bernardyn.plot.plot_style import get_color, DEFAULT_SYMBOLS
-                color = get_color(dataset_index)
-                symbol = "v"  # Downward triangle for desmear
-
-                plot_widget.add_line(
-                    x, y, color=color, symbol=symbol, linewidth=1.5,
-                    name=f"{basename} (desmear)",
-                )
-
-                all_x_min = min(all_x_min, float(x.min()))
-                all_x_max = max(all_x_max, float(x.max()))
-                all_y_min = min(all_y_min, float(y.min()))
-                all_y_max = max(all_y_max, float(y.max()))
-
-                dataset_index += 1
-
-        # Set axis ranges
-        if all_x_min != float("inf"):
-            plot_widget.set_x_range(all_x_min, all_x_max)
-        if all_y_min != float("inf"):
-            plot_widget.set_y_range(all_y_min, all_y_max)
-
-        # Update axis labels from first dataset
-        for basename, data in self._loaded_data.items():
-            for sas_data in data.get("sas_data_list", []):
-                if len(sas_data.x) > 0:
-                    plot_widget.set_x_label(sas_data.x_label or "X")
-                    plot_widget.set_y_label(sas_data.y_label or "Y")
-                    break
-
-        # Update controls panel ranges (only if not already set to current values)
-        cur_xmin, cur_xmax = controls.get_x_range()
-        if abs(cur_xmin - all_x_min) > 1e-10 or abs(cur_xmax - all_x_max) > 1e-10:
-            controls.set_x_range(all_x_min, all_x_max)
-        cur_ymin, cur_ymax = controls.get_y_range()
-        if abs(cur_ymin - all_y_min) > 1e-10 or abs(cur_ymax - all_y_max) > 1e-10:
-            controls.set_y_range(all_y_min, all_y_max)
-
-        # Update dataset count in controls (only if count changed to preserve user styles)
-        controls.set_dataset_count_if_changed(dataset_index)
-
-        # Update legend names from loaded data attributes
-        self._update_legend_names(controls, dataset_index)
-
-        # Enable slit-smeared toggle if data has it
-        controls.set_slit_smear_available(has_slit_smear_data)
-
-        # Enable controls
-        controls.set_enabled(True)
-
-    def _render_image_plot(
-        self,
-        plot_widget: PlotWidget,
-        controls: Optional[ControlsPanel] = None,
-        x_log: bool = False,
-        y_log: bool = False,
-    ) -> None:
-        """Render a 2D image plot from loaded data.
-
-        Args:
-            plot_widget: The target PlotWidget to render into.
-            controls: The ControlsPanel with current settings (color scale, log).
-                Optional; when omitted, defaults are used (grayscale, no log).
-            x_log: Ignored for image plots (images are always linear axes).
-            y_log: Ignored for image plots (images are always linear axes).
-        """
-        plot_widget.set_log_mode(x_log=False, y_log=False)
-
-        color_scale = controls.get_color_scale() if controls is not None else "grayscale"
-        log_scale = controls.get_log_scale() if controls is not None else False
-
-        has_image_data = False
-        for basename, data in self._loaded_data.items():
-            raw_image = data.get("raw_image")
-            if raw_image is not None and raw_image.data.size > 0:
-                img = raw_image.data
-                has_image_data = True
-
-                # Apply log scale if requested
-                if log_scale:
-                    img = np.where(img > 0, np.log10(np.maximum(img, 1e-30)), 0)
-
-                vmin = float(np.percentile(img[img > 0], 1)) if np.any(img > 0) else float(img.min())
-                vmax = float(np.percentile(img[img > 0], 99)) if np.any(img > 0) else float(img.max())
-
-                plot_widget.add_image(img, vmin=vmin, vmax=vmax, color_scale=color_scale)
-                plot_widget.set_title(f"{basename} - Raw Image ({color_scale})")
-                break
-
-        if not has_image_data:
-            from PySide6.QtWidgets import QMessageBox
-            QMessageBox.warning(
-                self,
-                "No Image Data",
-                "No compatible 2D image data found for the selected files. "
-                "The plot has been cleared.",
-            )
-
-        # Enable controls
-        if controls is not None:
-            controls.set_enabled(True)
-
-    def _render_waterfall_plot(
-        self,
-        plot_widget: PlotWidget,
-        controls: ControlsPanel,
-    ) -> None:
-        """Render a waterfall (offset) plot from loaded 1D SAS data.
-
-        Datasets are stacked vertically with Z-offset based on order number.
-
-        Args:
-            plot_widget: The target PlotWidget to render into.
-            controls: The ControlsPanel with current settings (z_offset).
-        """
-        # Waterfall uses lin-lin by default
-        plot_widget.set_log_mode(x_log=False, y_log=False)
-
-        # Apply grid and legend settings
-        show_grid_x, show_grid_y = controls.get_show_grid()
-        plot_widget.set_grid(show_x=show_grid_x, show_y=show_grid_y)
-        plot_widget.set_legend(controls.get_show_legend())
-
-        z_offset = controls.get_z_offset()
-        dataset_styles = controls.get_dataset_styles()
-
-        # Collect all datasets for waterfall rendering
-        waterfall_datasets = []
-        dataset_index = 0
-
-        for basename, data in self._loaded_data.items():
-            for sas_data in data.get("sas_data_list", []):
-                x = sas_data.x
-                y = sas_data.y
-
-                # Skip datasets with non-positive values for log scale
-                if np.any(x <= 0) or np.any(y <= 0):
-                    continue
-
-                # Get style for this dataset
-                if dataset_index < len(dataset_styles):
-                    style = dataset_styles[dataset_index]
-                    color = style.get("color", "blue")
-                    symbol = style.get("symbol", "o")
-                else:
-                    from bernardyn.plot.plot_style import get_color, DEFAULT_SYMBOLS
-                    color = get_color(dataset_index)
-                    symbol = DEFAULT_SYMBOLS[dataset_index % len(DEFAULT_SYMBOLS)]
-
-                waterfall_datasets.append({
-                    "x": x,
-                    "y": y,
-                    "z_offset": float(dataset_index) * z_offset,
-                    "order_number": dataset_index,
-                    "color": color,
-                    "symbol": symbol,
-                    "title": basename,
-                })
-
-                dataset_index += 1
-
-        # Render waterfall lines
-        if waterfall_datasets:
-            plot_widget.add_waterfall_lines(waterfall_datasets)
-
-            # Set axis labels
-            for basename, data in self._loaded_data.items():
-                for sas_data in data.get("sas_data_list", []):
-                    if len(sas_data.x) > 0:
-                        plot_widget.set_x_label(sas_data.x_label or "Q")
-                        break
-
-            # Update controls panel dataset count
-            controls.set_dataset_count(dataset_index)
-        else:
-            from PySide6.QtWidgets import QMessageBox
-            QMessageBox.warning(
-                self,
-                "No Waterfall Data",
-                "No compatible 1D SAS data found for waterfall plot. "
-                "The plot has been cleared.",
-            )
-
-        # Enable controls
-        controls.set_enabled(True)
-
-    def _render_heatmap_plot(
-        self,
-        plot_widget: PlotWidget,
-        controls: ControlsPanel,
-    ) -> None:
-        """Render a heatmap plot from loaded 1D SAS data.
-
-        Datasets are arranged with X horizontal, order number vertical,
-        and intensity mapped to color.
-
-        Args:
-            plot_widget: The target PlotWidget to render into.
-            controls: The ControlsPanel with current settings (color scale).
-        """
-        # Heatmap uses lin-lin by default
-        plot_widget.set_log_mode(x_log=False, y_log=False)
-
-        # Apply grid and legend settings
-        show_grid_x, show_grid_y = controls.get_show_grid()
-        plot_widget.set_grid(show_x=show_grid_x, show_y=show_grid_y)
-
-        color_scale = controls.get_color_scale()
-        dataset_styles = controls.get_dataset_styles()
-
-        # Collect all datasets for heatmap rendering
-        heatmap_datasets = []
-        dataset_index = 0
-
-        for basename, data in self._loaded_data.items():
-            for sas_data in data.get("sas_data_list", []):
-                x = sas_data.x
-                y = sas_data.y
-
-                # Skip datasets with non-positive values for log scale
-                if np.any(x <= 0) or np.any(y <= 0):
-                    continue
-
-                heatmap_datasets.append({
-                    "x": x,
-                    "y": y,
-                    "order_number": dataset_index,
-                })
-
-                dataset_index += 1
-
-        # Render heatmap lines (scatter plot with color mapping)
-        if heatmap_datasets:
-            plot_widget.add_heatmap_lines(heatmap_datasets, color_scale=color_scale)
-
-            # Set axis labels
-            for basename, data in self._loaded_data.items():
-                for sas_data in data.get("sas_data_list", []):
-                    if len(sas_data.x) > 0:
-                        plot_widget.set_x_label(sas_data.x_label or "Q")
-                        break
-
-            # Update controls panel dataset count
-            controls.set_dataset_count(dataset_index)
-        else:
-            from PySide6.QtWidgets import QMessageBox
-            QMessageBox.warning(
-                self,
-                "No Heatmap Data",
-                "No compatible 1D SAS data found for heatmap plot. "
-                "The plot has been cleared.",
-            )
-
-        # Enable controls
-        controls.set_enabled(True)
-
-    def get_plot_widget(self) -> PlotWidget:
-        """Get the plot widget for the currently active graph."""
-        return self._get_current_plot_widget()
-
-    def get_data_panel(self) -> DataPanel:
-        """Get the data panel for external access."""
-        return self._data_panel
-
-    def get_controls_panel(self) -> ControlsPanel:
-        """Get the controls panel for external access."""
-        return self._get_current_controls()
-
-    def _update_legend_names(self, controls: ControlsPanel, dataset_index: int) -> None:
-        """Update legend names in the controls panel from loaded data attributes.
-
-        Only sets defaults for datasets that don't have user-defined names yet.
-        """
-        legend_names = controls.get_legend_names()
-
-        # Build a list of default names from loaded data
-        defaults = []
-        idx = 0
-        for basename, data in self._loaded_data.items():
-            for sas_data in data.get("sas_data_list", []):
-                if idx < dataset_index:
-                    defaults.append(basename)
-                    idx += 1
-
-            # Process slit-smeared data
-            slit_smear = data.get("slit_smear")
-            if slit_smear is not None:
-                has_slit = True
-                idx += 1
-
-            # Process desmeared data
-            desmear = data.get("desmear")
-            if desmear is not None:
-                idx += 1
-
-        # Update legend inputs with defaults where user hasn't set a name
-        # Use temporary signal blocking to prevent recursion during legend updates
-        was_blocked = controls._legend_inputs[0].signalsBlocked() if controls._legend_inputs else False
         try:
-            for i in range(min(len(defaults), len(legend_names))):
-                if not legend_names[i].strip():
-                    controls._legend_inputs[i].blockSignals(True)
-                    controls._legend_inputs[i].setText(defaults[i])
-                    controls._legend_inputs[i].blockSignals(False)
-        finally:
-            pass
+            return self.controller.workspace.graph(page.graph_id)
+        except KeyError:
+            return None
 
-        # If we have more datasets than legend inputs, add new ones
-        while len(legend_names) < dataset_index:
-            idx = len(legend_names)
-            default_name = f"Dataset {idx + 1}"
-            controls._add_legend_input(idx, default_name)
+    def _new_workspace(self) -> None:
+        if not self._confirm_discard():
+            return
+        self.controller.new_workspace()
+        self.undo_stack.clear()
+        self._rebuild_tabs()
+
+    def _workspace_properties(self) -> None:
+        title, ok = QInputDialog.getText(
+            self,
+            "Workspace properties",
+            "Package title:",
+            text=self.controller.workspace.title,
+        )
+        if not ok:
+            return
+        description, ok = QInputDialog.getMultiLineText(
+            self,
+            "Workspace properties",
+            "Package description:",
+            self.controller.workspace.description,
+        )
+        if not ok:
+            return
+        self.controller.workspace.title = title
+        self.controller.workspace.description = description
+        self.controller.workspace.dirty = True
+
+    def _new_graph(self, renderer_id: str) -> None:
+        graph = self.controller.new_graph(renderer_id)
+        page = GraphPage(graph, self, renderers=self.renderers)
+        self.tabs.addTab(page, graph.title)
+        self.tabs.setCurrentWidget(page)
+        self._render_graph(graph.id)
+
+    def _close_tab(self, index: int) -> None:
+        page = self.tabs.widget(index)
+        if not isinstance(page, GraphPage):
+            self.tabs.removeTab(index)
+            return
+        self.controller.close_graph(page.graph_id)
+        self.tabs.removeTab(index)
+        page.deleteLater()
+        if self.tabs.count() == 0:
+            self._rebuild_tabs()
+
+    def _active_tab_changed(self, index: int) -> None:
+        page = self.tabs.widget(index)
+        if isinstance(page, GraphPage):
+            self.controller.workspace.active_graph_id = page.graph_id
+        self._sync_inspector()
+
+    def _rebuild_tabs(self) -> None:
+        while self.tabs.count():
+            widget = self.tabs.widget(0)
+            self.tabs.removeTab(0)
+            widget.deleteLater()
+        if not self.controller.workspace.graphs and self.controller.previews:
+            for graph_id, png in self.controller.previews.items():
+                self.tabs.addTab(PreviewPage(graph_id, png, self), "Archived preview")
+        else:
+            for graph in self.controller.workspace.graphs:
+                try:
+                    self.renderers.get(graph.renderer_id)
+                    unknown_renderer = False
+                except KeyError:
+                    unknown_renderer = True
+                    if graph.id in self.controller.previews:
+                        self.controller.preview_only_graphs.add(graph.id)
+                if graph.id in self.controller.preview_only_graphs and graph.id in self.controller.previews:
+                    page = PreviewPage(graph.id, self.controller.previews[graph.id], self)
+                    self.tabs.addTab(page, f"{graph.title} (preview)")
+                else:
+                    if unknown_renderer:
+                        self.statusBar().showMessage(
+                            f"Unknown renderer {graph.renderer_id!r}; no embedded preview was available"
+                        )
+                    page = GraphPage(graph, self, renderers=self.renderers)
+                    self.tabs.addTab(page, graph.title)
+                    self._render_page(page, graph)
+            active = self.controller.workspace.active_graph_id
+            for index in range(self.tabs.count()):
+                if getattr(self.tabs.widget(index), "graph_id", None) == active:
+                    self.tabs.setCurrentIndex(index)
+                    break
+        self._refresh_dataset_list()
+        self._sync_inspector()
+
+    def _render_page(self, page: GraphPage, graph: GraphDocument) -> None:
+        page.render(graph, self.controller.snapshots.get(graph.id, {}))
+        if page.fallback_reason:
+            self.statusBar().showMessage(f"OpenGL unavailable; showing 2D fallback: {page.fallback_reason}")
+
+    def _render_graph(self, graph_id: str) -> None:
+        graph = self.controller.workspace.graph(graph_id)
+        for index in range(self.tabs.count()):
+            page = self.tabs.widget(index)
+            if isinstance(page, GraphPage) and page.graph_id == graph_id:
+                self._render_page(page, graph)
+                self.tabs.setTabText(index, graph.title)
+                return
+
+    def _sync_inspector(self) -> None:
+        graph = self._current_graph()
+        warnings = self.controller.graph_warnings(graph.id) if graph else self.controller.warnings
+        self.inspector.set_graph(
+            graph,
+            self.controller.workspace.datasets,
+            warnings,
+            read_only=bool(
+                graph
+                and graph.id
+                in (self.controller.read_only_graphs | self.controller.preview_only_graphs)
+            ),
+        )
+
+    def _queue_graph_change(self, graph: GraphDocument, recompute: bool, text: str) -> None:
+        try:
+            before = self.controller.workspace.graph(graph.id)
+            self.undo_stack.push(GraphEditCommand(self, before, graph, recompute, text))
+        except Exception as exc:
+            QMessageBox.warning(self, "Graph change", str(exc))
+            self._sync_inspector()
+
+    def _commit_graph(self, graph: GraphDocument, recompute: bool) -> None:
+        self.controller.update_graph(graph, recompute=recompute)
+        self._render_graph(graph.id)
+        self._sync_inspector()
+
+    def _set_transform(self, transform_id: str) -> None:
+        graph = self._current_graph()
+        if graph is None:
+            return
+        transform = self.controller.transforms.get(transform_id)
+        parameters: dict[str, dict[str, float]] = {item.id: {} for item in graph.series}
+        if transform.parameters and graph.series:
+            rows = []
+            for item in graph.series:
+                dataset = self.controller.workspace.datasets[item.dataset_id]
+                initial = {
+                    parameter.id: value
+                    for parameter in transform.parameters
+                    if (value := _metadata_number(dict(dataset.metadata), parameter.id))
+                    is not None
+                }
+                rows.append((item.id, dataset.label, initial))
+            dialog = SeriesTransformParameterDialog(transform, rows, self)
+            if dialog.exec() != dialog.DialogCode.Accepted:
+                self._sync_inspector()
+                return
+            parameters = dialog.values()
+        before = graph
+        series = tuple(
+            replace(
+                item,
+                transform_id=transform_id,
+                transform_parameters=parameters.get(item.id, {}),
+            )
+            for item in graph.series
+        )
+        after = replace(
+            graph,
+            series=series,
+            x_axis=replace(graph.x_axis, label=transform.default_x_label, log=transform.default_x_log, auto_range=True),
+            y_axis=replace(graph.y_axis, label=transform.default_y_label, log=transform.default_y_log, auto_range=True),
+        )
+        self.undo_stack.push(GraphEditCommand(self, before, after, True, f"Set {transform.name} view"))
+
+    def _open_data(self) -> None:
+        paths, _ = QFileDialog.getOpenFileNames(
+            self,
+            "Open scattering data",
+            "",
+            "Scattering data (*.h5 *.hdf5 *.hdf *.nxs *.dat *.txt *.csv);;All files (*)",
+        )
+        if not paths:
+            return
+        graph = self._current_graph()
+        if graph is None:
+            return
+        for value in paths:
+            path = Path(value)
+            try:
+                locations = self.controller.sources.discover_path(path)
+            except Exception as exc:
+                if path.suffix.lower() in (".h5", ".hdf5", ".hdf", ".nxs"):
+                    dialog = HDFMappingDialog(path, self)
+                    if dialog.exec() != dialog.DialogCode.Accepted:
+                        continue
+                    locations = [dialog.location()]
+                else:
+                    QMessageBox.warning(self, "Data discovery", str(exc))
+                    continue
+            if len(locations) > 1:
+                dialog = LocationDialog(locations, self)
+                if dialog.exec() != dialog.DialogCode.Accepted:
+                    continue
+                locations = dialog.selected()
+            q_unit = "1/A"
+            error_fraction = 0.05
+            if path.suffix.lower() in (".dat", ".txt", ".csv"):
+                q_unit, ok = QInputDialog.getItem(
+                    self, "Text data Q unit", f"Q unit for {path.name}:",
+                    ["1/A", "1/nm", "1/pm", "1/um", "1/mm"], 0, False,
+                )
+                if not ok:
+                    continue
+                error_percent, ok = QInputDialog.getDouble(
+                    self,
+                    "Missing text uncertainty",
+                    "Synthesized intensity uncertainty (%):",
+                    5.0,
+                    0.0001,
+                    100.0,
+                    3,
+                )
+                if not ok:
+                    continue
+                error_fraction = error_percent / 100.0
+            for location in locations:
+                worker = SourceLoadWorker(
+                    self.controller, location, graph.id, q_unit, error_fraction
+                )
+                worker.signals.loaded.connect(self._source_loaded)
+                worker.signals.failed.connect(lambda message: QMessageBox.warning(self, "Load error", message))
+                worker.signals.finished.connect(self._worker_finished)
+                self._workers.add(worker)
+                self.thread_pool.start(worker)
+        self.statusBar().showMessage("Loading data…")
+
+    def _source_loaded(self, record, graph_id: str) -> None:
+        try:
+            if not any(graph.id == graph_id for graph in self.controller.workspace.graphs):
+                graph_id = self.controller.workspace.active_graph_id
+            dataset = record.to_dataset()
+            self.controller.add_dataset(dataset, graph_id=graph_id)
+            self._refresh_dataset_list()
+            self._render_graph(graph_id)
+            self._sync_inspector()
+            self.statusBar().showMessage(f"Loaded {dataset.label}", 5000)
+        except Exception as exc:
+            QMessageBox.warning(self, "Load error", str(exc))
+
+    def _worker_finished(self, worker) -> None:
+        self._workers.discard(worker)
+        if not self._workers:
+            self.statusBar().showMessage("Ready", 2000)
+
+    def _cancel_loading(self) -> None:
+        for worker in self._workers:
+            worker.cancelled = True
+        self.statusBar().showMessage("Cancelling data loads…", 3000)
+
+    def _refresh_dataset_list(self) -> None:
+        selected = {item.data(Qt.ItemDataRole.UserRole) for item in self.dataset_list.selectedItems()}
+        self.dataset_list.clear()
+        for dataset in self.controller.workspace.datasets.values():
+            item = QListWidgetItem(f"{dataset.label}  ({len(dataset.q):,} points)")
+            item.setData(Qt.ItemDataRole.UserRole, dataset.id)
+            self.dataset_list.addItem(item)
+            if dataset.id in selected:
+                item.setSelected(True)
+
+    def _add_existing_dataset(self) -> None:
+        graph = self._current_graph()
+        if graph is None:
+            return
+        for item in self.dataset_list.selectedItems():
+            dataset = self.controller.workspace.datasets[item.data(Qt.ItemDataRole.UserRole)]
+            self.controller.add_dataset(dataset, graph_id=graph.id)
+        self._render_graph(graph.id)
+        self._sync_inspector()
+
+    def _remove_datasets(self) -> None:
+        ids = {item.data(Qt.ItemDataRole.UserRole) for item in self.dataset_list.selectedItems()}
+        if not ids:
+            return
+        references = sum(
+            1 for graph in self.controller.workspace.graphs for series in graph.series if series.dataset_id in ids
+        )
+        if references and QMessageBox.question(
+            self, "Remove datasets", f"Remove {len(ids)} dataset(s) and {references} graph reference(s)?"
+        ) != QMessageBox.StandardButton.Yes:
+            return
+        for graph in tuple(self.controller.workspace.graphs):
+            retained = tuple(series for series in graph.series if series.dataset_id not in ids)
+            if retained != graph.series:
+                self.controller.update_graph(replace(graph, series=retained), recompute=True)
+        for dataset_id in ids:
+            self.controller.workspace.datasets.pop(dataset_id, None)
+        self.controller.workspace.dirty = True
+        self._refresh_dataset_list()
+        for graph in self.controller.workspace.graphs:
+            self._render_graph(graph.id)
+        self._sync_inspector()
+
+    def _open_package(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "Open Bernardyn package", "", "Bernardyn (*.bernardyn.h5);;HDF5 (*.h5)")
+        if not path or not self._confirm_discard():
+            return
+        try:
+            loaded = self.controller.open_package(path)
+            self.undo_stack.clear()
+            self._rebuild_tabs()
+            if loaded.warnings:
+                QMessageBox.warning(self, "Package warnings", "\n".join(loaded.warnings))
+            self._restore_layout()
+        except Exception as exc:
+            QMessageBox.critical(self, "Open package", str(exc))
+
+    def _import_graph(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "Import graph", "", "Bernardyn (*.bernardyn.h5);;HDF5 (*.h5)")
+        if not path:
+            return
+        try:
+            package = load_package(path)
+            if not package.workspace.graphs:
+                raise ValueError("the package contains no editable graphs")
+            dialog = GraphSelectionDialog(
+                [(graph.id, graph.title) for graph in package.workspace.graphs], self
+            )
+            if dialog.exec() != dialog.DialogCode.Accepted:
+                return
+            selected = dialog.selected_ids()
+            if not selected:
+                return
+            self.controller.import_from_package(path, selected)
+            self._rebuild_tabs()
+        except Exception as exc:
+            QMessageBox.critical(self, "Import graph", str(exc))
+
+    def _collect_artifacts(self):
+        previews = dict(self.controller.previews)
+        renderer_data = dict(self.controller.renderer_data)
+        for index in range(self.tabs.count()):
+            page = self.tabs.widget(index)
+            if isinstance(page, GraphPage):
+                try:
+                    update = page.current_renderer_config()
+                    if update:
+                        graph = self.controller.workspace.graph(page.graph_id)
+                        config = {**graph.renderer_config, **update}
+                        self.controller.update_graph(replace(graph, renderer_config=config))
+                    previews[page.graph_id] = page.capture_preview()
+                    data = page.renderer_data()
+                    if data:
+                        renderer_data[page.graph_id] = data
+                except Exception:
+                    log.exception("could not capture graph preview")
+        state = {
+            "window_state": base64.b64encode(self.saveState()).decode("ascii"),
+            "geometry": base64.b64encode(self.saveGeometry()).decode("ascii"),
+        }
+        self.controller.workspace.layout_state = json.dumps(state)
+        return previews, renderer_data
+
+    def _save(self) -> bool:
+        if self.controller.package_path is None:
+            return self._save_workspace_as()
+        return self._save_to(self.controller.package_path)
+
+    def _save_workspace_as(self) -> bool:
+        path, _ = QFileDialog.getSaveFileName(self, "Save workspace package", "workspace.bernardyn.h5", "Bernardyn (*.bernardyn.h5)")
+        return bool(path) and self._save_to(path)
+
+    def _save_graph(self) -> bool:
+        graph = self._current_graph()
+        if graph is None:
+            return False
+        path, _ = QFileDialog.getSaveFileName(self, "Save graph package", f"{graph.title}.bernardyn.h5", "Bernardyn (*.bernardyn.h5)")
+        return bool(path) and self._save_to(path, graph_ids=[graph.id])
+
+    def _save_to(self, path, graph_ids=None) -> bool:
+        try:
+            previews, renderer_data = self._collect_artifacts()
+            saved = self.controller.save(
+                path, graph_ids=graph_ids, previews=previews, renderer_data=renderer_data
+            )
+            self.statusBar().showMessage(f"Saved {saved.name}", 5000)
+            return True
+        except Exception as exc:
+            QMessageBox.critical(self, "Save package", str(exc))
+            return False
+
+    def _export_image(self) -> None:
+        page = self._current_page()
+        if not isinstance(page, GraphPage):
+            return
+        graph = self._current_graph()
+        is_3d = bool(graph and graph.renderer_id.startswith("opengl"))
+        filter_value = "Images (*.png *.jpg *.jpeg)" if is_3d else "Images (*.png *.jpg *.jpeg *.svg)"
+        path, _ = QFileDialog.getSaveFileName(self, "Export graph image", "graph.png", filter_value)
+        if path:
+            try:
+                page.save_image(path)
+            except Exception as exc:
+                QMessageBox.critical(self, "Export image", str(exc))
+
+    def _copy_graph(self) -> None:
+        page = self._current_page()
+        if isinstance(page, GraphPage):
+            page.copy_to_clipboard()
+
+    def _export_csv(self) -> None:
+        page = self._current_page()
+        if not isinstance(page, GraphPage):
+            return
+        path, _ = QFileDialog.getSaveFileName(self, "Export displayed data", "graph.csv", "CSV (*.csv)")
+        if path:
+            try:
+                page.export_csv(path)
+            except Exception as exc:
+                QMessageBox.critical(self, "Export data", str(exc))
+
+    def _export_itx(self) -> None:
+        page = self._current_page()
+        if not isinstance(page, GraphPage):
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export displayed data", "graph.itx", "Igor Text (*.itx)"
+        )
+        if path:
+            try:
+                page.export_itx(path)
+            except Exception as exc:
+                QMessageBox.critical(self, "Export data", str(exc))
+
+    def _export_h5xp(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(self, "Export canonical data to Igor", "bernardyn_data.h5xp", "Igor HDF5 experiment (*.h5xp)")
+        if path:
+            try:
+                export_datasets_to_h5xp(path, self.controller.workspace)
+            except Exception as exc:
+                QMessageBox.critical(self, "Igor export", str(exc))
+
+    def _recompute_graph(self) -> None:
+        graph = self._current_graph()
+        if graph is None:
+            return
+        try:
+            self.controller.recompute_graph(graph.id)
+            self._render_graph(graph.id)
+            self._sync_inspector()
+        except Exception as exc:
+            QMessageBox.warning(self, "Recompute graph", str(exc))
+
+    def _apply_series_preset(self, preset: str) -> None:
+        graph = self._current_graph()
+        if graph is None:
+            return
+        rainbow = (
+            (230, 25, 75, 255),
+            (245, 130, 48, 255),
+            (255, 225, 25, 255),
+            (60, 180, 75, 255),
+            (0, 130, 200, 255),
+            (145, 30, 180, 255),
+        )
+        bw_lines = ("solid", "dash", "dot", "dash-dot")
+        changed = []
+        for index, series in enumerate(graph.series):
+            if preset == "bw":
+                style = replace(
+                    series.style,
+                    color=(0, 0, 0, 255),
+                    line_style=bw_lines[index % len(bw_lines)],
+                )
+            else:
+                colors = rainbow if preset == "rainbow" else PALETTE
+                style = replace(series.style, color=colors[index % len(colors)])
+            changed.append(replace(series, style=style))
+        after = graph.replace_series(changed)
+        self.undo_stack.push(GraphEditCommand(self, graph, after, False, "Apply series preset"))
+
+    def _template_folder(self) -> Path:
+        root = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppDataLocation)
+        folder = Path(root) / "templates"
+        folder.mkdir(parents=True, exist_ok=True)
+        return folder
+
+    def _save_template(self) -> None:
+        graph = self._current_graph()
+        if graph is None:
+            return
+        name, ok = QInputDialog.getText(self, "Save template", "Template name:", text=graph.title)
+        if not ok or not name.strip():
+            return
+        safe = "".join(char if char.isalnum() or char in "-_ " else "_" for char in name).strip()
+        save_template(self._template_folder() / safe, graph, name.strip())
+
+    def _choose_template(self, title: str) -> Path | None:
+        templates = sorted(self._template_folder().glob("*.bernardyn-template.json"))
+        if not templates:
+            QMessageBox.information(self, title, "No saved templates are available.")
+            return None
+        labels = [path.stem.replace(".bernardyn-template", "") for path in templates]
+        selected, ok = QInputDialog.getItem(self, title, "Template:", labels, 0, False)
+        if not ok:
+            return None
+        return templates[labels.index(selected)]
+
+    def _apply_template(self) -> None:
+        graph = self._current_graph()
+        path = self._choose_template("Apply template")
+        if graph is None or path is None:
+            return
+        after = apply_template(graph, load_template(path))
+        self.undo_stack.push(GraphEditCommand(self, graph, after, True, "Apply graph template"))
+
+    def _delete_template(self) -> None:
+        path = self._choose_template("Delete template")
+        if path is not None and QMessageBox.question(self, "Delete template", f"Delete {path.name}?") == QMessageBox.StandardButton.Yes:
+            path.unlink()
+
+    def _restore_layout(self) -> None:
+        if not self.controller.workspace.layout_state:
+            return
+        try:
+            state = json.loads(self.controller.workspace.layout_state)
+            self.restoreState(base64.b64decode(state["window_state"]))
+            self.restoreGeometry(base64.b64decode(state["geometry"]))
+        except Exception:
+            log.warning("could not restore saved window layout", exc_info=True)
+
+    def _confirm_discard(self) -> bool:
+        if not self.controller.workspace.dirty:
+            return True
+        answer = QMessageBox.question(
+            self,
+            "Unsaved changes",
+            "Save the current workspace before continuing?",
+            QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
+        )
+        if answer == QMessageBox.StandardButton.Cancel:
+            return False
+        if answer == QMessageBox.StandardButton.Save:
+            return self._save()
+        return True
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        for worker in self._workers:
+            worker.cancelled = True
+        if self._confirm_discard():
+            event.accept()
+        else:
+            event.ignore()

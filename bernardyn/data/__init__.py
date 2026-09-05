@@ -1,5 +1,5 @@
-"""Data loading layer for Bernardyn."""
+"""Compatibility namespace; use :mod:`bernardyn.io.sources`."""
 
-from bernardyn.data.loader import Loader, get_loader
+from bernardyn.io.sources import ScatteringLocation, ScatteringRecord, builtin_sources
 
-__all__ = ["Loader", "get_loader"]
+__all__ = ["ScatteringLocation", "ScatteringRecord", "builtin_sources"]

@@ -1,19 +1,8 @@
-"""Main entry point for Bernardyn."""
+"""Backward-compatible module entry point."""
 
-import sys
-from PySide6.QtWidgets import QApplication
+from __future__ import annotations
 
-from bernardyn.gui.main_window import MainWindow
-
-
-def main():
-    """Run the Bernardyn application."""
-    app = QApplication(sys.argv)
-    app.setApplicationName("Bernardyn")
-    window = MainWindow()
-    window.show()
-    sys.exit(app.exec())
-
+from bernardyn.app import main
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

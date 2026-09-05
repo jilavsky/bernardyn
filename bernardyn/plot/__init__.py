@@ -1,5 +1,5 @@
-"""Plotting engine layer for Bernardyn."""
+"""Compatibility namespace; use :mod:`bernardyn.core.transforms`."""
 
-from bernardyn.plot.plot_engine import PlotEngine, get_plotter
+from bernardyn.core.transforms import TransformRegistry, builtin_transforms, resolve_series
 
-__all__ = ["PlotEngine", "get_plotter"]
+__all__ = ["TransformRegistry", "builtin_transforms", "resolve_series"]

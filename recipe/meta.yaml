@@ -1,0 +1,43 @@
+{% set name = "bernardyn" %}
+{% set version = "1.0.0b1" %}
+
+package:
+  name: {{ name|lower }}
+  version: {{ version }}
+
+source:
+  path: ..
+
+build:
+  noarch: python
+  number: 0
+  script: {{ PYTHON }} -m pip install . -vv --no-deps --no-build-isolation
+  entry_points:
+    - bernardyn = bernardyn.app:main
+    - bernardyn-doctor = bernardyn.diagnostics:main
+
+requirements:
+  host:
+    - python >=3.10,<3.14
+    - pip
+    - setuptools >=77
+  run:
+    - python >=3.10,<3.14
+    - numpy >=2
+    - h5py >=3
+    - pyside6
+    - pyqtgraph >=0.13
+    - pyopengl >=3.1.7
+    - pyirena >=1.1.0b12,<2
+
+test:
+  imports:
+    - bernardyn
+  commands:
+    - bernardyn-doctor --json
+
+about:
+  home: https://github.com/jilavsky/Bernardyn
+  license: MIT
+  license_file: LICENSE
+  summary: Publication-oriented plotting workbench for small-angle scattering data

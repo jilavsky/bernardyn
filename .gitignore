@@ -48,3 +48,6 @@ conda-envs/
 dist/
 *.tar.gz
 *.whl
+
+# User graph/workspace packages
+*.bernardyn.h5

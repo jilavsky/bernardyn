@@ -1,9 +1,5 @@
-"""Template management layer for Bernardyn.
+"""Data-free graph-template support."""
 
-Provides save/load/rename/delete operations for plot templates,
-stored as JSON files in the user's template directory.
-"""
+from bernardyn.template.graph_templates import apply_template, load_template, save_template
 
-from bernardyn.template.manager import TemplateManager, get_default_manager
-
-__all__ = ["TemplateManager", "get_default_manager"]
+__all__ = ["apply_template", "load_template", "save_template"]

@@ -1,8 +1,5 @@
-# Bernardyn dependencies
-# Use with: pip install -r requirements.txt
-# Or create conda env then: pip install -r requirements.txt
-
-PySide6>=6.6.0
-pyqtgraph>=0.13.0
-numpy>=1.26.0
-h5py>=3.10.0
+# Prefer `pip install -e .`; this file mirrors the runtime constraints.
+numpy>=2
+h5py>=3
+PyOpenGL>=3.1.7
+pyirena[qtplot]>=1.1.0b12,<2

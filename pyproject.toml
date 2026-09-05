@@ -1,62 +1,66 @@
 [build-system]
-requires = ["setuptools>=68.0", "wheel"]
+requires = ["setuptools>=77.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "Bernardyn"
-version = "0.1.0"
-description = "Scientific data analysis and visualization tool"
+name = "bernardyn"
+version = "1.0.0b1"
+description = "Publication-oriented plotting workbench for small-angle scattering data"
 readme = "README.md"
-requires-python = ">=3.10"
-license = {text = "MIT"}
-authors = [
-    {name = "Bernardyn Contributors"},
-]
+requires-python = ">=3.10,<3.14"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{name = "Jan Ilavsky"}]
+keywords = ["SAXS", "SANS", "USAXS", "WAXS", "scattering", "visualization"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
-    "Topic :: Scientific/Engineering",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Physics",
 ]
 dependencies = [
-    "PySide6>=6.6.0",
-    "pyqtgraph>=0.13.0",
-    "numpy>=1.26.0",
-    "h5py>=3.10.0",
+    "numpy>=2.0",
+    "h5py>=3.0",
+    "PyOpenGL>=3.1.7",
+    "pyirena[qtplot]>=1.1.0b12,<2",
 ]
 
 [project.optional-dependencies]
-dev = [
-    "pytest>=7.4.0",
-    "pytest-qt>=4.2.0",
-    "black>=23.0.0",
-    "ruff>=0.1.0",
-]
-docs = [
-    "sphinx>=7.0.0",
-    "sphinx-rtd-theme>=1.3.0",
-]
+dev = ["pytest>=7", "pytest-cov", "pytest-qt>=4.2", "ruff", "build", "twine"]
 
 [project.urls]
 Homepage = "https://github.com/jilavsky/Bernardyn"
-Documentation = "https://bernardyn.readthedocs.io"
 Repository = "https://github.com/jilavsky/Bernardyn"
 Issues = "https://github.com/jilavsky/Bernardyn/issues"
 
+[project.gui-scripts]
+bernardyn = "bernardyn.app:main"
+
+[project.scripts]
+bernardyn-doctor = "bernardyn.diagnostics:main"
+
 [tool.setuptools.packages.find]
 include = ["bernardyn*"]
+
+[tool.setuptools.package-data]
+bernardyn = ["schemas/*.md", "py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+markers = ["performance: performance acceptance targets for reference desktops"]
 
 [tool.ruff]
 target-version = "py310"
 line-length = 100
 
-[tool.black]
-line-length = 100
-target-version = ["py310"]
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+ignore = ["E501"]

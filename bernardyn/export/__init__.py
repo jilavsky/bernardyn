@@ -1,11 +1,6 @@
-"""Export layer for Bernardyn.
+"""Compatibility namespace for model-driven export functions."""
 
-Provides export functionality for plots in various formats:
-  - Image files (PNG, JPG, SVG)
-  - Clipboard copy (Ctrl/Cmd+C)
-  - Bernardyn container format (.hdf5) with embedded data + state
-"""
+from bernardyn.io.container import load_package, save_package
+from bernardyn.io.igor import export_datasets_to_h5xp
 
-from bernardyn.export.exporter import Exporter, ExportDispatcher, get_default_dispatcher
-
-__all__ = ["Exporter", "ExportDispatcher", "get_default_dispatcher"]
+__all__ = ["export_datasets_to_h5xp", "load_package", "save_package"]

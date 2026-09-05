@@ -1,0 +1,372 @@
+"""Publication-oriented two-dimensional PyQtGraph renderer."""
+
+from __future__ import annotations
+
+import csv
+import math
+from dataclasses import replace
+from pathlib import Path
+from typing import Mapping
+
+import numpy as np
+import pyqtgraph as pg
+import pyqtgraph.exporters
+from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QRect, QRectF, QSize, Qt
+from PySide6.QtGui import QColor, QFont, QPainter
+from PySide6.QtSvg import QSvgGenerator
+from PySide6.QtWidgets import QApplication
+
+from bernardyn.core.models import AnnotationKind, GraphDocument, PlotSeries, SeriesStyle
+
+LINE_STYLES = {
+    "none": Qt.PenStyle.NoPen,
+    "solid": Qt.PenStyle.SolidLine,
+    "dash": Qt.PenStyle.DashLine,
+    "dot": Qt.PenStyle.DotLine,
+    "dash-dot": Qt.PenStyle.DashDotLine,
+}
+
+
+def _color(value: tuple[int, int, int, int], opacity: float = 1.0) -> QColor:
+    red, green, blue, alpha = value
+    return QColor(red, green, blue, round(alpha * opacity))
+
+
+def _pen(style: SeriesStyle):
+    if style.line_style == "none" or style.line_width <= 0:
+        return None
+    return pg.mkPen(
+        _color(style.color, style.opacity),
+        width=style.line_width,
+        style=LINE_STYLES.get(style.line_style, Qt.PenStyle.SolidLine),
+    )
+
+
+def _coordinate(values: np.ndarray, logarithmic: bool) -> np.ndarray:
+    return np.log10(values) if logarithmic else values
+
+
+class Plot2DWidget(pg.PlotWidget):
+    renderer_id = "plot2d"
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent=parent, background="w")
+        self.setAntialiasing(True)
+        self.getPlotItem().setMenuEnabled(True)
+        self._graph: GraphDocument | None = None
+        self._snapshots: dict[str, PlotSeries] = {}
+        self._legend = None
+        self._curve_items: dict[str, pg.PlotDataItem] = {}
+        self._error_items: dict[str, pg.ErrorBarItem] = {}
+
+    def render(self, graph: GraphDocument, snapshots: Mapping[str, PlotSeries]) -> None:
+        self._graph = graph
+        self._snapshots = dict(snapshots)
+        plot = self.getPlotItem()
+        plot.clear()
+        self._curve_items.clear()
+        self._error_items.clear()
+        if self._legend is not None:
+            try:
+                self._legend.scene().removeItem(self._legend)
+            except (AttributeError, RuntimeError):
+                pass
+            self._legend = None
+        self.setBackground(_color(graph.background))
+        plot.setTitle(
+            graph.title,
+            color=_color(graph.x_axis.color).name(),
+            **{
+                "font-size": f"{graph.typography.title_size}pt",
+                "font-family": graph.typography.family,
+            },
+        )
+        plot.setLabel(
+            "bottom",
+            graph.x_axis.label,
+            color=_color(graph.x_axis.color).name(),
+            **{
+                "font-size": f"{graph.typography.axis_label_size}pt",
+                "font-family": graph.typography.family,
+            },
+        )
+        plot.setLabel(
+            "left",
+            graph.y_axis.label,
+            color=_color(graph.y_axis.color).name(),
+            **{
+                "font-size": f"{graph.typography.axis_label_size}pt",
+                "font-family": graph.typography.family,
+            },
+        )
+        tick_font = QFont(graph.typography.family, graph.typography.tick_size)
+        for axis_name, spec in (("bottom", graph.x_axis), ("left", graph.y_axis)):
+            axis = plot.getAxis(axis_name)
+            axis.setTickFont(tick_font)
+            axis.setPen(pg.mkPen(_color(spec.color), width=spec.thickness))
+            axis.setTextPen(pg.mkPen(_color(spec.color)))
+        plot.showGrid(
+            x=graph.x_axis.grid_major,
+            y=graph.y_axis.grid_major,
+            alpha=0.25,
+        )
+        plot.setLogMode(x=graph.x_axis.log, y=graph.y_axis.log)
+        if graph.legend.visible:
+            offsets = {
+                "top-right": (-12, 12),
+                "top-left": (12, 12),
+                "bottom-right": (-12, -12),
+                "bottom-left": (12, -12),
+            }
+            self._legend = plot.addLegend(
+                offset=offsets.get(graph.legend.position, (-12, 12)),
+                colCount=graph.legend.columns,
+            )
+            self._legend.setLabelTextSize(f"{graph.typography.legend_size}pt")
+            if graph.legend.framed:
+                self._legend.setBrush(pg.mkBrush(255, 255, 255, 220))
+                self._legend.setPen(pg.mkPen(90, 90, 90))
+
+        for view in graph.series:
+            if not view.visible or view.id not in snapshots:
+                continue
+            snapshot = snapshots[view.id]
+            style = view.style
+            symbol = None if style.symbol in (None, "none") else style.symbol
+            item = pg.PlotDataItem(
+                snapshot.x,
+                snapshot.y,
+                name=snapshot.label,
+                pen=_pen(style),
+                symbol=symbol,
+                symbolSize=style.symbol_size,
+                symbolPen=pg.mkPen(_color(style.color, style.opacity)),
+                symbolBrush=pg.mkBrush(_color(style.color, style.opacity)),
+                connect="finite",
+            )
+            plot.addItem(item)
+            self._curve_items[view.id] = item
+            item.setDownsampling(auto=True, method="peak")
+            item.setClipToView(True)
+            if style.show_error_bars and (snapshot.dx is not None or snapshot.dy is not None):
+                error = self._add_error_bars(graph, snapshot, style)
+                if error is not None:
+                    self._error_items[view.id] = error
+        self._add_annotations(graph)
+        self._apply_ranges(graph)
+
+    def update(self, graph: GraphDocument, snapshots: Mapping[str, PlotSeries]) -> None:
+        if not self._can_update_style_only(graph, snapshots):
+            self.render(graph, snapshots)
+            return
+        self._graph = graph
+        self._snapshots = dict(snapshots)
+        for view in graph.series:
+            item = self._curve_items[view.id]
+            style = view.style
+            symbol = None if style.symbol in (None, "none") else style.symbol
+            item.setPen(_pen(style))
+            item.setSymbol(symbol)
+            item.setSymbolSize(style.symbol_size)
+            item.setSymbolPen(pg.mkPen(_color(style.color, style.opacity)))
+            item.setSymbolBrush(pg.mkBrush(_color(style.color, style.opacity)))
+            error = self._error_items.get(view.id)
+            if error is not None:
+                error.setOpts(
+                    pen=pg.mkPen(_color(style.error_color), width=style.error_width)
+                )
+
+    def _can_update_style_only(
+        self, graph: GraphDocument, snapshots: Mapping[str, PlotSeries]
+    ) -> bool:
+        previous = self._graph
+        if previous is None or set(snapshots) != set(self._snapshots):
+            return False
+        if any(snapshots[key] is not self._snapshots[key] for key in snapshots):
+            return False
+        if replace(previous, series=()) != replace(graph, series=()):
+            return False
+        if len(previous.series) != len(graph.series):
+            return False
+        for old, new in zip(previous.series, graph.series):
+            if replace(old, style=new.style) != new:
+                return False
+            if old.style.show_error_bars != new.style.show_error_bars:
+                return False
+            if new.id not in self._curve_items:
+                return False
+        return True
+
+    def _add_error_bars(
+        self, graph: GraphDocument, snapshot: PlotSeries, style: SeriesStyle
+    ) -> pg.ErrorBarItem | None:
+        x = _coordinate(snapshot.x, graph.x_axis.log)
+        y = _coordinate(snapshot.y, graph.y_axis.log)
+        options: dict[str, np.ndarray | float] = {"x": x, "y": y, "beam": 0.0}
+        valid = np.isfinite(x) & np.isfinite(y)
+        if snapshot.dy is not None:
+            if graph.y_axis.log:
+                upper = snapshot.y + snapshot.dy
+                lower = snapshot.y - snapshot.dy
+                valid &= (upper > 0) & (lower > 0)
+                options["top"] = np.log10(upper) - y
+                options["bottom"] = y - np.log10(lower)
+            else:
+                options["top"] = snapshot.dy
+                options["bottom"] = snapshot.dy
+        if snapshot.dx is not None:
+            if graph.x_axis.log:
+                right = snapshot.x + snapshot.dx
+                left = snapshot.x - snapshot.dx
+                valid &= (right > 0) & (left > 0)
+                options["right"] = np.log10(right) - x
+                options["left"] = x - np.log10(left)
+            else:
+                options["right"] = snapshot.dx
+                options["left"] = snapshot.dx
+        for key, value in tuple(options.items()):
+            if isinstance(value, np.ndarray):
+                options[key] = value[valid]
+        if not np.any(valid):
+            return None
+        error = pg.ErrorBarItem(
+            **options,
+            pen=pg.mkPen(_color(style.error_color), width=style.error_width),
+        )
+        self.getPlotItem().addItem(error)
+        return error
+
+    def _add_annotations(self, graph: GraphDocument) -> None:
+        plot = self.getPlotItem()
+        for annotation in graph.annotations:
+            color = _color(annotation.color)
+            x, y = annotation.position
+            x = math.log10(x) if graph.x_axis.log and x > 0 else x
+            y = math.log10(y) if graph.y_axis.log and y > 0 else y
+            if annotation.kind is AnnotationKind.TEXT:
+                item = pg.TextItem(annotation.text, color=color, anchor=(0, 1))
+                item.setFont(QFont(graph.typography.family, annotation.font_size))
+                item.setPos(x, y)
+                item.setZValue(annotation.z_order)
+                plot.addItem(item)
+            elif annotation.kind is AnnotationKind.HLINE:
+                plot.addItem(
+                    pg.InfiniteLine(
+                        pos=y,
+                        angle=0,
+                        pen=pg.mkPen(color, width=annotation.line_width),
+                        movable=False,
+                    )
+                )
+            elif annotation.kind is AnnotationKind.VLINE:
+                plot.addItem(
+                    pg.InfiniteLine(
+                        pos=x,
+                        angle=90,
+                        pen=pg.mkPen(color, width=annotation.line_width),
+                        movable=False,
+                    )
+                )
+            elif annotation.kind is AnnotationKind.ARROW and annotation.end is not None:
+                end_x, end_y = annotation.end
+                end_x = math.log10(end_x) if graph.x_axis.log and end_x > 0 else end_x
+                end_y = math.log10(end_y) if graph.y_axis.log and end_y > 0 else end_y
+                plot.addItem(
+                    pg.PlotCurveItem(
+                        [x, end_x],
+                        [y, end_y],
+                        pen=pg.mkPen(color, width=annotation.line_width),
+                    )
+                )
+                angle = math.degrees(math.atan2(end_y - y, end_x - x))
+                arrow = pg.ArrowItem(
+                    pos=(end_x, end_y), angle=180 - angle, brush=color, pen=color
+                )
+                arrow.setZValue(annotation.z_order)
+                plot.addItem(arrow)
+
+    def _apply_ranges(self, graph: GraphDocument) -> None:
+        plot = self.getPlotItem()
+        plot.enableAutoRange(axis="x", enable=graph.x_axis.auto_range)
+        plot.enableAutoRange(axis="y", enable=graph.y_axis.auto_range)
+        if not graph.x_axis.auto_range and graph.x_axis.minimum is not None and graph.x_axis.maximum is not None:
+            low, high = graph.x_axis.minimum, graph.x_axis.maximum
+            if graph.x_axis.log and low > 0 and high > 0:
+                low, high = math.log10(low), math.log10(high)
+                plot.setXRange(low, high, padding=0)
+            elif not graph.x_axis.log:
+                plot.setXRange(low, high, padding=0)
+        if not graph.y_axis.auto_range and graph.y_axis.minimum is not None and graph.y_axis.maximum is not None:
+            low, high = graph.y_axis.minimum, graph.y_axis.maximum
+            if graph.y_axis.log and low > 0 and high > 0:
+                low, high = math.log10(low), math.log10(high)
+                plot.setYRange(low, high, padding=0)
+            elif not graph.y_axis.log:
+                plot.setYRange(low, high, padding=0)
+
+    def capture_preview(self, width: int = 1200) -> bytes:
+        exporter = pyqtgraph.exporters.ImageExporter(self.getPlotItem())
+        exporter.parameters()["width"] = width
+        image = exporter.export(toBytes=True)
+        data = QByteArray()
+        buffer = QBuffer(data)
+        buffer.open(QIODevice.OpenModeFlag.WriteOnly)
+        image.save(buffer, "PNG")
+        return bytes(data)
+
+    capture_snapshot = capture_preview
+
+    def save_image(self, path: str | Path, width: int | None = None) -> Path:
+        destination = Path(path)
+        if destination.suffix.lower() == ".svg":
+            size = QSize(
+                self._graph.width_px if self._graph else 1600,
+                self._graph.height_px if self._graph else 1000,
+            )
+            generator = QSvgGenerator()
+            generator.setFileName(str(destination))
+            generator.setSize(size)
+            generator.setViewBox(QRect(0, 0, size.width(), size.height()))
+            generator.setResolution(self._graph.dpi if self._graph else 300)
+            generator.setTitle(self._graph.title if self._graph else "Bernardyn graph")
+            painter = QPainter(generator)
+            try:
+                self.scene().render(
+                    painter,
+                    QRectF(0, 0, size.width(), size.height()),
+                    self.scene().sceneRect(),
+                )
+            finally:
+                painter.end()
+            return destination
+        exporter = pyqtgraph.exporters.ImageExporter(self.getPlotItem())
+        exporter.parameters()["width"] = width or (self._graph.width_px if self._graph else 1600)
+        image = exporter.export(toBytes=True)
+        dpi = self._graph.dpi if self._graph else 300
+        image.setDotsPerMeterX(round(dpi / 0.0254))
+        image.setDotsPerMeterY(round(dpi / 0.0254))
+        image.save(str(destination))
+        return destination
+
+    def copy_to_clipboard(self) -> None:
+        exporter = pyqtgraph.exporters.ImageExporter(self.getPlotItem())
+        exporter.parameters()["width"] = self._graph.width_px if self._graph else 1600
+        QApplication.clipboard().setImage(exporter.export(toBytes=True))
+
+    def export_csv(self, path: str | Path) -> Path:
+        destination = Path(path)
+        with destination.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.writer(handle)
+            writer.writerow(["series", "x", "y", "dx", "dy"])
+            for snapshot in self._snapshots.values():
+                for index, (x, y) in enumerate(zip(snapshot.x, snapshot.y)):
+                    writer.writerow(
+                        [
+                            snapshot.label,
+                            f"{x:.17g}",
+                            f"{y:.17g}",
+                            "" if snapshot.dx is None else f"{snapshot.dx[index]:.17g}",
+                            "" if snapshot.dy is None else f"{snapshot.dy[index]:.17g}",
+                        ]
+                    )
+        return destination
