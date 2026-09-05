@@ -2,6 +2,7 @@ from dataclasses import replace
 
 import numpy as np
 import pytest
+from PySide6.QtCore import Qt
 
 from bernardyn.core.models import Dataset, GraphDocument
 from bernardyn.gui.dialogs import DataFileSelectorDialog, LocationDialog
@@ -49,7 +50,23 @@ def test_folder_selector_uses_pyirena_style_type_filter_and_sort(qapp, tmp_path)
     assert make_file_matcher("20C|notes")("sample_20C_01.h5")
     assert make_file_matcher("20C|notes")("notes.txt")
     assert not make_file_matcher("20C|notes")("sample_30C_02.h5")
-    dialog = DataFileSelectorDialog(tmp_path)
+    def discover(path):
+        return [
+            ScatteringLocation(
+                path=path,
+                adapter_id="hdf5",
+                internal_path="entry/blank/sasdata",
+                display_name=f"{path.name}: blank",
+            ),
+            ScatteringLocation(
+                path=path,
+                adapter_id="hdf5",
+                internal_path="entry/sample/sasdata",
+                display_name=f"{path.name}: sample",
+            ),
+        ]
+
+    dialog = DataFileSelectorDialog(tmp_path, discover)
     dialog.filter.setText("20C")
     visible = [
         dialog.list.item(index).text()
@@ -59,7 +76,42 @@ def test_folder_selector_uses_pyirena_style_type_filter_and_sort(qapp, tmp_path)
     assert visible == ["sample_20C_01.h5"]
     dialog._select_all_visible()
     assert [path.name for path in dialog.selected_paths()] == ["sample_20C_01.h5"]
+    dialog.file_list.setCurrentRow(0)
+    assert dialog.data_list.count() == 2
+    assert all(
+        dialog.data_list.item(index).checkState() == Qt.CheckState.Unchecked
+        for index in range(dialog.data_list.count())
+    )
+    dialog.data_list.item(1).setCheckState(Qt.CheckState.Checked)
+    assert [location.display_name for location in dialog.selected_locations()] == [
+        "sample_20C_01.h5: sample"
+    ]
+    dialog.filter.clear()
+    dialog.file_list.setCurrentRow(1)
+    assert dialog.data_list.item(1).checkState() == Qt.CheckState.Checked
     dialog.close()
+
+
+def test_active_graph_dataset_list_removes_series_and_preserves_catalog(qapp):
+    window = MainWindow()
+    first = Dataset(q=[1, 2], intensity=[3, 4], label="first")
+    second = Dataset(q=[1, 2], intensity=[5, 6], label="second")
+    window.controller.add_dataset(first)
+    window.controller.add_dataset(second)
+    window._refresh_dataset_list()
+    first_item = window.dataset_list.takeItem(0)
+    window.dataset_list.insertItem(1, first_item)
+    window._dataset_list_reordered()
+    assert [series.dataset_id for series in window.controller.workspace.graphs[0].series] == [
+        second.id,
+        first.id,
+    ]
+    window.dataset_list.setCurrentRow(0)
+    window._remove_datasets()
+    assert len(window.controller.workspace.graphs[0].series) == 1
+    assert {first.id, second.id} <= set(window.controller.workspace.datasets)
+    window.controller.workspace.dirty = False
+    window.close()
 
 
 def test_2d_page_renders_and_exports_png_and_svg(qapp, tmp_path):
@@ -103,6 +155,22 @@ def test_2d_auto_range_is_calculated_once_not_left_in_live_feedback(qapp):
     for _ in range(10):
         qapp.processEvents()
     assert page.renderer.getPlotItem().vb.viewRange() == initial_range
+    window.controller.workspace.dirty = False
+    window.close()
+
+
+def test_2d_auto_range_includes_new_data_outside_previous_view(qapp):
+    window = MainWindow()
+    window.controller.add_dataset(Dataset(q=[0.001, 0.01], intensity=[100, 10]))
+    graph = window.controller.workspace.graphs[0]
+    window._render_graph(graph.id)
+    window.controller.add_dataset(Dataset(q=[10, 100], intensity=[2, 1]))
+    window._render_graph(graph.id)
+    page = window.tabs.currentWidget()
+    assert isinstance(page, GraphPage)
+    x_range = page.renderer.getPlotItem().vb.viewRange()[0]
+    # Log10(100) is 2. The second series must be visible despite clip-to-view.
+    assert x_range[1] >= 2
     window.controller.workspace.dirty = False
     window.close()
 

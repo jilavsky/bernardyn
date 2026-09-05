@@ -295,17 +295,12 @@ class Plot2DWidget(pg.PlotWidget):
         plot = self.getPlotItem()
         view_box = plot.getViewBox()
         view_box.disableAutoRange()
-        bounds = view_box.childrenBoundingRect()
-        x_range = None
-        y_range = None
-        if not bounds.isNull():
-            if graph.x_axis.auto_range:
-                x_range = (bounds.left(), bounds.right())
-            if graph.y_axis.auto_range:
-                y_range = (bounds.top(), bounds.bottom())
+        x_range, y_range = self._resolved_bounds(graph)
+        if not graph.x_axis.auto_range:
+            x_range = None
+        if not graph.y_axis.auto_range:
+            y_range = None
         if x_range is not None or y_range is not None:
-            # Coordinates are already in PyQtGraph's log-space when a log
-            # axis is enabled, so no extra conversion is needed here.
             view_box.setRange(xRange=x_range, yRange=y_range, padding=0.02)
         if not graph.x_axis.auto_range and graph.x_axis.minimum is not None and graph.x_axis.maximum is not None:
             low, high = graph.x_axis.minimum, graph.x_axis.maximum
@@ -321,6 +316,35 @@ class Plot2DWidget(pg.PlotWidget):
                 plot.setYRange(low, high, padding=0)
             elif not graph.y_axis.log:
                 plot.setYRange(low, high, padding=0)
+
+    def _resolved_bounds(
+        self, graph: GraphDocument
+    ) -> tuple[tuple[float, float] | None, tuple[float, float] | None]:
+        """Bounds from complete snapshots, independent of view clipping."""
+        x_values: list[np.ndarray] = []
+        y_values: list[np.ndarray] = []
+        for view in graph.series:
+            if not view.visible or (snapshot := self._snapshots.get(view.id)) is None:
+                continue
+            with np.errstate(divide="ignore", invalid="ignore"):
+                x = _coordinate(snapshot.x, graph.x_axis.log)
+                y = _coordinate(snapshot.y, graph.y_axis.log)
+            valid = np.isfinite(x) & np.isfinite(y)
+            if np.any(valid):
+                x_values.append(x[valid])
+                y_values.append(y[valid])
+
+        def span(values: list[np.ndarray]) -> tuple[float, float] | None:
+            if not values:
+                return None
+            low = min(float(np.min(value)) for value in values)
+            high = max(float(np.max(value)) for value in values)
+            if low == high:
+                padding = max(abs(low) * 0.01, 1.0)
+                return (low - padding, high + padding)
+            return (low, high)
+
+        return span(x_values), span(y_values)
 
     def capture_preview(self, width: int = 1200) -> bytes:
         exporter = pyqtgraph.exporters.ImageExporter(self.getPlotItem())

@@ -66,6 +66,25 @@ def _attrs(obj: h5py.Group | h5py.Dataset) -> dict[str, Any]:
     return {str(key): _decode(value) for key, value in obj.attrs.items()}
 
 
+def _q_unit_metadata(path: Path, internal_path: str | None) -> dict[str, Any]:
+    """Report a simple Q-unit hint while browsing, without reading arrays."""
+    if not internal_path:
+        return {}
+    try:
+        with h5py.File(path, "r") as handle:
+            group = handle[internal_path]
+            if not isinstance(group, h5py.Group):
+                return {}
+            names = {key.lower(): key for key in group.keys()}
+            q_name = next((names[key] for key in ("q", "qvec", "q_vector") if key in names), None)
+            if q_name is None or not isinstance(group[q_name], h5py.Dataset):
+                return {}
+            unit = _decode(group[q_name].attrs.get("units"))
+            return {"q_unit_missing": not bool(str(unit or "").strip()), "q_unit": unit}
+    except (OSError, KeyError):
+        return {}
+
+
 def _pyirena_fit_metadata(path: Path, variant: str) -> dict[str, Any]:
     if variant == "slit-smeared":
         return {}
@@ -263,7 +282,11 @@ class HDF5SourceAdapter:
                     internal_path=item.internal_path,
                     display_name=item.display_name,
                     variant=item.variant,
-                    metadata={**dict(item.metadata), "discovery_index": index},
+                    metadata={
+                        **dict(item.metadata),
+                        "discovery_index": index,
+                        **_q_unit_metadata(path, item.internal_path),
+                    },
                 )
                 for index, item in enumerate(discovered_locations)
             ]
@@ -289,7 +312,11 @@ class HDF5SourceAdapter:
                 internal_path=str(item["path"]),
                 display_name=f"{path.name}: {item.get('name', item['path'])}",
                 variant="slit-smeared" if "smr" in str(item["path"]).lower() else "default",
-                metadata={"entry": item.get("entry"), "name": item.get("name")},
+                metadata={
+                    "entry": item.get("entry"),
+                    "name": item.get("name"),
+                    **_q_unit_metadata(path, str(item["path"])),
+                },
             )
             for item in discovered
         ]
@@ -318,16 +345,23 @@ class HDF5SourceAdapter:
             )
             metadata = dict(record.metadata)
             metadata.update(_pyirena_fit_metadata(location.path, location.variant))
+            if location.metadata.get("q_unit_missing"):
+                metadata["q_unit_assumed"] = q_unit
+                provenance = {**dict(record.provenance), "q_unit_assumed": q_unit}
+                record_q_unit = q_unit
+            else:
+                provenance = record.provenance
+                record_q_unit = record.q_unit
             return ScatteringRecord(
                 q=record.q,
                 intensity=record.intensity,
                 uncertainty=record.uncertainty,
                 dq=record.dq,
-                q_unit=record.q_unit,
+                q_unit=record_q_unit,
                 intensity_unit=record.intensity_unit,
                 label=record.label,
                 metadata=metadata,
-                provenance=record.provenance,
+                provenance=provenance,
                 source_fingerprint=record.source_fingerprint,
             )
         except (ImportError, ValueError):
@@ -343,11 +377,11 @@ class HDF5SourceAdapter:
         except ImportError:
             result = None
         if result is not None:
-            return self._record_from_mapping(location, result)
-        return self._load_direct(location)
+            return self._record_from_mapping(location, result, q_unit=q_unit)
+        return self._load_direct(location, q_unit=q_unit)
 
     def _record_from_mapping(
-        self, location: ScatteringLocation, result: Mapping[str, Any]
+        self, location: ScatteringLocation, result: Mapping[str, Any], *, q_unit: str
     ) -> ScatteringRecord:
         q = result.get("Q")
         intensity = result.get("Intensity", result.get("I"))
@@ -371,7 +405,7 @@ class HDF5SourceAdapter:
             intensity=np.asarray(intensity, dtype=float),
             uncertainty=None if result.get("Error") is None else np.asarray(result["Error"], dtype=float),
             dq=None if result.get("dQ") is None else np.asarray(result["dQ"], dtype=float),
-            q_unit=str(_decode(q_attrs.get("units", "1/angstrom"))),
+            q_unit=str(_decode(q_attrs.get("units")) or q_unit),
             intensity_unit=str(_decode(i_attrs.get("units", "1/cm"))),
             label=location.display_name,
             metadata=metadata,
@@ -385,7 +419,7 @@ class HDF5SourceAdapter:
             source_fingerprint=_fingerprint(location.path),
         )
 
-    def _load_direct(self, location: ScatteringLocation) -> ScatteringRecord:
+    def _load_direct(self, location: ScatteringLocation, *, q_unit: str) -> ScatteringRecord:
         with h5py.File(location.path, "r") as handle:
             if not location.internal_path or location.internal_path not in handle:
                 raise ValueError(f"HDF5 group not found: {location.internal_path}")
@@ -419,7 +453,7 @@ class HDF5SourceAdapter:
                 intensity=intensity,
                 uncertainty=uncertainty,
                 dq=dq,
-                q_unit=str(_decode(q_dataset.attrs.get("units", "1/angstrom"))),
+                q_unit=str(_decode(q_dataset.attrs.get("units")) or q_unit),
                 intensity_unit=str(_decode(i_dataset.attrs.get("units", "1/cm"))),
                 label=location.display_name,
                 metadata={

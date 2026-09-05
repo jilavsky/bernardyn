@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
-from typing import Mapping
+from typing import Callable, Mapping
 
 import h5py
 from PySide6.QtCore import Qt
@@ -46,29 +47,55 @@ from bernardyn.io.sources import ScatteringLocation
 
 
 class DataFileSelectorDialog(QDialog):
-    """File-first folder browser modeled on PyIrena's Data Selector."""
+    """Choose files and their plottable 1-D data without dialog cascades."""
 
-    def __init__(self, folder: Path, parent=None) -> None:
+    def __init__(
+        self,
+        folder: Path,
+        discover: Callable[[Path], list[ScatteringLocation]],
+        preferences: Mapping[str, object] | None = None,
+        parent=None,
+    ) -> None:
         super().__init__(parent)
         self.folder = Path(folder)
+        self._discover = discover
+        stored = dict(preferences or {})
+        self._profiles: dict[str, list[int]] = {
+            str(key): [int(index) for index in value]
+            for key, value in dict(stored.get("dataset_profiles", {})).items()
+            if isinstance(value, list)
+        }
+        self._locations: dict[Path, list[ScatteringLocation]] = {}
+        self._errors: dict[Path, str] = {}
+        self._current_path: Path | None = None
+        self._syncing = False
         self.setWindowTitle(f"Select scattering data — {self.folder.name}")
         self.file_type = QComboBox(self)
         for label, value in FILE_TYPE_CHOICES:
             self.file_type.addItem(label, value)
-        self.file_type.currentIndexChanged.connect(self._refresh)
         self.sort = QComboBox(self)
         self.sort.addItems(SORT_LABELS)
-        self.sort.setCurrentIndex(DEFAULT_SORT_INDEX)
         self.sort.setToolTip(SORT_TOOLTIP)
-        self.sort.currentIndexChanged.connect(self._refresh)
         self.filter = QLineEdit(self)
         self.filter.setPlaceholderText(FILTER_PLACEHOLDER)
         self.filter.setToolTip(FILTER_TOOLTIP)
-        self.filter.textChanged.connect(self._apply_filter)
         self.count = QLabel(self)
-        self.list = QListWidget(self)
-        self.list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        self.list.itemDoubleClicked.connect(self._accept_selection)
+        self.file_list = QListWidget(self)
+        self.file_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.file_list.currentItemChanged.connect(self._file_selected)
+        self.file_list.itemDoubleClicked.connect(self._accept_selection)
+        # Kept as an alias for small integrations written during beta development.
+        self.list = self.file_list
+        self.data_list = QListWidget(self)
+        self.data_list.itemChanged.connect(self._data_selection_changed)
+        self.data_list.setToolTip("Check one or more 1-D data sets to load from the selected file.")
+        self.data_status = QLabel("Select a file to inspect its 1-D data.", self)
+        self.data_status.setWordWrap(True)
+        self.q_unit = QComboBox(self)
+        self.q_unit.addItems(["1/A", "1/nm", "1/pm", "1/um", "1/mm"])
+        self.error_fraction = QDoubleSpinBox(self)
+        self.error_fraction.setRange(0.0001, 100.0)
+        self.error_fraction.setDecimals(3)
         controls = QHBoxLayout()
         controls.addWidget(QLabel("File type:"))
         controls.addWidget(self.file_type)
@@ -88,13 +115,47 @@ class DataFileSelectorDialog(QDialog):
         buttons.accepted.connect(self._accept_selection)
         buttons.rejected.connect(self.reject)
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel(f"Folder: {self.folder}\nSelect files to load their primary SAS data."))
+        layout.addWidget(
+            QLabel(
+                f"Folder: {self.folder}\n"
+                "Select files on the left, then select the desired 1-D data on the right. "
+                "Choices are reused for files with the same layout."
+            )
+        )
         layout.addLayout(controls)
         layout.addLayout(filter_row)
-        layout.addWidget(self.list, 1)
+        lists = QHBoxLayout()
+        left = QVBoxLayout()
+        left.addWidget(QLabel("Files"))
+        left.addWidget(self.file_list, 1)
+        right = QVBoxLayout()
+        right.addWidget(QLabel("1-D data in selected file"))
+        right.addWidget(self.data_list, 1)
+        right.addWidget(self.data_status)
+        lists.addLayout(left, 1)
+        lists.addLayout(right, 1)
+        layout.addLayout(lists, 1)
         layout.addWidget(self.count)
+        options = QHBoxLayout()
+        options.addWidget(QLabel("Q unit when missing:"))
+        options.addWidget(self.q_unit)
+        options.addSpacing(12)
+        options.addWidget(QLabel("Missing intensity uncertainty (%):"))
+        options.addWidget(self.error_fraction)
+        options.addStretch()
+        layout.addLayout(options)
         layout.addWidget(buttons)
-        self.resize(760, 560)
+        self.file_type.setCurrentIndex(
+            max(0, self.file_type.findData(stored.get("file_type", "all")))
+        )
+        self.sort.setCurrentIndex(int(stored.get("sort_index", DEFAULT_SORT_INDEX)))
+        self.filter.setText(str(stored.get("filter", "")))
+        self.q_unit.setCurrentIndex(max(0, self.q_unit.findText(str(stored.get("q_unit", "1/A")))))
+        self.error_fraction.setValue(float(stored.get("error_percent", 5.0)))
+        self.file_type.currentIndexChanged.connect(self._refresh)
+        self.sort.currentIndexChanged.connect(self._refresh)
+        self.filter.textChanged.connect(self._apply_filter)
+        self.resize(1040, 580)
         self._refresh()
 
     def _refresh(self) -> None:
@@ -102,38 +163,146 @@ class DataFileSelectorDialog(QDialog):
             files_in_folder(self.folder, str(self.file_type.currentData())),
             self.sort.currentIndex(),
         )
-        self.list.clear()
+        self.file_list.clear()
         for path in paths:
             item = QListWidgetItem(path.name)
             item.setData(Qt.ItemDataRole.UserRole, path)
             item.setToolTip(str(path))
-            self.list.addItem(item)
+            self.file_list.addItem(item)
         self._apply_filter()
 
     def _apply_filter(self) -> None:
         matches = make_file_matcher(self.filter.text())
         visible = 0
-        for index in range(self.list.count()):
-            item = self.list.item(index)
+        for index in range(self.file_list.count()):
+            item = self.file_list.item(index)
             hidden = not matches(item.text())
             item.setHidden(hidden)
             visible += not hidden
-        self.count.setText(f"Showing {visible} of {self.list.count()} files")
+        self.count.setText(f"Showing {visible} of {self.file_list.count()} files")
+
+    def _select_all_visible(self) -> None:
+        self.file_list.clearSelection()
+        for index in range(self.file_list.count()):
+            item = self.file_list.item(index)
+            item.setSelected(not item.isHidden())
+
+    def selected_paths(self) -> list[Path]:
+        return [Path(item.data(Qt.ItemDataRole.UserRole)) for item in self.file_list.selectedItems()]
+
+    @staticmethod
+    def _profile_key(locations: list[ScatteringLocation]) -> str:
+        # NXcanSAS commonly stores curves as ``entry/<sample>/sasdata``. The
+        # sample component changes from file to file, whereas the leaf group,
+        # curve order, and variant identify the practical loading layout.
+        shape = []
+        for location in locations:
+            parts = tuple(part for part in (location.internal_path or "").split("/") if part)
+            shape.append((parts[-1] if parts else "", location.variant))
+        return json.dumps(shape, separators=(",", ":"))
+
+    def _locations_for(self, path: Path) -> list[ScatteringLocation]:
+        if path not in self._locations and path not in self._errors:
+            try:
+                self._locations[path] = self._discover(path)
+            except Exception as exc:
+                self._errors[path] = str(exc)
+        return self._locations.get(path, [])
+
+    def _file_selected(self, current: QListWidgetItem | None, previous=None) -> None:
+        self._current_path = None if current is None else Path(current.data(Qt.ItemDataRole.UserRole))
+        self._populate_data_list()
+
+    def _populate_data_list(self) -> None:
+        self._syncing = True
+        self.data_list.clear()
+        path = self._current_path
+        if path is None:
+            self.data_status.setText("Select a file to inspect its 1-D data.")
+            self._syncing = False
+            return
+        locations = self._locations_for(path)
+        if not locations:
+            self.data_status.setText(self._errors.get(path, "No plottable 1-D data was found."))
+            self._syncing = False
+            return
+        profile = self._profiles.get(self._profile_key(locations))
+        checked = set(profile if profile is not None else ([0] if len(locations) == 1 else []))
+        for index, location in enumerate(locations):
+            path_text = location.internal_path or "top-level data"
+            unit_note = " — Q unit missing" if location.metadata.get("q_unit_missing") else ""
+            item = QListWidgetItem(f"{location.display_name}  [{path_text}]{unit_note}")
+            item.setData(Qt.ItemDataRole.UserRole, index)
+            item.setToolTip(f"{location.display_name}\nHDF5 path: {path_text}")
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Checked if index in checked else Qt.CheckState.Unchecked)
+            self.data_list.addItem(item)
+        instruction = "Select one or more data sets to load."
+        if profile is not None:
+            instruction += " Reused from a previous file with this layout."
+        elif len(locations) > 1:
+            instruction += " No automatic choice is made for a multi-data file."
+        self.data_status.setText(instruction)
+        self._syncing = False
+
+    def _data_selection_changed(self, item: QListWidgetItem) -> None:
+        if self._syncing or self._current_path is None:
+            return
+        locations = self._locations_for(self._current_path)
+        if not locations:
+            return
+        selected = [
+            int(self.data_list.item(index).data(Qt.ItemDataRole.UserRole))
+            for index in range(self.data_list.count())
+            if self.data_list.item(index).checkState() == Qt.CheckState.Checked
+        ]
+        self._profiles[self._profile_key(locations)] = selected
+
+    def selected_locations(self) -> list[ScatteringLocation]:
+        selected: list[ScatteringLocation] = []
+        for path in self.selected_paths():
+            locations = self._locations_for(path)
+            profile = self._profiles.get(self._profile_key(locations), [])
+            selected.extend(
+                location for index, location in enumerate(locations) if index in profile
+            )
+        return selected
+
+    def unresolved_paths(self) -> list[Path]:
+        unresolved = []
+        for path in self.selected_paths():
+            locations = self._locations_for(path)
+            if len(locations) > 1 and not self._profiles.get(self._profile_key(locations), []):
+                unresolved.append(path)
+        return unresolved
+
+    def preferences(self) -> dict[str, object]:
+        return {
+            "file_type": self.file_type.currentData(),
+            "sort_index": self.sort.currentIndex(),
+            "filter": self.filter.text(),
+            "q_unit": self.q_unit.currentText(),
+            "error_percent": self.error_fraction.value(),
+            "dataset_profiles": self._profiles,
+        }
 
     def _accept_selection(self) -> None:
         if not self.selected_paths():
             QMessageBox.information(self, "Select scattering data", "Select one or more files to load.")
             return
+        unresolved = self.unresolved_paths()
+        if unresolved:
+            QMessageBox.information(
+                self,
+                "Choose 1-D data",
+                "Select a representative file and check the data sets to load before continuing.\n\n"
+                f"No selection has been made for: {unresolved[0].name}",
+            )
+            return
+        if not self.selected_locations():
+            QMessageBox.information(self, "Choose 1-D data", "No data sets are selected for loading.")
+            return
         self.accept()
-
-    def _select_all_visible(self) -> None:
-        self.list.clearSelection()
-        for index in range(self.list.count()):
-            item = self.list.item(index)
-            item.setSelected(not item.isHidden())
-
-    def selected_paths(self) -> list[Path]:
-        return [Path(item.data(Qt.ItemDataRole.UserRole)) for item in self.list.selectedItems()]
 
 
 class LocationDialog(QDialog):

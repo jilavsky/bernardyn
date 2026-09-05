@@ -8,7 +8,7 @@ import logging
 from dataclasses import replace
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QRunnable, QStandardPaths, Qt, QThreadPool, Signal
+from PySide6.QtCore import QObject, QRunnable, QStandardPaths, Qt, QThreadPool, QTimer, Signal
 from PySide6.QtGui import QAction, QCloseEvent, QKeySequence, QUndoCommand, QUndoStack
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -39,6 +39,7 @@ from bernardyn.gui.inspector import InspectorWidget
 from bernardyn.io.container import load_package
 from bernardyn.io.igor import export_datasets_to_h5xp
 from bernardyn.renderers import builtin_renderers
+from bernardyn.state import UserState
 from bernardyn.template.graph_templates import apply_template, load_template, save_template
 
 log = logging.getLogger(__name__)
@@ -118,6 +119,9 @@ class MainWindow(QMainWindow):
         self.renderers = builtin_renderers()
         self.thread_pool = QThreadPool.globalInstance()
         self._workers: set[SourceLoadWorker] = set()
+        self._pending_graph_renders: set[str] = set()
+        self._refreshing_dataset_list = False
+        self.user_state = UserState()
         self.undo_stack = QUndoStack(self)
         self.tabs = QTabWidget(self)
         self.tabs.setTabsClosable(True)
@@ -126,7 +130,13 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(self.tabs)
         self.dataset_list = QListWidget(self)
         self.dataset_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        self.dataset_list.itemDoubleClicked.connect(lambda _: self._add_existing_dataset())
+        self.dataset_list.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+        self.dataset_list.setDefaultDropAction(Qt.DropAction.MoveAction)
+        self.dataset_list.setDragEnabled(True)
+        self.dataset_list.setAcceptDrops(True)
+        self.dataset_list.model().rowsMoved.connect(
+            lambda *_: QTimer.singleShot(0, self._dataset_list_reordered)
+        )
         self.inspector = InspectorWidget(self.controller.transforms, self)
         self.inspector.graphChanged.connect(self._queue_graph_change)
         self.inspector.transformRequested.connect(self._set_transform)
@@ -137,23 +147,20 @@ class MainWindow(QMainWindow):
         self._rebuild_tabs()
 
     def _build_docks(self) -> None:
-        data_dock = QDockWidget("Data catalog", self)
+        data_dock = QDockWidget("Datasets in active graph", self)
         data_widget = QWidget(data_dock)
         layout = QVBoxLayout(data_widget)
         open_button = QPushButton("Open data…", data_widget)
         open_button.clicked.connect(self._open_data)
         open_folder_button = QPushButton("Open folder…", data_widget)
         open_folder_button.clicked.connect(self._open_folder)
-        add_button = QPushButton("Add selected to graph", data_widget)
-        add_button.clicked.connect(self._add_existing_dataset)
-        remove_button = QPushButton("Remove selected", data_widget)
+        remove_button = QPushButton("Remove selected from graph", data_widget)
         remove_button.clicked.connect(self._remove_datasets)
         cancel_button = QPushButton("Cancel loading", data_widget)
         cancel_button.clicked.connect(self._cancel_loading)
         layout.addWidget(open_button)
         layout.addWidget(open_folder_button)
         layout.addWidget(self.dataset_list, 1)
-        layout.addWidget(add_button)
         layout.addWidget(remove_button)
         layout.addWidget(cancel_button)
         data_dock.setWidget(data_widget)
@@ -298,6 +305,7 @@ class MainWindow(QMainWindow):
         page = self.tabs.widget(index)
         if isinstance(page, GraphPage):
             self.controller.workspace.active_graph_id = page.graph_id
+        self._refresh_dataset_list()
         self._sync_inspector()
 
     def _rebuild_tabs(self) -> None:
@@ -375,6 +383,7 @@ class MainWindow(QMainWindow):
     def _commit_graph(self, graph: GraphDocument, recompute: bool) -> None:
         self.controller.update_graph(graph, recompute=recompute)
         self._render_graph(graph.id)
+        self._refresh_dataset_list()
         self._sync_inspector()
 
     def _set_transform(self, transform_id: str) -> None:
@@ -420,7 +429,7 @@ class MainWindow(QMainWindow):
         paths, _ = QFileDialog.getOpenFileNames(
             self,
             "Open scattering data",
-            "",
+            str(self.user_state.get("last_data_folder", "")),
             "Scattering data (*.h5 *.hdf5 *.hdf *.nxs *.dat *.txt *.csv);;All files (*)",
         )
         if not paths:
@@ -432,20 +441,39 @@ class MainWindow(QMainWindow):
         paths, _ = QFileDialog.getOpenFileNames(
             self,
             "Browse scattering data sets",
-            "",
+            str(self.user_state.get("last_data_folder", "")),
             "Scattering data (*.h5 *.hdf5 *.hdf *.nxs *.dat *.txt *.csv);;All files (*)",
         )
         if paths:
             self._open_data_paths([Path(value) for value in paths], use_preferred=False)
 
     def _open_folder(self) -> None:
-        selected = QFileDialog.getExistingDirectory(self, "Open folder containing scattering data")
+        selected = QFileDialog.getExistingDirectory(
+            self,
+            "Open folder containing scattering data",
+            str(self.user_state.get("last_data_folder", "")),
+        )
         if not selected:
             return
-        dialog = DataFileSelectorDialog(Path(selected), self)
+        dialog = DataFileSelectorDialog(
+            Path(selected),
+            self.controller.sources.discover_path,
+            self.user_state.get("data_selector", {}),
+            self,
+        )
         if dialog.exec() != dialog.DialogCode.Accepted:
             return
-        self._open_data_paths(dialog.selected_paths(), use_preferred=True)
+        self.user_state.set("last_data_folder", selected)
+        self.user_state.set("data_selector", dialog.preferences())
+        self.user_state.save()
+        graph = self._current_graph()
+        if graph is not None:
+            self._queue_locations(
+                dialog.selected_locations(),
+                graph.id,
+                dialog.q_unit.currentText(),
+                dialog.error_fraction.value() / 100.0,
+            )
 
     def _open_data_paths(self, paths: list[Path], *, use_preferred: bool) -> None:
         graph = self._current_graph()
@@ -473,7 +501,7 @@ class MainWindow(QMainWindow):
             if not ok:
                 return
             error_fraction = error_percent / 100.0
-        started_workers = False
+        locations_to_load = []
         for path in paths:
             try:
                 locations = self.controller.sources.discover_path(path)
@@ -493,17 +521,31 @@ class MainWindow(QMainWindow):
                 if dialog.exec() != dialog.DialogCode.Accepted:
                     continue
                 locations = dialog.selected()
-            for location in locations:
-                worker = SourceLoadWorker(
-                    self.controller, location, graph.id, q_unit, error_fraction
-                )
-                worker.signals.loaded.connect(self._source_loaded)
-                worker.signals.failed.connect(lambda message: QMessageBox.warning(self, "Load error", message))
-                worker.signals.finished.connect(self._worker_finished)
-                self._workers.add(worker)
-                self.thread_pool.start(worker)
-                started_workers = True
-        if started_workers:
+            locations_to_load.extend(locations)
+        if paths:
+            self.user_state.set("last_data_folder", str(paths[0].parent))
+            self.user_state.save()
+        self._queue_locations(locations_to_load, graph.id, q_unit, error_fraction)
+
+    def _queue_locations(
+        self,
+        locations,
+        graph_id: str,
+        q_unit: str,
+        error_fraction: float,
+    ) -> None:
+        for location in locations:
+            worker = SourceLoadWorker(
+                self.controller, location, graph_id, q_unit, error_fraction
+            )
+            worker.signals.loaded.connect(self._source_loaded)
+            worker.signals.failed.connect(
+                lambda message: QMessageBox.warning(self, "Load error", message)
+            )
+            worker.signals.finished.connect(self._worker_finished)
+            self._workers.add(worker)
+            self.thread_pool.start(worker)
+        if locations:
             self.statusBar().showMessage("Loading data…")
 
     def _source_loaded(self, record, graph_id: str) -> None:
@@ -512,9 +554,7 @@ class MainWindow(QMainWindow):
                 graph_id = self.controller.workspace.active_graph_id
             dataset = record.to_dataset()
             self.controller.add_dataset(dataset, graph_id=graph_id)
-            self._refresh_dataset_list()
-            self._render_graph(graph_id)
-            self._sync_inspector()
+            self._pending_graph_renders.add(graph_id)
             self.statusBar().showMessage(f"Loaded {dataset.label}", 5000)
         except Exception as exc:
             QMessageBox.warning(self, "Load error", str(exc))
@@ -522,6 +562,11 @@ class MainWindow(QMainWindow):
     def _worker_finished(self, worker) -> None:
         self._workers.discard(worker)
         if not self._workers:
+            for graph_id in self._pending_graph_renders:
+                self._render_graph(graph_id)
+            self._pending_graph_renders.clear()
+            self._refresh_dataset_list()
+            self._sync_inspector()
             self.statusBar().showMessage("Ready", 2000)
 
     def _cancel_loading(self) -> None:
@@ -530,46 +575,54 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Cancelling data loads…", 3000)
 
     def _refresh_dataset_list(self) -> None:
-        selected = {item.data(Qt.ItemDataRole.UserRole) for item in self.dataset_list.selectedItems()}
-        self.dataset_list.clear()
-        for dataset in self.controller.workspace.datasets.values():
-            item = QListWidgetItem(f"{dataset.label}  ({len(dataset.q):,} points)")
-            item.setData(Qt.ItemDataRole.UserRole, dataset.id)
-            self.dataset_list.addItem(item)
-            if dataset.id in selected:
-                item.setSelected(True)
-
-    def _add_existing_dataset(self) -> None:
         graph = self._current_graph()
-        if graph is None:
+        selected = {item.data(Qt.ItemDataRole.UserRole) for item in self.dataset_list.selectedItems()}
+        self._refreshing_dataset_list = True
+        try:
+            self.dataset_list.clear()
+            if graph is None:
+                return
+            for index, series in enumerate(graph.series, start=1):
+                dataset = self.controller.workspace.datasets[series.dataset_id]
+                item = QListWidgetItem(f"{index}. {dataset.label}  ({len(dataset.q):,} points)")
+                item.setData(Qt.ItemDataRole.UserRole, series.id)
+                item.setToolTip("Drag to change plot order. Select and remove to hide this data from the graph.")
+                self.dataset_list.addItem(item)
+                if series.id in selected:
+                    item.setSelected(True)
+        finally:
+            self._refreshing_dataset_list = False
+
+    def _remove_datasets(self) -> None:
+        graph = self._current_graph()
+        series_ids = {item.data(Qt.ItemDataRole.UserRole) for item in self.dataset_list.selectedItems()}
+        if graph is None or not series_ids:
             return
-        for item in self.dataset_list.selectedItems():
-            dataset = self.controller.workspace.datasets[item.data(Qt.ItemDataRole.UserRole)]
-            self.controller.add_dataset(dataset, graph_id=graph.id)
+        retained = tuple(series for series in graph.series if series.id not in series_ids)
+        self.controller.update_graph(replace(graph, series=retained), recompute=True)
+        self._refresh_dataset_list()
         self._render_graph(graph.id)
         self._sync_inspector()
 
-    def _remove_datasets(self) -> None:
-        ids = {item.data(Qt.ItemDataRole.UserRole) for item in self.dataset_list.selectedItems()}
-        if not ids:
+    def _dataset_list_reordered(self) -> None:
+        if self._refreshing_dataset_list:
             return
-        references = sum(
-            1 for graph in self.controller.workspace.graphs for series in graph.series if series.dataset_id in ids
+        graph = self._current_graph()
+        if graph is None:
+            return
+        order = [
+            self.dataset_list.item(index).data(Qt.ItemDataRole.UserRole)
+            for index in range(self.dataset_list.count())
+        ]
+        if set(order) != {series.id for series in graph.series}:
+            return
+        reordered = tuple(
+            next(series for series in graph.series if series.id == series_id) for series_id in order
         )
-        if references and QMessageBox.question(
-            self, "Remove datasets", f"Remove {len(ids)} dataset(s) and {references} graph reference(s)?"
-        ) != QMessageBox.StandardButton.Yes:
+        if reordered == graph.series:
             return
-        for graph in tuple(self.controller.workspace.graphs):
-            retained = tuple(series for series in graph.series if series.dataset_id not in ids)
-            if retained != graph.series:
-                self.controller.update_graph(replace(graph, series=retained), recompute=True)
-        for dataset_id in ids:
-            self.controller.workspace.datasets.pop(dataset_id, None)
-        self.controller.workspace.dirty = True
-        self._refresh_dataset_list()
-        for graph in self.controller.workspace.graphs:
-            self._render_graph(graph.id)
+        self.controller.update_graph(graph.replace_series(reordered), recompute=False)
+        self._render_graph(graph.id)
         self._sync_inspector()
 
     def _open_package(self) -> None:

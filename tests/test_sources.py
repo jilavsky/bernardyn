@@ -60,6 +60,20 @@ def test_source_registry_chooses_primary_non_smeared_curve(tmp_path):
     assert selected[0].variant == "default"
 
 
+def test_hdf5_missing_q_unit_uses_browser_choice(tmp_path):
+    path = tmp_path / "missing_unit.h5"
+    with h5py.File(path, "w") as handle:
+        group = handle.create_group("entry/data")
+        group.create_dataset("Q", data=[1.0, 2.0])
+        group.create_dataset("I", data=[10.0, 5.0])
+    adapter = HDF5SourceAdapter()
+    location = adapter.discover(path)[0]
+    assert location.metadata["q_unit_missing"]
+    dataset = adapter.load(location, q_unit="1/nm").to_dataset()
+    np.testing.assert_allclose(dataset.q, [0.1, 0.2])
+    assert dataset.provenance["q_unit_assumed"] == "1/nm"
+
+
 def test_record_normalizes_inverse_nanometres_to_inverse_angstroms():
     record = ScatteringRecord(
         q=np.array([1.0, 2.0]),
