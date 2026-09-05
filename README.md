@@ -26,9 +26,31 @@ The native schema is documented in
 ## Install and run
 
 Bernardyn targets Python 3.10–3.13 and shares its Qt plotting dependencies with
-PyIrena:
+PyIrena. For development, keep the `Bernardyn` and `pyirena` repositories next
+to each other and create the pinned Conda environment from the Bernardyn root:
 
 ```bash
+conda env create -f environment.yml
+conda activate bernardyn
+bernardyn-doctor
+bernardyn
+```
+
+The environment file installs both repositories in editable mode. If an older
+`bernardyn` environment already exists with Python 3.14, remove and recreate it:
+
+```bash
+conda deactivate
+conda env remove -n bernardyn
+conda env create -f environment.yml
+conda activate bernardyn
+```
+
+For an already compatible Python 3.10–3.13 environment, installation can also
+be performed manually:
+
+```bash
+python -m pip install -e "../pyirena[qtplot]"
 python -m pip install -e ".[dev]"
 bernardyn
 ```

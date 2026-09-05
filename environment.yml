@@ -1,0 +1,20 @@
+name: bernardyn
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  # Pin the minor version: Bernardyn supports 3.10-3.13, not Python 3.14.
+  - python=3.13
+  - pip>=24
+  - numpy>=2
+  - scipy>=1.8
+  - h5py>=3
+  # PyIrena excludes PySide 6.7 and 6.10; this range is Python 3.13 compatible.
+  - pyside6>=6.8,<6.10
+  - pyqtgraph>=0.13
+  - pyopengl>=3.1.7
+  - pip:
+      # The current Bernardyn beta uses the unreleased PyIrena shared API.
+      # Both repositories are expected to be sibling directories.
+      - -e ../pyirena[qtplot]
+      - -e .[dev]
