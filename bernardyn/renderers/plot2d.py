@@ -280,6 +280,15 @@ class Plot2DWidget(pg.PlotWidget):
 
     def _add_annotations(self, graph: GraphDocument) -> None:
         plot = self.getPlotItem()
+        # Annotations are plot-view overlays, not canvas decorations.  Keep
+        # them out of automatic range calculations and above every curve,
+        # error bar, legend, and the plot background.
+        overlay_z = 100_000
+
+        def add_overlay(item) -> None:
+            item.setZValue(overlay_z)
+            plot.addItem(item, ignoreBounds=True)
+
         for annotation in graph.annotations:
             color = _color(annotation.color)
             x, y = annotation.position
@@ -289,10 +298,9 @@ class Plot2DWidget(pg.PlotWidget):
                 item = pg.TextItem(annotation.text, color=color, anchor=(0, 1))
                 item.setFont(QFont(graph.typography.family, annotation.font_size))
                 item.setPos(x, y)
-                item.setZValue(annotation.z_order)
-                plot.addItem(item)
+                add_overlay(item)
             elif annotation.kind is AnnotationKind.HLINE:
-                plot.addItem(
+                add_overlay(
                     pg.InfiniteLine(
                         pos=y,
                         angle=0,
@@ -301,7 +309,7 @@ class Plot2DWidget(pg.PlotWidget):
                     )
                 )
             elif annotation.kind is AnnotationKind.VLINE:
-                plot.addItem(
+                add_overlay(
                     pg.InfiniteLine(
                         pos=x,
                         angle=90,
@@ -313,7 +321,7 @@ class Plot2DWidget(pg.PlotWidget):
                 end_x, end_y = annotation.end
                 end_x = math.log10(end_x) if graph.x_axis.log and end_x > 0 else end_x
                 end_y = math.log10(end_y) if graph.y_axis.log and end_y > 0 else end_y
-                plot.addItem(
+                add_overlay(
                     pg.PlotCurveItem(
                         [x, end_x],
                         [y, end_y],
@@ -324,8 +332,7 @@ class Plot2DWidget(pg.PlotWidget):
                 arrow = pg.ArrowItem(
                     pos=(end_x, end_y), angle=180 - angle, brush=color, pen=color
                 )
-                arrow.setZValue(annotation.z_order)
-                plot.addItem(arrow)
+                add_overlay(arrow)
 
     def _apply_ranges(self, graph: GraphDocument) -> None:
         plot = self.getPlotItem()

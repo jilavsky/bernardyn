@@ -212,7 +212,9 @@ def test_inspector_tabs_and_annotations_default_inside_data_and_render(qapp):
     window._render_graph(graph.id)
     page = window.tabs.currentWidget()
     assert isinstance(page, GraphPage)
-    assert any(isinstance(item, pg.TextItem) for item in page.renderer.getPlotItem().items)
+    text_items = [item for item in page.renderer.getPlotItem().items if isinstance(item, pg.TextItem)]
+    assert len(text_items) == 1
+    assert text_items[0].zValue() == 100_000
     window.controller.workspace.dirty = False
     window.close()
 
