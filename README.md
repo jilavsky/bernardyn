@@ -22,6 +22,8 @@ packages.
 
 The native schema is documented in
 [`bernardyn/schemas/graph-package-v1.md`](bernardyn/schemas/graph-package-v1.md).
+User-facing workflow and file-format documentation is in
+[`docs/`](docs/README.md).
 
 ## Install and run
 

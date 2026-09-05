@@ -13,7 +13,7 @@ dependencies:
   # QGraphicsItem.setParentItem silently fails in that release, so
   # ViewBox.addItem never parents plot items and every plot renders empty.
   # 6.9.0, 6.9.2 and 6.9.3 are fine.
-  - pyside6>=6.8,<6.10
+  - pyside6>=6.8,<6.10,!=6.9.1
   - pyqtgraph>=0.13.7
   - pyopengl>=3.1.7
   - pip:
