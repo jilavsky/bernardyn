@@ -87,6 +87,26 @@ def test_2d_page_renders_and_exports_png_and_svg(qapp, tmp_path):
     window.close()
 
 
+def test_2d_auto_range_is_calculated_once_not_left_in_live_feedback(qapp):
+    window = MainWindow()
+    window.controller.add_dataset(
+        Dataset(q=np.geomspace(0.001, 1, 10_000), intensity=np.geomspace(1e5, 1, 10_000))
+    )
+    graph = window.controller.workspace.graphs[0]
+    window._render_graph(graph.id)
+    page = window.tabs.currentWidget()
+    assert isinstance(page, GraphPage)
+    assert isinstance(page.renderer, Plot2DWidget)
+    qapp.processEvents()
+    initial_range = page.renderer.getPlotItem().vb.viewRange()
+    assert page.renderer.getPlotItem().vb.autoRangeEnabled() == [False, False]
+    for _ in range(10):
+        qapp.processEvents()
+    assert page.renderer.getPlotItem().vb.viewRange() == initial_range
+    window.controller.workspace.dirty = False
+    window.close()
+
+
 def test_2d_update_replaces_recomputed_snapshot_data(qapp):
     window = MainWindow()
     dataset = Dataset(q=[1, 2], intensity=[3, 4])

@@ -63,6 +63,12 @@ class Plot2DWidget(pg.PlotWidget):
         self._graph = graph
         self._snapshots = dict(snapshots)
         plot = self.getPlotItem()
+        # PlotDataItem clipping/downsampling is view-dependent. Leaving
+        # PyQtGraph's persistent auto-range enabled makes the view rescale
+        # against its newly clipped bounds, which can visibly oscillate.
+        # Bernardyn computes an automatic range once after the complete graph
+        # is installed instead; a later graph/data edit invokes render again.
+        plot.enableAutoRange(x=False, y=False)
         plot.clear()
         self._curve_items.clear()
         self._error_items.clear()
@@ -287,8 +293,20 @@ class Plot2DWidget(pg.PlotWidget):
 
     def _apply_ranges(self, graph: GraphDocument) -> None:
         plot = self.getPlotItem()
-        plot.enableAutoRange(axis="x", enable=graph.x_axis.auto_range)
-        plot.enableAutoRange(axis="y", enable=graph.y_axis.auto_range)
+        view_box = plot.getViewBox()
+        view_box.disableAutoRange()
+        bounds = view_box.childrenBoundingRect()
+        x_range = None
+        y_range = None
+        if not bounds.isNull():
+            if graph.x_axis.auto_range:
+                x_range = (bounds.left(), bounds.right())
+            if graph.y_axis.auto_range:
+                y_range = (bounds.top(), bounds.bottom())
+        if x_range is not None or y_range is not None:
+            # Coordinates are already in PyQtGraph's log-space when a log
+            # axis is enabled, so no extra conversion is needed here.
+            view_box.setRange(xRange=x_range, yRange=y_range, padding=0.02)
         if not graph.x_axis.auto_range and graph.x_axis.minimum is not None and graph.x_axis.maximum is not None:
             low, high = graph.x_axis.minimum, graph.x_axis.maximum
             if graph.x_axis.log and low > 0 and high > 0:
