@@ -9,16 +9,19 @@ import h5py
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QColorDialog,
     QComboBox,
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
     QFormLayout,
+    QHBoxLayout,
     QLabel,
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QMessageBox,
     QPushButton,
     QSpinBox,
     QTableWidget,
@@ -28,7 +31,109 @@ from PySide6.QtWidgets import (
 
 from bernardyn.core.models import Annotation, AnnotationKind
 from bernardyn.core.transforms import PlotTransform
+from bernardyn.io.file_browser import (
+    DEFAULT_SORT_INDEX,
+    FILE_TYPE_CHOICES,
+    FILTER_PLACEHOLDER,
+    FILTER_TOOLTIP,
+    SORT_LABELS,
+    SORT_TOOLTIP,
+    files_in_folder,
+    make_file_matcher,
+    sort_paths,
+)
 from bernardyn.io.sources import ScatteringLocation
+
+
+class DataFileSelectorDialog(QDialog):
+    """File-first folder browser modeled on PyIrena's Data Selector."""
+
+    def __init__(self, folder: Path, parent=None) -> None:
+        super().__init__(parent)
+        self.folder = Path(folder)
+        self.setWindowTitle(f"Select scattering data — {self.folder.name}")
+        self.file_type = QComboBox(self)
+        for label, value in FILE_TYPE_CHOICES:
+            self.file_type.addItem(label, value)
+        self.file_type.currentIndexChanged.connect(self._refresh)
+        self.sort = QComboBox(self)
+        self.sort.addItems(SORT_LABELS)
+        self.sort.setCurrentIndex(DEFAULT_SORT_INDEX)
+        self.sort.setToolTip(SORT_TOOLTIP)
+        self.sort.currentIndexChanged.connect(self._refresh)
+        self.filter = QLineEdit(self)
+        self.filter.setPlaceholderText(FILTER_PLACEHOLDER)
+        self.filter.setToolTip(FILTER_TOOLTIP)
+        self.filter.textChanged.connect(self._apply_filter)
+        self.count = QLabel(self)
+        self.list = QListWidget(self)
+        self.list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.list.itemDoubleClicked.connect(self._accept_selection)
+        controls = QHBoxLayout()
+        controls.addWidget(QLabel("File type:"))
+        controls.addWidget(self.file_type)
+        controls.addWidget(QLabel("Sort:"))
+        controls.addWidget(self.sort)
+        controls.addStretch()
+        filter_row = QHBoxLayout()
+        filter_row.addWidget(QLabel("Filter:"))
+        filter_row.addWidget(self.filter, 1)
+        select_all = QPushButton("Select all visible", self)
+        select_all.clicked.connect(self._select_all_visible)
+        filter_row.addWidget(select_all)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Open | QDialogButtonBox.StandardButton.Cancel,
+            parent=self,
+        )
+        buttons.accepted.connect(self._accept_selection)
+        buttons.rejected.connect(self.reject)
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel(f"Folder: {self.folder}\nSelect files to load their primary SAS data."))
+        layout.addLayout(controls)
+        layout.addLayout(filter_row)
+        layout.addWidget(self.list, 1)
+        layout.addWidget(self.count)
+        layout.addWidget(buttons)
+        self.resize(760, 560)
+        self._refresh()
+
+    def _refresh(self) -> None:
+        paths = sort_paths(
+            files_in_folder(self.folder, str(self.file_type.currentData())),
+            self.sort.currentIndex(),
+        )
+        self.list.clear()
+        for path in paths:
+            item = QListWidgetItem(path.name)
+            item.setData(Qt.ItemDataRole.UserRole, path)
+            item.setToolTip(str(path))
+            self.list.addItem(item)
+        self._apply_filter()
+
+    def _apply_filter(self) -> None:
+        matches = make_file_matcher(self.filter.text())
+        visible = 0
+        for index in range(self.list.count()):
+            item = self.list.item(index)
+            hidden = not matches(item.text())
+            item.setHidden(hidden)
+            visible += not hidden
+        self.count.setText(f"Showing {visible} of {self.list.count()} files")
+
+    def _accept_selection(self) -> None:
+        if not self.selected_paths():
+            QMessageBox.information(self, "Select scattering data", "Select one or more files to load.")
+            return
+        self.accept()
+
+    def _select_all_visible(self) -> None:
+        self.list.clearSelection()
+        for index in range(self.list.count()):
+            item = self.list.item(index)
+            item.setSelected(not item.isHidden())
+
+    def selected_paths(self) -> list[Path]:
+        return [Path(item.data(Qt.ItemDataRole.UserRole)) for item in self.list.selectedItems()]
 
 
 class LocationDialog(QDialog):

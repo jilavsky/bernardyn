@@ -46,6 +46,20 @@ def test_hdf5_source_discovers_multiple_groups_and_loads_units(tmp_path):
     assert record.q_unit == "1/angstrom"
 
 
+def test_source_registry_chooses_primary_non_smeared_curve(tmp_path):
+    path = tmp_path / "multi.h5"
+    with h5py.File(path, "w") as handle:
+        for name in ("entry/data", "entry/data_SMR"):
+            group = handle.create_group(name)
+            group.create_dataset("Q", data=[0.1, 0.2])
+            group.create_dataset("I", data=[10.0, 5.0])
+    registry = builtin_sources()
+    locations = registry.discover_path(path)
+    selected = registry.select_preferred_locations(locations)
+    assert len(selected) == 1
+    assert selected[0].variant == "default"
+
+
 def test_record_normalizes_inverse_nanometres_to_inverse_angstroms():
     record = ScatteringRecord(
         q=np.array([1.0, 2.0]),

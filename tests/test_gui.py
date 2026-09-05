@@ -1,13 +1,13 @@
 from dataclasses import replace
-from pathlib import Path
 
 import numpy as np
 import pytest
 
 from bernardyn.core.models import Dataset, GraphDocument
-from bernardyn.gui.dialogs import LocationDialog
+from bernardyn.gui.dialogs import DataFileSelectorDialog, LocationDialog
 from bernardyn.gui.graph_page import GraphPage
 from bernardyn.gui.main_window import MainWindow
+from bernardyn.io.file_browser import files_in_folder, make_file_matcher, sort_paths
 from bernardyn.io.sources import ScatteringLocation
 from bernardyn.renderers.opengl import OpenGLPlotWidget, opengl_available
 from bernardyn.renderers.plot2d import Plot2DWidget
@@ -32,19 +32,34 @@ def test_location_dialog_uses_qt_check_state_enums(qapp, tmp_path):
     dialog.close()
 
 
-def test_folder_discovery_finds_sources_and_skips_bernardyn_packages(qapp, tmp_path):
-    (tmp_path / "sample.h5").touch()
+def test_folder_selector_uses_pyirena_style_type_filter_and_sort(qapp, tmp_path):
+    (tmp_path / "sample_30C_02.h5").touch()
+    (tmp_path / "sample_20C_01.h5").touch()
     (tmp_path / "notes.txt").touch()
     (tmp_path / "archived.bernardyn.h5").touch()
     nested = tmp_path / "nested"
     nested.mkdir()
     (nested / "curve.dat").touch()
-    (nested / "ignore.pdf").touch()
-    assert [path.relative_to(tmp_path) for path in MainWindow._folder_data_files(tmp_path)] == [
-        Path("nested/curve.dat"),
-        Path("notes.txt"),
-        Path("sample.h5"),
+    assert {path.name for path in files_in_folder(tmp_path, "hdf5")} == {
+        "sample_30C_02.h5", "sample_20C_01.h5"
+    }
+    assert [path.name for path in sort_paths(files_in_folder(tmp_path, "hdf5"), 2)] == [
+        "sample_20C_01.h5", "sample_30C_02.h5"
     ]
+    assert make_file_matcher("20C|notes")("sample_20C_01.h5")
+    assert make_file_matcher("20C|notes")("notes.txt")
+    assert not make_file_matcher("20C|notes")("sample_30C_02.h5")
+    dialog = DataFileSelectorDialog(tmp_path)
+    dialog.filter.setText("20C")
+    visible = [
+        dialog.list.item(index).text()
+        for index in range(dialog.list.count())
+        if not dialog.list.item(index).isHidden()
+    ]
+    assert visible == ["sample_20C_01.h5"]
+    dialog._select_all_visible()
+    assert [path.name for path in dialog.selected_paths()] == ["sample_20C_01.h5"]
+    dialog.close()
 
 
 def test_2d_page_renders_and_exports_png_and_svg(qapp, tmp_path):

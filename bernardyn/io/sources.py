@@ -185,6 +185,27 @@ class SourceRegistry(Registry[SourceAdapter]):
         resolved = Path(path).expanduser().resolve()
         return self.adapter_for(resolved).discover(resolved)
 
+    def preferred_locations(self, path: str | Path) -> list[ScatteringLocation]:
+        """Return the normal plotting choice for one source file.
+
+        PyIrena orders NXcanSAS discovery with the NeXus ``@default`` SASdata
+        first and suppresses slit-smeared siblings for its normal data path.
+        Bernardyn follows that convention for file-list loading: one main
+        curve per file, no picker dialog.  Explicit dataset browsing remains
+        available for the occasional non-default curve.
+        """
+        return self.select_preferred_locations(self.discover_path(path))
+
+    @staticmethod
+    def select_preferred_locations(
+        locations: list[ScatteringLocation],
+    ) -> list[ScatteringLocation]:
+        """Select the normal primary curve from already-discovered locations."""
+        if not locations:
+            return []
+        non_smeared = [location for location in locations if location.variant != "slit-smeared"]
+        return [non_smeared[0] if non_smeared else locations[0]]
+
     def load_location(self, location: ScatteringLocation, **options: Any) -> ScatteringRecord:
         return self.get(location.adapter_id).load(location, **options)
 
@@ -242,9 +263,9 @@ class HDF5SourceAdapter:
                     internal_path=item.internal_path,
                     display_name=item.display_name,
                     variant=item.variant,
-                    metadata=item.metadata,
+                    metadata={**dict(item.metadata), "discovery_index": index},
                 )
-                for item in discovered_locations
+                for index, item in enumerate(discovered_locations)
             ]
         except (ImportError, ValueError):
             pass

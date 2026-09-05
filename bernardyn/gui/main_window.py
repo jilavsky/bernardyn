@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 from bernardyn.core.controller import PALETTE, ApplicationController
 from bernardyn.core.models import GraphDocument
 from bernardyn.gui.dialogs import (
+    DataFileSelectorDialog,
     GraphSelectionDialog,
     HDFMappingDialog,
     LocationDialog,
@@ -41,8 +42,6 @@ from bernardyn.renderers import builtin_renderers
 from bernardyn.template.graph_templates import apply_template, load_template, save_template
 
 log = logging.getLogger(__name__)
-
-DATA_FILE_SUFFIXES = frozenset({".h5", ".hdf5", ".hdf", ".nxs", ".dat", ".txt", ".csv"})
 
 
 def _metadata_number(value, key: str) -> float | None:
@@ -175,7 +174,8 @@ class MainWindow(QMainWindow):
     def _build_actions(self) -> None:
         self.new_workspace_action = self._action("New workspace", self._new_workspace, QKeySequence.StandardKey.New)
         self.open_data_action = self._action("Open data…", self._open_data, QKeySequence.StandardKey.Open)
-        self.open_folder_action = self._action("Open folder…", self._open_folder, "Ctrl+Shift+O")
+        self.open_folder_action = self._action("Open folder…", self._open_folder, "Ctrl+Shift+F")
+        self.browse_datasets_action = self._action("Browse data sets…", self._browse_datasets)
         self.workspace_properties_action = self._action(
             "Workspace properties…", self._workspace_properties
         )
@@ -214,7 +214,8 @@ class MainWindow(QMainWindow):
         file_menu = self.menuBar().addMenu("&File")
         for action in (
             self.new_workspace_action, self.workspace_properties_action,
-            self.open_data_action, self.open_folder_action, self.open_package_action,
+            self.open_data_action, self.open_folder_action, self.browse_datasets_action,
+            self.open_package_action,
             self.import_graph_action, None, self.save_action, self.save_as_action,
             self.save_graph_action, None, self.export_image_action, self.export_csv_action,
             self.export_itx_action, self.export_h5xp_action,
@@ -424,50 +425,54 @@ class MainWindow(QMainWindow):
         )
         if not paths:
             return
-        self._open_data_paths([Path(value) for value in paths])
+        self._open_data_paths([Path(value) for value in paths], use_preferred=True)
 
-    @staticmethod
-    def _folder_data_files(folder: Path) -> list[Path]:
-        """Return supported source files beneath *folder*, excluding Bernardyn packages."""
-        return sorted(
-            (
-                path
-                for path in folder.rglob("*")
-                if path.is_file()
-                and path.suffix.lower() in DATA_FILE_SUFFIXES
-                and not path.name.lower().endswith(".bernardyn.h5")
-            ),
-            key=lambda path: str(path).lower(),
+    def _browse_datasets(self) -> None:
+        """Explicitly choose non-default SASdata groups from individual files."""
+        paths, _ = QFileDialog.getOpenFileNames(
+            self,
+            "Browse scattering data sets",
+            "",
+            "Scattering data (*.h5 *.hdf5 *.hdf *.nxs *.dat *.txt *.csv);;All files (*)",
         )
+        if paths:
+            self._open_data_paths([Path(value) for value in paths], use_preferred=False)
 
     def _open_folder(self) -> None:
         selected = QFileDialog.getExistingDirectory(self, "Open folder containing scattering data")
         if not selected:
             return
-        paths = self._folder_data_files(Path(selected))
-        if not paths:
-            QMessageBox.information(
-                self,
-                "Open folder",
-                "No supported HDF5/NXcanSAS or text data files were found in this folder.",
-            )
+        dialog = DataFileSelectorDialog(Path(selected), self)
+        if dialog.exec() != dialog.DialogCode.Accepted:
             return
-        if len(paths) > 20:
-            answer = QMessageBox.question(
-                self,
-                "Open folder",
-                f"Found {len(paths)} supported data files. Load all of them?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.Yes,
-            )
-            if answer != QMessageBox.StandardButton.Yes:
-                return
-        self._open_data_paths(paths)
+        self._open_data_paths(dialog.selected_paths(), use_preferred=True)
 
-    def _open_data_paths(self, paths: list[Path]) -> None:
+    def _open_data_paths(self, paths: list[Path], *, use_preferred: bool) -> None:
         graph = self._current_graph()
         if graph is None:
             return
+        q_unit = "1/A"
+        error_fraction = 0.05
+        text_paths = [path for path in paths if path.suffix.lower() in (".dat", ".txt", ".csv")]
+        if text_paths:
+            q_unit, ok = QInputDialog.getItem(
+                self, "Text data Q unit", "Q unit for selected text data:",
+                ["1/A", "1/nm", "1/pm", "1/um", "1/mm"], 0, False,
+            )
+            if not ok:
+                return
+            error_percent, ok = QInputDialog.getDouble(
+                self,
+                "Missing text uncertainty",
+                "Synthesized intensity uncertainty for selected text data (%):",
+                5.0,
+                0.0001,
+                100.0,
+                3,
+            )
+            if not ok:
+                return
+            error_fraction = error_percent / 100.0
         started_workers = False
         for path in paths:
             try:
@@ -481,32 +486,13 @@ class MainWindow(QMainWindow):
                 else:
                     QMessageBox.warning(self, "Data discovery", str(exc))
                     continue
-            if len(locations) > 1:
+            if use_preferred:
+                locations = self.controller.sources.select_preferred_locations(locations)
+            elif len(locations) > 1:
                 dialog = LocationDialog(locations, self)
                 if dialog.exec() != dialog.DialogCode.Accepted:
                     continue
                 locations = dialog.selected()
-            q_unit = "1/A"
-            error_fraction = 0.05
-            if path.suffix.lower() in (".dat", ".txt", ".csv"):
-                q_unit, ok = QInputDialog.getItem(
-                    self, "Text data Q unit", f"Q unit for {path.name}:",
-                    ["1/A", "1/nm", "1/pm", "1/um", "1/mm"], 0, False,
-                )
-                if not ok:
-                    continue
-                error_percent, ok = QInputDialog.getDouble(
-                    self,
-                    "Missing text uncertainty",
-                    "Synthesized intensity uncertainty (%):",
-                    5.0,
-                    0.0001,
-                    100.0,
-                    3,
-                )
-                if not ok:
-                    continue
-                error_fraction = error_percent / 100.0
             for location in locations:
                 worker = SourceLoadWorker(
                     self.controller, location, graph.id, q_unit, error_fraction
