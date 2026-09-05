@@ -23,12 +23,13 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSpinBox,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from bernardyn.core.models import Dataset, GraphDocument, SeriesView
-from bernardyn.core.transforms import TransformRegistry
+from bernardyn.core.transforms import TransformRegistry, resolve_series
 from bernardyn.gui.dialogs import AnnotationDialog
 
 
@@ -46,10 +47,12 @@ class InspectorWidget(QScrollArea):
         content = QWidget(self)
         self.setWidget(content)
         layout = QVBoxLayout(content)
-        layout.addWidget(self._build_graph_group())
-        layout.addWidget(self._build_3d_group())
-        layout.addWidget(self._build_series_group())
-        layout.addWidget(self._build_annotation_group())
+        self.tabs = QTabWidget(content)
+        self.tabs.addTab(self._build_graph_group(), "Graph")
+        self._three_d_tab_index = self.tabs.addTab(self._build_3d_group(), "3D")
+        self.tabs.addTab(self._build_series_group(), "Datasets")
+        self.tabs.addTab(self._build_annotation_group(), "Annotations")
+        layout.addWidget(self.tabs, 1)
         self.warning = QLabel(self)
         self.warning.setWordWrap(True)
         self.warning.setStyleSheet("color: #9a6700")
@@ -420,6 +423,7 @@ class InspectorWidget(QScrollArea):
         )
         config = graph.renderer_config
         self.opengl_group.setVisible(graph.renderer_id.startswith("opengl"))
+        self.tabs.setTabVisible(self._three_d_tab_index, graph.renderer_id.startswith("opengl"))
         self.spacing_3d.setValue(float(config.get("spacing", 1.0)))
         self.normalization_3d.setCurrentIndex(
             max(0, self.normalization_3d.findData(config.get("normalization", "none")))
@@ -813,12 +817,59 @@ class InspectorWidget(QScrollArea):
     def _add_annotation(self) -> None:
         if self._graph is None:
             return
-        dialog = AnnotationDialog(parent=self)
+        position, end = self._annotation_defaults()
+        dialog = AnnotationDialog(default_position=position, default_end=end, parent=self)
         if dialog.exec() != dialog.DialogCode.Accepted:
             return
         graph = replace(self._graph, annotations=(*self._graph.annotations, dialog.value()))
         self._graph = graph
         self.graphChanged.emit(graph, False, "Add annotation")
+
+    def _annotation_defaults(self) -> tuple[tuple[float, float], tuple[float, float]]:
+        """Place a new annotation in the visible data region by default."""
+        assert self._graph is not None
+        graph = self._graph
+
+        def center(low: float, high: float, logarithmic: bool) -> float:
+            if logarithmic and low > 0 and high > 0:
+                return (low * high) ** 0.5
+            return (low + high) / 2
+
+        def start_end(low: float, high: float, logarithmic: bool) -> tuple[float, float]:
+            start = center(low, high, logarithmic)
+            if logarithmic and low > 0 and high > 0:
+                end = start * (high / start) ** 0.25
+            else:
+                end = start + (high - low) * 0.2
+            return start, end
+
+        x_limits = (graph.x_axis.minimum, graph.x_axis.maximum)
+        y_limits = (graph.y_axis.minimum, graph.y_axis.maximum)
+        if None not in x_limits and None not in y_limits:
+            x, end_x = start_end(float(x_limits[0]), float(x_limits[1]), graph.x_axis.log)
+            y, end_y = start_end(float(y_limits[0]), float(y_limits[1]), graph.y_axis.log)
+            return (x, y), (end_x, end_y)
+
+        x_values = []
+        y_values = []
+        for series in graph.series:
+            try:
+                snapshot = resolve_series(
+                    self._datasets[series.dataset_id],
+                    series,
+                    self.transforms,
+                    x_log=graph.x_axis.log,
+                    y_log=graph.y_axis.log,
+                )
+            except (KeyError, ValueError):
+                continue
+            x_values.extend(snapshot.x.tolist())
+            y_values.extend(snapshot.y.tolist())
+        if not x_values or not y_values:
+            return (1.0, 1.0), (2.0, 2.0)
+        x, end_x = start_end(min(x_values), max(x_values), graph.x_axis.log)
+        y, end_y = start_end(min(y_values), max(y_values), graph.y_axis.log)
+        return (x, y), (end_x, end_y)
 
     def _selected_annotation(self):
         item = self.annotations.currentItem()
@@ -831,7 +882,7 @@ class InspectorWidget(QScrollArea):
         annotation = self._selected_annotation()
         if annotation is None or self._graph is None:
             return
-        dialog = AnnotationDialog(annotation, self)
+        dialog = AnnotationDialog(annotation, parent=self)
         if dialog.exec() != dialog.DialogCode.Accepted:
             return
         replacement = dialog.value()

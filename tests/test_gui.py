@@ -1,17 +1,18 @@
 from dataclasses import replace
 
 import numpy as np
+import pyqtgraph as pg
 import pytest
 from PySide6.QtCore import Qt
 
-from bernardyn.core.models import Dataset, GraphDocument
+from bernardyn.core.models import Annotation, AnnotationKind, Dataset, GraphDocument
 from bernardyn.gui.dialogs import DataFileSelectorDialog, LocationDialog
 from bernardyn.gui.graph_page import GraphPage
 from bernardyn.gui.main_window import MainWindow
 from bernardyn.io.file_browser import files_in_folder, make_file_matcher, sort_paths
 from bernardyn.io.sources import ScatteringLocation
 from bernardyn.renderers.opengl import OpenGLPlotWidget, opengl_available
-from bernardyn.renderers.plot2d import Plot2DWidget
+from bernardyn.renderers.plot2d import Plot2DWidget, PublicationAxisItem
 
 
 def test_main_window_starts_with_independent_graph_model(qapp):
@@ -174,6 +175,43 @@ def test_2d_auto_range_includes_new_data_outside_previous_view(qapp):
     x_range = page.renderer.getPlotItem().vb.viewRange()[0]
     # Log10(100) is 2. The second series must be visible despite clip-to-view.
     assert x_range[1] >= 2
+    window.controller.workspace.dirty = False
+    window.close()
+
+
+def test_publication_axis_uses_direct_numbers_before_scientific_notation(qapp):
+    axis = PublicationAxisItem("bottom")
+    assert axis.tickStrings([0.0001, 0.1, 1000, 10000], 1.0, 0.0001) == [
+        "0.0001",
+        "0.1",
+        "1000",
+        "1.000e+04",
+    ]
+    assert not axis.autoSIPrefix
+
+
+def test_inspector_tabs_and_annotations_default_inside_data_and_render(qapp):
+    window = MainWindow()
+    window.controller.add_dataset(Dataset(q=[10, 20], intensity=[100, 200]))
+    graph = window.controller.workspace.graphs[0]
+    graph = replace(
+        graph,
+        x_axis=replace(graph.x_axis, log=False),
+        y_axis=replace(graph.y_axis, log=False),
+    )
+    window.controller.update_graph(graph, recompute=True)
+    window._render_graph(graph.id)
+    window._sync_inspector()
+    assert window.inspector.tabs.count() == 4
+    position, end = window.inspector._annotation_defaults()
+    assert position == (15, 150)
+    assert end == (17, 170)
+    graph = replace(graph, annotations=(Annotation(AnnotationKind.TEXT, position, text="sample"),))
+    window.controller.update_graph(graph)
+    window._render_graph(graph.id)
+    page = window.tabs.currentWidget()
+    assert isinstance(page, GraphPage)
+    assert any(isinstance(item, pg.TextItem) for item in page.renderer.getPlotItem().items)
     window.controller.workspace.dirty = False
     window.close()
 

@@ -27,6 +27,31 @@ LINE_STYLES = {
 }
 
 
+class PublicationAxisItem(pg.AxisItem):
+    """Axis labels without SI-prefix multipliers and with predictable exponent use."""
+
+    def __init__(self, orientation: str, **kwargs) -> None:
+        super().__init__(orientation, **kwargs)
+        self.enableAutoSIPrefix(False)
+
+    def tickStrings(self, values, scale, spacing):  # noqa: N802 - Qt/PyQtGraph API
+        if self.logMode:
+            return super().tickStrings(values, scale, spacing)
+        scaled_spacing = abs(spacing * scale)
+        places = max(0, min(12, math.ceil(-math.log10(scaled_spacing)))) if scaled_spacing else 6
+        labels = []
+        for value in values:
+            displayed = value * scale
+            magnitude = abs(displayed)
+            if displayed == 0:
+                labels.append("0")
+            elif 1e-4 <= magnitude <= 1e3:
+                labels.append(f"{displayed:.{places}f}".rstrip("0").rstrip("."))
+            else:
+                labels.append(f"{displayed:.3e}")
+        return labels
+
+
 def _color(value: tuple[int, int, int, int], opacity: float = 1.0) -> QColor:
     red, green, blue, alpha = value
     return QColor(red, green, blue, round(alpha * opacity))
@@ -50,7 +75,14 @@ class Plot2DWidget(pg.PlotWidget):
     renderer_id = "plot2d"
 
     def __init__(self, parent=None) -> None:
-        super().__init__(parent=parent, background="w")
+        super().__init__(
+            parent=parent,
+            background="w",
+            axisItems={
+                "bottom": PublicationAxisItem("bottom"),
+                "left": PublicationAxisItem("left"),
+            },
+        )
         self.setAntialiasing(True)
         self.getPlotItem().setMenuEnabled(True)
         self._graph: GraphDocument | None = None
@@ -108,6 +140,7 @@ class Plot2DWidget(pg.PlotWidget):
         tick_font = QFont(graph.typography.family, graph.typography.tick_size)
         for axis_name, spec in (("bottom", graph.x_axis), ("left", graph.y_axis)):
             axis = plot.getAxis(axis_name)
+            axis.enableAutoSIPrefix(False)
             axis.setTickFont(tick_font)
             axis.setPen(pg.mkPen(_color(spec.color), width=spec.thickness))
             axis.setTextPen(pg.mkPen(_color(spec.color)))

@@ -502,18 +502,27 @@ class SeriesTransformParameterDialog(QDialog):
 
 
 class AnnotationDialog(QDialog):
-    def __init__(self, annotation: Annotation | None = None, parent=None) -> None:
+    def __init__(
+        self,
+        annotation: Annotation | None = None,
+        *,
+        default_position: tuple[float, float] | None = None,
+        default_end: tuple[float, float] | None = None,
+        parent=None,
+    ) -> None:
         super().__init__(parent)
         self.annotation = annotation
         self.setWindowTitle("Graph annotation")
         self.kind = QComboBox(self)
         for value in AnnotationKind:
             self.kind.addItem(value.value.replace("_", " ").title(), value)
+        position = annotation.position if annotation else (default_position or (1.0, 1.0))
+        end = annotation.end if annotation and annotation.end else (default_end or (2.0, 2.0))
         self.text = QLineEdit(annotation.text if annotation else "", self)
-        self.x = self._spin(annotation.position[0] if annotation else 1.0)
-        self.y = self._spin(annotation.position[1] if annotation else 1.0)
-        self.end_x = self._spin(annotation.end[0] if annotation and annotation.end else 2.0)
-        self.end_y = self._spin(annotation.end[1] if annotation and annotation.end else 2.0)
+        self.x = self._spin(position[0])
+        self.y = self._spin(position[1])
+        self.end_x = self._spin(end[0])
+        self.end_y = self._spin(end[1])
         self._color = annotation.color if annotation else (20, 20, 20, 255)
         self.color = QPushButton("Choose…", self)
         self.color.clicked.connect(self._choose_color)
@@ -546,6 +555,7 @@ class AnnotationDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("Coordinates are in the plotted data units; defaults are placed within the data."))
         layout.addLayout(form)
         layout.addWidget(buttons)
 
