@@ -365,6 +365,7 @@ class MainWindow(QMainWindow):
             graph,
             self.controller.workspace.datasets,
             warnings,
+            snapshots=self.controller.snapshots.get(graph.id, {}) if graph else {},
             read_only=bool(
                 graph
                 and graph.id

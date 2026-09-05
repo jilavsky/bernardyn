@@ -28,8 +28,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from bernardyn.core.models import Dataset, GraphDocument, SeriesView
-from bernardyn.core.transforms import TransformRegistry, resolve_series
+from bernardyn.core.models import Dataset, GraphDocument, PlotSeries, SeriesView
+from bernardyn.core.transforms import TransformRegistry
 from bernardyn.gui.dialogs import AnnotationDialog
 
 
@@ -42,6 +42,9 @@ class InspectorWidget(QScrollArea):
         self.transforms = transforms
         self._graph: GraphDocument | None = None
         self._datasets: Mapping[str, Dataset] = {}
+        # These are the exact, resolved arrays passed to the renderer.  They
+        # are deliberately kept separate from the canonical Dataset catalog.
+        self._snapshots: Mapping[str, PlotSeries] = {}
         self._syncing = False
         self.setWidgetResizable(True)
         content = QWidget(self)
@@ -371,11 +374,13 @@ class InspectorWidget(QScrollArea):
         datasets: Mapping[str, Dataset],
         warnings: list[str] | None = None,
         *,
+        snapshots: Mapping[str, PlotSeries] | None = None,
         read_only: bool = False,
     ) -> None:
         self._syncing = True
         self._graph = graph
         self._datasets = datasets
+        self._snapshots = snapshots or {}
         self.setEnabled(graph is not None and not read_only)
         self.warning.setText("\n".join(warnings or ([] if not read_only else ["Read-only archival graph"])))
         if graph is None:
@@ -863,18 +868,14 @@ class InspectorWidget(QScrollArea):
             y, end_y = start_end(float(y_limits[0]), float(y_limits[1]), graph.y_axis.log)
             return (x, y), (end_x, end_y)
 
+        # Use the same resolved arrays that are on the canvas.  Re-resolving
+        # from Dataset here can disagree with an archived snapshot or a graph
+        # that has changed while workers were loading, placing the default
+        # annotation outside the visible plot.
         x_values = []
         y_values = []
         for series in graph.series:
-            try:
-                snapshot = resolve_series(
-                    self._datasets[series.dataset_id],
-                    series,
-                    self.transforms,
-                    x_log=graph.x_axis.log,
-                    y_log=graph.y_axis.log,
-                )
-            except (KeyError, ValueError):
+            if not series.visible or (snapshot := self._snapshots.get(series.id)) is None:
                 continue
             x_values.extend(snapshot.x.tolist())
             y_values.extend(snapshot.y.tolist())

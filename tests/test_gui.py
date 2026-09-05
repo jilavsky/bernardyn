@@ -5,7 +5,7 @@ import pyqtgraph as pg
 import pytest
 from PySide6.QtCore import Qt
 
-from bernardyn.core.models import Annotation, AnnotationKind, Dataset, GraphDocument
+from bernardyn.core.models import Annotation, AnnotationKind, Dataset, GraphDocument, PlotSeries
 from bernardyn.gui.dialogs import DataFileSelectorDialog, LocationDialog
 from bernardyn.gui.graph_page import GraphPage
 from bernardyn.gui.main_window import MainWindow
@@ -213,6 +213,31 @@ def test_inspector_tabs_and_annotations_default_inside_data_and_render(qapp):
     page = window.tabs.currentWidget()
     assert isinstance(page, GraphPage)
     assert any(isinstance(item, pg.TextItem) for item in page.renderer.getPlotItem().items)
+    window.controller.workspace.dirty = False
+    window.close()
+
+
+def test_annotation_defaults_use_the_plotted_snapshot(qapp):
+    """Defaults must follow visible renderer data, not a stale re-resolution."""
+    window = MainWindow()
+    dataset = Dataset(q=[1, 2], intensity=[1000, 2000])
+    window.controller.add_dataset(dataset)
+    graph = window.controller.workspace.graphs[0]
+    series = graph.series[0]
+    snapshot = PlotSeries(
+        series_id=series.id,
+        dataset_id=dataset.id,
+        x=[10, 20],
+        y=[100, 200],
+        source_indices=[0, 1],
+        label="visible data",
+        transform_id="raw",
+        transform_version="1.0",
+    )
+    window.controller.snapshots[graph.id] = {series.id: snapshot}
+    window._sync_inspector()
+    position, _ = window.inspector._annotation_defaults()
+    assert position == pytest.approx((14.14213562, 141.42135624))
     window.controller.workspace.dirty = False
     window.close()
 
