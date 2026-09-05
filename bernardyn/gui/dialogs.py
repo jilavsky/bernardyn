@@ -54,11 +54,13 @@ class DataFileSelectorDialog(QDialog):
         folder: Path,
         discover: Callable[[Path], list[ScatteringLocation]],
         preferences: Mapping[str, object] | None = None,
+        paths: list[Path] | None = None,
         parent=None,
     ) -> None:
         super().__init__(parent)
         self.folder = Path(folder)
         self._discover = discover
+        self._fixed_paths = [Path(path) for path in paths] if paths is not None else None
         stored = dict(preferences or {})
         self._profiles: dict[str, list[int]] = {
             str(key): [int(index) for index in value]
@@ -159,10 +161,12 @@ class DataFileSelectorDialog(QDialog):
         self._refresh()
 
     def _refresh(self) -> None:
-        paths = sort_paths(
-            files_in_folder(self.folder, str(self.file_type.currentData())),
-            self.sort.currentIndex(),
+        paths = (
+            self._fixed_paths
+            if self._fixed_paths is not None
+            else files_in_folder(self.folder, str(self.file_type.currentData()))
         )
+        paths = sort_paths(paths, self.sort.currentIndex())
         self.file_list.clear()
         for path in paths:
             item = QListWidgetItem(path.name)

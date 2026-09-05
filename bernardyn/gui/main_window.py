@@ -434,7 +434,8 @@ class MainWindow(QMainWindow):
         )
         if not paths:
             return
-        self._open_data_paths([Path(value) for value in paths], use_preferred=True)
+        selected_paths = [Path(value) for value in paths]
+        self._open_file_selector(selected_paths[0].parent, selected_paths)
 
     def _browse_datasets(self) -> None:
         """Explicitly choose non-default SASdata groups from individual files."""
@@ -455,15 +456,19 @@ class MainWindow(QMainWindow):
         )
         if not selected:
             return
+        self._open_file_selector(Path(selected))
+
+    def _open_file_selector(self, folder: Path, paths: list[Path] | None = None) -> None:
         dialog = DataFileSelectorDialog(
-            Path(selected),
+            folder,
             self.controller.sources.discover_path,
             self.user_state.get("data_selector", {}),
+            paths,
             self,
         )
         if dialog.exec() != dialog.DialogCode.Accepted:
             return
-        self.user_state.set("last_data_folder", selected)
+        self.user_state.set("last_data_folder", str(folder))
         self.user_state.set("data_selector", dialog.preferences())
         self.user_state.save()
         graph = self._current_graph()

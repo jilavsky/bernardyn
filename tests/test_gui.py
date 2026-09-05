@@ -90,6 +90,9 @@ def test_folder_selector_uses_pyirena_style_type_filter_and_sort(qapp, tmp_path)
     dialog.file_list.setCurrentRow(1)
     assert dialog.data_list.item(1).checkState() == Qt.CheckState.Checked
     dialog.close()
+    direct = DataFileSelectorDialog(tmp_path, discover, paths=[tmp_path / "sample_20C_01.h5"])
+    assert direct.file_list.count() == 1
+    direct.close()
 
 
 def test_active_graph_dataset_list_removes_series_and_preserves_catalog(qapp):
