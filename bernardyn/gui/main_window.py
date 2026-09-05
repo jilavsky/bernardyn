@@ -8,8 +8,15 @@ import logging
 from dataclasses import replace
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QRunnable, QStandardPaths, Qt, QThreadPool, QTimer, Signal
-from PySide6.QtGui import QAction, QCloseEvent, QKeySequence, QUndoCommand, QUndoStack
+from PySide6.QtCore import QObject, QRunnable, QStandardPaths, Qt, QThreadPool, QTimer, QUrl, Signal
+from PySide6.QtGui import (
+    QAction,
+    QCloseEvent,
+    QDesktopServices,
+    QKeySequence,
+    QUndoCommand,
+    QUndoStack,
+)
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QDockWidget,
@@ -43,6 +50,8 @@ from bernardyn.state import UserState
 from bernardyn.template.graph_templates import apply_template, load_template, save_template
 
 log = logging.getLogger(__name__)
+
+DOCUMENTATION_URL = "https://github.com/jilavsky/bernardyn/tree/main/docs"
 
 
 def _metadata_number(value, key: str) -> float | None:
@@ -242,6 +251,23 @@ class MainWindow(QMainWindow):
         template_menu.addActions(
             [self.save_template_action, self.apply_template_action, self.delete_template_action]
         )
+        self.documentation_button = QPushButton("Documentation", self)
+        self.documentation_button.setToolTip("Open Bernardyn documentation in your web browser")
+        self.documentation_button.setStyleSheet(
+            "QPushButton { background: #c62828; color: white; font-weight: bold; "
+            "border: 1px solid #8e0000; border-radius: 4px; padding: 3px 10px; } "
+            "QPushButton:hover { background: #e53935; }"
+        )
+        self.documentation_button.clicked.connect(self._open_documentation)
+        self.menuBar().setCornerWidget(self.documentation_button, Qt.Corner.TopRightCorner)
+
+    def _open_documentation(self) -> None:
+        if not QDesktopServices.openUrl(QUrl(DOCUMENTATION_URL)):
+            QMessageBox.warning(
+                self,
+                "Documentation",
+                "Could not open the web browser. Visit " + DOCUMENTATION_URL,
+            )
 
     def _current_page(self):
         return self.tabs.currentWidget()

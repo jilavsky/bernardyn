@@ -24,6 +24,14 @@ def test_main_window_starts_with_independent_graph_model(qapp):
     window.close()
 
 
+def test_documentation_button_is_present(qapp):
+    window = MainWindow()
+    assert "#c62828" in window.documentation_button.styleSheet()
+    assert window.documentation_button.text() == "Documentation"
+    window.controller.workspace.dirty = False
+    window.close()
+
+
 def test_location_dialog_uses_qt_check_state_enums(qapp, tmp_path):
     locations = [
         ScatteringLocation(path=tmp_path / "one.h5", adapter_id="hdf5", display_name="one"),
