@@ -1,11 +1,14 @@
 from dataclasses import replace
+from pathlib import Path
 
 import numpy as np
 import pytest
 
 from bernardyn.core.models import Dataset, GraphDocument
+from bernardyn.gui.dialogs import LocationDialog
 from bernardyn.gui.graph_page import GraphPage
 from bernardyn.gui.main_window import MainWindow
+from bernardyn.io.sources import ScatteringLocation
 from bernardyn.renderers.opengl import OpenGLPlotWidget, opengl_available
 from bernardyn.renderers.plot2d import Plot2DWidget
 
@@ -17,6 +20,31 @@ def test_main_window_starts_with_independent_graph_model(qapp):
     assert window.inspector._graph.id == window.controller.workspace.graphs[0].id
     window.controller.workspace.dirty = False
     window.close()
+
+
+def test_location_dialog_uses_qt_check_state_enums(qapp, tmp_path):
+    locations = [
+        ScatteringLocation(path=tmp_path / "one.h5", adapter_id="hdf5", display_name="one"),
+        ScatteringLocation(path=tmp_path / "two.h5", adapter_id="hdf5", display_name="two"),
+    ]
+    dialog = LocationDialog(locations)
+    assert dialog.selected() == locations
+    dialog.close()
+
+
+def test_folder_discovery_finds_sources_and_skips_bernardyn_packages(qapp, tmp_path):
+    (tmp_path / "sample.h5").touch()
+    (tmp_path / "notes.txt").touch()
+    (tmp_path / "archived.bernardyn.h5").touch()
+    nested = tmp_path / "nested"
+    nested.mkdir()
+    (nested / "curve.dat").touch()
+    (nested / "ignore.pdf").touch()
+    assert [path.relative_to(tmp_path) for path in MainWindow._folder_data_files(tmp_path)] == [
+        Path("nested/curve.dat"),
+        Path("notes.txt"),
+        Path("sample.h5"),
+    ]
 
 
 def test_2d_page_renders_and_exports_png_and_svg(qapp, tmp_path):

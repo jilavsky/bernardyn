@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Mapping
 
 import h5py
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QColorDialog,
@@ -37,8 +38,9 @@ class LocationDialog(QDialog):
         self.list = QListWidget(self)
         for location in locations:
             item = QListWidgetItem(location.display_name)
-            item.setCheckState(2)
-            item.setData(256, location)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Checked)
+            item.setData(Qt.ItemDataRole.UserRole, location)
             self.list.addItem(item)
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
@@ -54,9 +56,9 @@ class LocationDialog(QDialog):
 
     def selected(self) -> list[ScatteringLocation]:
         return [
-            self.list.item(index).data(256)
+            self.list.item(index).data(Qt.ItemDataRole.UserRole)
             for index in range(self.list.count())
-            if self.list.item(index).checkState() == 2
+            if self.list.item(index).checkState() == Qt.CheckState.Checked
         ]
 
 
@@ -67,8 +69,9 @@ class GraphSelectionDialog(QDialog):
         self.list = QListWidget(self)
         for graph_id, title in graphs:
             item = QListWidgetItem(title)
-            item.setCheckState(2)
-            item.setData(256, graph_id)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Checked)
+            item.setData(Qt.ItemDataRole.UserRole, graph_id)
             self.list.addItem(item)
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
@@ -84,9 +87,9 @@ class GraphSelectionDialog(QDialog):
 
     def selected_ids(self) -> list[str]:
         return [
-            str(self.list.item(index).data(256))
+            str(self.list.item(index).data(Qt.ItemDataRole.UserRole))
             for index in range(self.list.count())
-            if self.list.item(index).checkState() == 2
+            if self.list.item(index).checkState() == Qt.CheckState.Checked
         ]
 
 

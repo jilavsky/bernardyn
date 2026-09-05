@@ -42,6 +42,8 @@ from bernardyn.template.graph_templates import apply_template, load_template, sa
 
 log = logging.getLogger(__name__)
 
+DATA_FILE_SUFFIXES = frozenset({".h5", ".hdf5", ".hdf", ".nxs", ".dat", ".txt", ".csv"})
+
 
 def _metadata_number(value, key: str) -> float | None:
     if not isinstance(value, dict):
@@ -141,6 +143,8 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(data_widget)
         open_button = QPushButton("Open data…", data_widget)
         open_button.clicked.connect(self._open_data)
+        open_folder_button = QPushButton("Open folder…", data_widget)
+        open_folder_button.clicked.connect(self._open_folder)
         add_button = QPushButton("Add selected to graph", data_widget)
         add_button.clicked.connect(self._add_existing_dataset)
         remove_button = QPushButton("Remove selected", data_widget)
@@ -148,6 +152,7 @@ class MainWindow(QMainWindow):
         cancel_button = QPushButton("Cancel loading", data_widget)
         cancel_button.clicked.connect(self._cancel_loading)
         layout.addWidget(open_button)
+        layout.addWidget(open_folder_button)
         layout.addWidget(self.dataset_list, 1)
         layout.addWidget(add_button)
         layout.addWidget(remove_button)
@@ -170,6 +175,7 @@ class MainWindow(QMainWindow):
     def _build_actions(self) -> None:
         self.new_workspace_action = self._action("New workspace", self._new_workspace, QKeySequence.StandardKey.New)
         self.open_data_action = self._action("Open data…", self._open_data, QKeySequence.StandardKey.Open)
+        self.open_folder_action = self._action("Open folder…", self._open_folder, "Ctrl+Shift+O")
         self.workspace_properties_action = self._action(
             "Workspace properties…", self._workspace_properties
         )
@@ -208,7 +214,7 @@ class MainWindow(QMainWindow):
         file_menu = self.menuBar().addMenu("&File")
         for action in (
             self.new_workspace_action, self.workspace_properties_action,
-            self.open_data_action, self.open_package_action,
+            self.open_data_action, self.open_folder_action, self.open_package_action,
             self.import_graph_action, None, self.save_action, self.save_as_action,
             self.save_graph_action, None, self.export_image_action, self.export_csv_action,
             self.export_itx_action, self.export_h5xp_action,
@@ -418,11 +424,52 @@ class MainWindow(QMainWindow):
         )
         if not paths:
             return
+        self._open_data_paths([Path(value) for value in paths])
+
+    @staticmethod
+    def _folder_data_files(folder: Path) -> list[Path]:
+        """Return supported source files beneath *folder*, excluding Bernardyn packages."""
+        return sorted(
+            (
+                path
+                for path in folder.rglob("*")
+                if path.is_file()
+                and path.suffix.lower() in DATA_FILE_SUFFIXES
+                and not path.name.lower().endswith(".bernardyn.h5")
+            ),
+            key=lambda path: str(path).lower(),
+        )
+
+    def _open_folder(self) -> None:
+        selected = QFileDialog.getExistingDirectory(self, "Open folder containing scattering data")
+        if not selected:
+            return
+        paths = self._folder_data_files(Path(selected))
+        if not paths:
+            QMessageBox.information(
+                self,
+                "Open folder",
+                "No supported HDF5/NXcanSAS or text data files were found in this folder.",
+            )
+            return
+        if len(paths) > 20:
+            answer = QMessageBox.question(
+                self,
+                "Open folder",
+                f"Found {len(paths)} supported data files. Load all of them?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+        self._open_data_paths(paths)
+
+    def _open_data_paths(self, paths: list[Path]) -> None:
         graph = self._current_graph()
         if graph is None:
             return
-        for value in paths:
-            path = Path(value)
+        started_workers = False
+        for path in paths:
             try:
                 locations = self.controller.sources.discover_path(path)
             except Exception as exc:
@@ -469,7 +516,9 @@ class MainWindow(QMainWindow):
                 worker.signals.finished.connect(self._worker_finished)
                 self._workers.add(worker)
                 self.thread_pool.start(worker)
-        self.statusBar().showMessage("Loading data…")
+                started_workers = True
+        if started_workers:
+            self.statusBar().showMessage("Loading data…")
 
     def _source_loaded(self, record, graph_id: str) -> None:
         try:
