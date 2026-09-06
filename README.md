@@ -25,6 +25,8 @@ The native schema is documented in
 User-facing workflow and file-format documentation is in
 [`docs/`](docs/README.md).
 
+User-visible changes are recorded in [`changelog.md`](changelog.md).
+
 ## Install and run
 
 Bernardyn targets Python 3.10–3.13 and shares its Qt plotting dependencies with

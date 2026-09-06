@@ -8,7 +8,17 @@ import logging
 from dataclasses import replace
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QRunnable, QStandardPaths, Qt, QThreadPool, QTimer, QUrl, Signal
+from PySide6.QtCore import (
+    QEvent,
+    QObject,
+    QRunnable,
+    QStandardPaths,
+    Qt,
+    QThreadPool,
+    QTimer,
+    QUrl,
+    Signal,
+)
 from PySide6.QtGui import (
     QAction,
     QCloseEvent,
@@ -51,7 +61,16 @@ from bernardyn.template.graph_templates import apply_template, load_template, sa
 
 log = logging.getLogger(__name__)
 
-DOCUMENTATION_URL = "https://github.com/jilavsky/bernardyn/tree/main/docs"
+DOCUMENTATION_DIRECTORY = Path(__file__).resolve().parents[2] / "docs"
+DOCUMENTATION_URL = "https://github.com/jilavsky/Bernardyn/tree/main/docs"
+LAST_WORKSPACE_PATH_KEY = "last_workspace_path"
+
+
+def _documentation_url() -> QUrl:
+    """Open local docs for an editable checkout, GitHub docs for a wheel."""
+    if DOCUMENTATION_DIRECTORY.is_dir():
+        return QUrl.fromLocalFile(str(DOCUMENTATION_DIRECTORY))
+    return QUrl(DOCUMENTATION_URL)
 
 
 def _metadata_number(value, key: str) -> float | None:
@@ -119,6 +138,57 @@ class GraphEditCommand(QUndoCommand):
         self.window._commit_graph(self.before, self.recompute)
 
 
+class DatasetListWidget(QListWidget):
+    """Dataset list that keeps internal reordering and accepts local file drops."""
+
+    pathsDropped = Signal(object)
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        # QAbstractItemView receives external drops through this scroll
+        # area's viewport, not through the QListWidget itself.  This matters
+        # especially when the list has no rows yet.
+        self.setAcceptDrops(True)
+        self.viewport().setAcceptDrops(True)
+
+    @staticmethod
+    def _local_paths(event) -> list[Path]:
+        mime_data = event.mimeData()
+        if not mime_data.hasUrls():
+            return []
+        return [Path(url.toLocalFile()) for url in mime_data.urls() if url.isLocalFile()]
+
+    def _handle_external_drop(self, event) -> bool:
+        paths = self._local_paths(event)
+        if not paths:
+            return False
+        if event.type() == QEvent.Type.Drop:
+            self.pathsDropped.emit(paths)
+        event.acceptProposedAction()
+        return True
+
+    def dragEnterEvent(self, event) -> None:  # noqa: N802 - Qt API
+        if self._handle_external_drop(event):
+            return
+        super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event) -> None:  # noqa: N802 - Qt API
+        if self._handle_external_drop(event):
+            return
+        super().dragMoveEvent(event)
+
+    def dropEvent(self, event) -> None:  # noqa: N802 - Qt API
+        if self._handle_external_drop(event):
+            return
+        super().dropEvent(event)
+
+    def viewportEvent(self, event) -> bool:  # noqa: N802 - Qt API
+        if event.type() in (QEvent.Type.DragEnter, QEvent.Type.DragMove, QEvent.Type.Drop):
+            if self._handle_external_drop(event):
+                return True
+        return super().viewportEvent(event)
+
+
 class MainWindow(QMainWindow):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -130,6 +200,7 @@ class MainWindow(QMainWindow):
         self._workers: set[SourceLoadWorker] = set()
         self._pending_graph_renders: set[str] = set()
         self._refreshing_dataset_list = False
+        self._startup_restore_pending = True
         self.user_state = UserState()
         self.undo_stack = QUndoStack(self)
         self.tabs = QTabWidget(self)
@@ -137,12 +208,12 @@ class MainWindow(QMainWindow):
         self.tabs.currentChanged.connect(self._active_tab_changed)
         self.tabs.tabCloseRequested.connect(self._close_tab)
         self.setCentralWidget(self.tabs)
-        self.dataset_list = QListWidget(self)
+        self.dataset_list = DatasetListWidget(self)
         self.dataset_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        self.dataset_list.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+        self.dataset_list.setDragDropMode(QAbstractItemView.DragDropMode.DragDrop)
         self.dataset_list.setDefaultDropAction(Qt.DropAction.MoveAction)
         self.dataset_list.setDragEnabled(True)
-        self.dataset_list.setAcceptDrops(True)
+        self.dataset_list.pathsDropped.connect(self._dropped_data_paths)
         self.dataset_list.model().rowsMoved.connect(
             lambda *_: QTimer.singleShot(0, self._dataset_list_reordered)
         )
@@ -157,6 +228,7 @@ class MainWindow(QMainWindow):
 
     def _build_docks(self) -> None:
         data_dock = QDockWidget("Datasets in active graph", self)
+        data_dock.setObjectName("datasetsDock")
         data_widget = QWidget(data_dock)
         layout = QVBoxLayout(data_widget)
         open_button = QPushButton("Open data…", data_widget)
@@ -176,7 +248,25 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, data_dock)
 
         inspector_dock = QDockWidget("Graph inspector", self)
-        inspector_dock.setWidget(self.inspector)
+        inspector_dock.setObjectName("graphInspectorDock")
+        inspector_widget = QWidget(inspector_dock)
+        inspector_layout = QVBoxLayout(inspector_widget)
+        inspector_layout.setContentsMargins(6, 6, 6, 0)
+        self.documentation_button = QPushButton("Documentation", inspector_widget)
+        self.documentation_button.setToolTip(
+            "Open local documentation (or GitHub documentation after PyPI installation)"
+        )
+        self.documentation_button.setStyleSheet(
+            "QPushButton { background: #c62828; color: white; font-weight: bold; "
+            "border: 1px solid #8e0000; border-radius: 4px; padding: 3px 10px; } "
+            "QPushButton:hover { background: #e53935; }"
+        )
+        self.documentation_button.clicked.connect(self._open_documentation)
+        inspector_layout.addWidget(
+            self.documentation_button, 0, Qt.AlignmentFlag.AlignRight
+        )
+        inspector_layout.addWidget(self.inspector, 1)
+        inspector_dock.setWidget(inspector_widget)
         inspector_dock.setMinimumWidth(340)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, inspector_dock)
 
@@ -251,22 +341,13 @@ class MainWindow(QMainWindow):
         template_menu.addActions(
             [self.save_template_action, self.apply_template_action, self.delete_template_action]
         )
-        self.documentation_button = QPushButton("Documentation", self)
-        self.documentation_button.setToolTip("Open Bernardyn documentation in your web browser")
-        self.documentation_button.setStyleSheet(
-            "QPushButton { background: #c62828; color: white; font-weight: bold; "
-            "border: 1px solid #8e0000; border-radius: 4px; padding: 3px 10px; } "
-            "QPushButton:hover { background: #e53935; }"
-        )
-        self.documentation_button.clicked.connect(self._open_documentation)
-        self.menuBar().setCornerWidget(self.documentation_button, Qt.Corner.TopRightCorner)
-
     def _open_documentation(self) -> None:
-        if not QDesktopServices.openUrl(QUrl(DOCUMENTATION_URL)):
+        documentation_url = _documentation_url()
+        if not QDesktopServices.openUrl(documentation_url):
             QMessageBox.warning(
                 self,
                 "Documentation",
-                "Could not open the web browser. Visit " + DOCUMENTATION_URL,
+                f"Could not open documentation:\n{documentation_url.toString()}",
             )
 
     def _current_page(self):
@@ -287,6 +368,41 @@ class MainWindow(QMainWindow):
         self.controller.new_workspace()
         self.undo_stack.clear()
         self._rebuild_tabs()
+
+    def _remember_workspace(self, path: str | Path) -> None:
+        """Store the last full workspace without putting it in the package."""
+        self.user_state.set(LAST_WORKSPACE_PATH_KEY, str(Path(path).resolve()))
+        self.user_state.save()
+
+    def restore_last_workspace(self) -> None:
+        """Open the last successfully saved or opened workspace at startup."""
+        if not self._startup_restore_pending:
+            return
+        self._startup_restore_pending = False
+        saved_path = self.user_state.get(LAST_WORKSPACE_PATH_KEY)
+        if not saved_path:
+            return
+        path = Path(saved_path).expanduser()
+        if not path.is_file():
+            # Do not repeatedly try a workspace that has been moved or deleted.
+            self.user_state.set(LAST_WORKSPACE_PATH_KEY, "")
+            self.user_state.save()
+            return
+        try:
+            loaded = self.controller.open_package(path)
+            self.undo_stack.clear()
+            self._rebuild_tabs()
+            self._restore_layout()
+            if loaded.warnings:
+                log.warning("last workspace opened with warnings: %s", "; ".join(loaded.warnings))
+            self.statusBar().showMessage(f"Reopened {path.name}", 5000)
+        except Exception:
+            # A corrupt or unsupported package should never make every launch
+            # fail. Forget it and leave the normal empty workspace available.
+            log.warning("could not reopen last workspace %s", path, exc_info=True)
+            self.user_state.set(LAST_WORKSPACE_PATH_KEY, "")
+            self.user_state.save()
+            self.statusBar().showMessage("Could not reopen the previous workspace.", 5000)
 
     def _workspace_properties(self) -> None:
         title, ok = QInputDialog.getText(
@@ -493,6 +609,27 @@ class MainWindow(QMainWindow):
             return
         self._open_file_selector(Path(selected))
 
+    def _dropped_data_paths(self, dropped: list[Path]) -> None:
+        """Open dropped files/folders through the normal profile-aware importer."""
+        paths = [path for path in dropped if path.exists()]
+        if not paths:
+            self.statusBar().showMessage("No accessible files or folders were dropped.", 5000)
+            return
+        files_by_folder: dict[Path, list[Path]] = {}
+        folders: list[Path] = []
+        for path in paths:
+            if path.is_dir():
+                folders.append(path)
+            elif path.is_file():
+                files_by_folder.setdefault(path.parent, []).append(path)
+        # The selector persists the chosen 1-D datasets by file layout.  A
+        # selected file can therefore load immediately for a known layout,
+        # while unfamiliar multi-dataset files always ask the user to choose.
+        for folder in folders:
+            self._open_file_selector(folder)
+        for folder, files in files_by_folder.items():
+            self._open_file_selector(folder, files)
+
     def _open_file_selector(self, folder: Path, paths: list[Path] | None = None) -> None:
         dialog = DataFileSelectorDialog(
             folder,
@@ -666,13 +803,21 @@ class MainWindow(QMainWindow):
         self._sync_inspector()
 
     def _open_package(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "Open Bernardyn package", "", "Bernardyn (*.bernardyn.h5);;HDF5 (*.h5)")
+        previous = self.user_state.get(LAST_WORKSPACE_PATH_KEY, "")
+        initial_folder = str(Path(previous).expanduser().parent) if previous else ""
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Open Bernardyn package",
+            initial_folder,
+            "Bernardyn (*.bernardyn.h5);;HDF5 (*.h5)",
+        )
         if not path or not self._confirm_discard():
             return
         try:
             loaded = self.controller.open_package(path)
             self.undo_stack.clear()
             self._rebuild_tabs()
+            self._remember_workspace(path)
             if loaded.warnings:
                 QMessageBox.warning(self, "Package warnings", "\n".join(loaded.warnings))
             self._restore_layout()
@@ -731,7 +876,14 @@ class MainWindow(QMainWindow):
         return self._save_to(self.controller.package_path)
 
     def _save_workspace_as(self) -> bool:
-        path, _ = QFileDialog.getSaveFileName(self, "Save workspace package", "workspace.bernardyn.h5", "Bernardyn (*.bernardyn.h5)")
+        previous = self.user_state.get(LAST_WORKSPACE_PATH_KEY, "")
+        initial_path = str(Path(previous).expanduser()) if previous else "workspace.bernardyn.h5"
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save workspace package",
+            initial_path,
+            "Bernardyn (*.bernardyn.h5)",
+        )
         return bool(path) and self._save_to(path)
 
     def _save_graph(self) -> bool:
@@ -747,6 +899,8 @@ class MainWindow(QMainWindow):
             saved = self.controller.save(
                 path, graph_ids=graph_ids, previews=previews, renderer_data=renderer_data
             )
+            if graph_ids is None:
+                self._remember_workspace(saved)
             self.statusBar().showMessage(f"Saved {saved.name}", 5000)
             return True
         except Exception as exc:

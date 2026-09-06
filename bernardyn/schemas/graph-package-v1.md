@@ -1,6 +1,6 @@
 # Bernardyn graph package schema, version 1
 
-Status: implemented by Bernardyn 0.0.1b1. Native suffix: `.bernardyn.h5`.
+Status: implemented by Bernardyn 0.0.1b2. Native suffix: `.bernardyn.h5`.
 
 ## Principles
 

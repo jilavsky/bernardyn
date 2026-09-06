@@ -135,6 +135,16 @@ class ScatteringLocation:
         object.__setattr__(self, "metadata", dict(self.metadata))
 
 
+def _dataset_label(location: ScatteringLocation) -> str:
+    """Use the NXcanSAS sample group for a compact, distinct curve label."""
+    parts = [part for part in (location.internal_path or "").split("/") if part]
+    if len(parts) >= 2 and parts[-1].lower() == "sasdata":
+        sample = parts[-2]
+        if sample.lower() not in {"entry", "data"}:
+            return sample
+    return location.path.name
+
+
 @dataclass(frozen=True)
 class ScatteringRecord:
     q: np.ndarray
@@ -383,7 +393,7 @@ class HDF5SourceAdapter:
                 dq=record.dq,
                 q_unit=record_q_unit,
                 intensity_unit=record.intensity_unit,
-                label=record.label,
+                label=_dataset_label(location),
                 metadata=metadata,
                 provenance=provenance,
                 source_fingerprint=record.source_fingerprint,
@@ -435,7 +445,7 @@ class HDF5SourceAdapter:
             dq=None if result.get("dQ") is None else np.asarray(result["dQ"], dtype=float),
             q_unit=source_q_unit or q_unit,
             intensity_unit=str(_decode(i_attrs.get("units", "1/cm"))),
-            label=location.display_name,
+            label=_dataset_label(location),
             metadata=metadata,
             provenance={
                 "source_name": location.path.name,
@@ -486,7 +496,7 @@ class HDF5SourceAdapter:
                 dq=dq,
                 q_unit=source_q_unit or q_unit,
                 intensity_unit=str(_decode(i_dataset.attrs.get("units", "1/cm"))),
-                label=location.display_name,
+                label=_dataset_label(location),
                 metadata={
                     "group_attributes": _attrs(group),
                     **({"q_unit_assumed": q_unit} if missing_q_unit else {}),

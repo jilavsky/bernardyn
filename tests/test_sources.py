@@ -3,8 +3,10 @@ import numpy as np
 
 from bernardyn.io.sources import (
     HDF5SourceAdapter,
+    ScatteringLocation,
     ScatteringRecord,
     TextSourceAdapter,
+    _dataset_label,
     builtin_sources,
 )
 
@@ -26,6 +28,21 @@ def test_text_source_preserves_nonpositive_values_for_transform_masking(tmp_path
     path.write_text("0 10\n1 -2\n2 3\n", encoding="utf-8")
     record = TextSourceAdapter().load(TextSourceAdapter().discover(path)[0])
     np.testing.assert_allclose(record.intensity, [10, -2, 3])
+
+
+def test_hdf5_curve_label_prefers_sample_name_from_sasdata_group(tmp_path):
+    location = ScatteringLocation(
+        path=tmp_path / "PP15_25C_1min_0003.h5",
+        adapter_id="hdf5",
+        internal_path="/entry/PP15_25C_1min/sasdata",
+    )
+    assert _dataset_label(location) == "PP15_25C_1min"
+    fallback = ScatteringLocation(
+        path=tmp_path / "curve.h5",
+        adapter_id="hdf5",
+        internal_path="/entry/sasdata",
+    )
+    assert _dataset_label(fallback) == "curve.h5"
 
 
 def test_hdf5_source_discovers_multiple_groups_and_loads_units(tmp_path):

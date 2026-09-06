@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Callable, Mapping
 
 import h5py
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -504,6 +504,8 @@ class SeriesTransformParameterDialog(QDialog):
 
 
 class AnnotationDialog(QDialog):
+    previewRequested = Signal(object)
+
     def __init__(
         self,
         annotation: Annotation | None = None,
@@ -556,6 +558,10 @@ class AnnotationDialog(QDialog):
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
             parent=self,
         )
+        self.update_button = buttons.addButton(
+            "Update graph", QDialogButtonBox.ButtonRole.ActionRole
+        )
+        self.update_button.clicked.connect(lambda: self.previewRequested.emit(self.value()))
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         form_widget = QWidget(self)

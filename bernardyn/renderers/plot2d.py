@@ -39,7 +39,20 @@ class PublicationAxisItem(pg.AxisItem):
 
     def __init__(self, orientation: str, **kwargs) -> None:
         super().__init__(orientation, **kwargs)
-        self.enableAutoSIPrefix(False)
+        self.disable_auto_si_prefix()
+
+    def disable_auto_si_prefix(self) -> None:
+        """Disable and fully clear PyQtGraph's persisted SI tick scaling.
+
+        ``enableAutoSIPrefix(False)`` recalculates ``autoSIPrefixScale`` from
+        the *previous* view range in PyQtGraph 0.14.  With auto-prefixes then
+        disabled, the next range change does not reset that scale.  A rerender
+        can consequently show correct geometry with labels shifted by factors
+        such as 1000 or 1e-9.
+        """
+        self.autoSIPrefix = False
+        self.autoSIPrefixScale = 1.0
+        self.labelUnitPrefix = ""
 
     def tickStrings(self, values, scale, spacing):  # noqa: N802 - Qt/PyQtGraph API
         if self.logMode:
@@ -91,6 +104,8 @@ class Plot2DWidget(pg.PlotWidget):
             axisItems={
                 "bottom": PublicationAxisItem("bottom"),
                 "left": PublicationAxisItem("left"),
+                "top": PublicationAxisItem("top"),
+                "right": PublicationAxisItem("right"),
             },
         )
         self.setAntialiasing(True)
@@ -120,12 +135,11 @@ class Plot2DWidget(pg.PlotWidget):
         plot.clear()
         self._curve_items.clear()
         self._error_items.clear()
-        if self._legend is not None:
-            try:
-                self._legend.scene().removeItem(self._legend)
-            except (AttributeError, RuntimeError):
-                pass
-            self._legend = None
+        # PlotItem.clear() removes data items but not its legend.  Removing a
+        # legend from the scene without clearing plot.legend makes the next
+        # addLegend() return a detached object, leaving legend controls with
+        # no visible effect after the first render.
+        self._remove_legend(plot)
         self.setBackground(_color(graph.background))
         plot.setTitle(
             graph.title,
@@ -156,10 +170,22 @@ class Plot2DWidget(pg.PlotWidget):
         tick_font = QFont(graph.typography.family, graph.typography.tick_size)
         for axis_name, spec in (("bottom", graph.x_axis), ("left", graph.y_axis)):
             axis = plot.getAxis(axis_name)
-            axis.enableAutoSIPrefix(False)
+            axis.disable_auto_si_prefix()
             axis.setTickFont(tick_font)
             axis.setPen(pg.mkPen(_color(spec.color), width=spec.thickness))
             axis.setTextPen(pg.mkPen(_color(spec.color)))
+            # AxisItem uses rendered font metrics and available axis length
+            # to omit crowded lower-level labels.  Level 0 keeps major labels
+            # only while retaining minor tick marks.
+            axis.setStyle(maxTextLevel=2 if spec.minor_tick_labels else 0)
+        for axis_name, spec in (("top", graph.x_axis), ("right", graph.y_axis)):
+            axis = plot.getAxis(axis_name)
+            axis.disable_auto_si_prefix()
+            axis.setTickFont(tick_font)
+            axis.setPen(pg.mkPen(_color(spec.color), width=spec.thickness))
+            axis.setTextPen(pg.mkPen(_color(spec.color)))
+            axis.setStyle(showValues=False)
+            plot.showAxis(axis_name, graph.box_axes)
         plot.showGrid(
             x=graph.x_axis.grid_major,
             y=graph.y_axis.grid_major,
@@ -209,6 +235,19 @@ class Plot2DWidget(pg.PlotWidget):
             self._review_annotations(graph)
         except Exception:  # pragma: no cover - diagnostics must never break a plot
             log.exception("Could not review annotation placement")
+
+    def _remove_legend(self, plot) -> None:
+        """Fully dispose of PyQtGraph's out-of-band legend item."""
+        legend = plot.legend
+        if legend is not None:
+            try:
+                scene = legend.scene()
+                if scene is not None:
+                    scene.removeItem(legend)
+            except RuntimeError:
+                pass
+        plot.legend = None
+        self._legend = None
 
     def _add_series(
         self,

@@ -3,16 +3,28 @@ from dataclasses import replace
 import numpy as np
 import pyqtgraph as pg
 import pytest
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QMimeData, QPointF, Qt, QUrl
+from PySide6.QtGui import QDropEvent
+from PySide6.QtWidgets import QAbstractItemView, QDockWidget
 
-from bernardyn.core.models import Annotation, AnnotationKind, Dataset, GraphDocument, PlotSeries
+from bernardyn.core.controller import ApplicationController
+from bernardyn.core.models import (
+    Annotation,
+    AnnotationKind,
+    AxisSpec,
+    Dataset,
+    GraphDocument,
+    PlotSeries,
+)
+from bernardyn.gui import main_window
 from bernardyn.gui.dialogs import AnnotationDialog, DataFileSelectorDialog, LocationDialog
 from bernardyn.gui.graph_page import GraphPage
-from bernardyn.gui.main_window import MainWindow
+from bernardyn.gui.main_window import DatasetListWidget, MainWindow, _documentation_url
 from bernardyn.io.file_browser import files_in_folder, make_file_matcher, sort_paths
 from bernardyn.io.sources import ScatteringLocation
 from bernardyn.renderers.opengl import OpenGLPlotWidget, opengl_available
 from bernardyn.renderers.plot2d import Plot2DWidget, PublicationAxisItem
+from bernardyn.state import UserState
 
 
 def test_main_window_starts_with_independent_graph_model(qapp):
@@ -24,12 +36,42 @@ def test_main_window_starts_with_independent_graph_model(qapp):
     window.close()
 
 
+def test_last_workspace_is_remembered_on_save_and_restored(qapp, tmp_path, monkeypatch):
+    state_path = tmp_path / "preferences.json"
+    package_path = tmp_path / "saved-workspace.bernardyn.h5"
+    window = MainWindow()
+    window.user_state = UserState(state_path)
+    monkeypatch.setattr(window, "_collect_artifacts", lambda: ({}, {}))
+
+    assert window._save_to(package_path)
+    assert window.user_state.get("last_workspace_path") == str(package_path.resolve())
+    window.controller.workspace.dirty = False
+    window.close()
+
+    restored = MainWindow()
+    restored.user_state = UserState(state_path)
+    restored.restore_last_workspace()
+    assert restored.controller.package_path == package_path.resolve()
+    assert restored.controller.workspace.title == "Untitled workspace"
+    restored.controller.workspace.dirty = False
+    restored.close()
+
+
 def test_documentation_button_is_present(qapp):
     window = MainWindow()
     assert "#c62828" in window.documentation_button.styleSheet()
     assert window.documentation_button.text() == "Documentation"
+    assert "local" in window.documentation_button.toolTip()
+    assert window.documentation_button.parent() is not window.menuBar()
+    assert window.findChild(QDockWidget, "datasetsDock") is not None
+    assert window.findChild(QDockWidget, "graphInspectorDock") is not None
     window.controller.workspace.dirty = False
     window.close()
+
+
+def test_documentation_url_uses_github_when_local_docs_are_unavailable(tmp_path, monkeypatch):
+    monkeypatch.setattr(main_window, "DOCUMENTATION_DIRECTORY", tmp_path / "missing")
+    assert _documentation_url().toString() == main_window.DOCUMENTATION_URL
 
 
 def test_location_dialog_uses_qt_check_state_enums(qapp, tmp_path):
@@ -199,6 +241,117 @@ def test_publication_axis_uses_direct_numbers_before_scientific_notation(qapp):
     assert not axis.autoSIPrefix
 
 
+def test_log_axis_labels_do_not_keep_stale_si_scaling_after_rerender(qapp):
+    controller = ApplicationController()
+    controller.add_dataset(
+        Dataset(
+            q=np.geomspace(1e-4, 0.3, 200),
+            intensity=np.geomspace(1e9, 1, 200),
+        )
+    )
+    graph = controller.workspace.graphs[0]
+    widget = Plot2DWidget()
+    # The second render previously reused the first view's SI scale, causing
+    # x labels 1000x too large and y labels 1e-9 too small.
+    widget.render(graph, controller.snapshots[graph.id])
+    widget.render(graph, controller.snapshots[graph.id])
+    x_axis = widget.getPlotItem().getAxis("bottom")
+    y_axis = widget.getPlotItem().getAxis("left")
+    assert x_axis.autoSIPrefixScale == 1.0
+    assert y_axis.autoSIPrefixScale == 1.0
+    assert x_axis.tickStrings([-4, -3, -2, -1], 1.0, 1.0) == [
+        "0.0001", "0.001", "0.01", "0.1"
+    ]
+    assert y_axis.tickStrings([0, 3, 6, 9], 1.0, 1.0) == [
+        "1", "10³", "10⁶", "10⁹"
+    ]
+    widget.close()
+
+
+def test_legend_is_recreated_after_an_initial_empty_render(qapp):
+    """A later data load must not reuse the detached empty-plot legend."""
+    window = MainWindow()
+    graph = window.controller.workspace.graphs[0]
+    window._render_graph(graph.id)
+    window.controller.add_dataset(Dataset(q=[1, 2], intensity=[3, 4], label="sample"))
+    window._render_graph(graph.id)
+    page = window.tabs.currentWidget()
+    assert isinstance(page, GraphPage)
+    assert page.renderer._legend is page.renderer.getPlotItem().legend
+    assert len(page.renderer._legend.items) == 1
+    window.controller.workspace.dirty = False
+    window.close()
+
+
+def test_box_axes_and_minor_label_preference_survive_graph_round_trip():
+    graph = GraphDocument(
+        box_axes=True,
+        x_axis=AxisSpec(label="q", minor_tick_labels=True),
+        y_axis=AxisSpec(label="I", minor_tick_labels=True),
+    )
+    restored = GraphDocument.from_dict(graph.to_dict())
+    assert restored.box_axes
+    assert restored.x_axis.minor_tick_labels
+    assert restored.y_axis.minor_tick_labels
+
+
+def test_dataset_list_emits_local_file_drops(qapp, tmp_path):
+    data_path = tmp_path / "curve.h5"
+    data_path.touch()
+    widget = DatasetListWidget()
+    dropped = []
+    widget.pathsDropped.connect(dropped.append)
+    mime_data = QMimeData()
+    mime_data.setUrls([QUrl.fromLocalFile(str(data_path))])
+    event = QDropEvent(
+        QPointF(),
+        Qt.DropAction.CopyAction,
+        mime_data,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+    # Finder drops land on QListWidget's viewport, even when it is empty.
+    assert widget.viewportEvent(event)
+    assert dropped == [[data_path]]
+    assert event.isAccepted()
+    widget.close()
+
+
+def test_dropped_data_uses_the_profile_aware_import_dialog(qapp, tmp_path, monkeypatch):
+    folder = tmp_path / "folder"
+    folder.mkdir()
+    data_path = tmp_path / "curve.h5"
+    data_path.touch()
+    window = MainWindow()
+    calls = []
+    monkeypatch.setattr(window, "_open_file_selector", lambda *args: calls.append(args))
+    window._dropped_data_paths([folder, data_path])
+    assert calls == [(folder,), (tmp_path, [data_path])]
+    window.controller.workspace.dirty = False
+    window.close()
+
+
+def test_dataset_inspector_bulk_visibility_uses_extended_selection(qapp):
+    window = MainWindow()
+    for label in ("one", "two", "three"):
+        window.controller.add_dataset(Dataset(q=[1, 2], intensity=[3, 4], label=label))
+    window._sync_inspector()
+    series_list = window.inspector.series_list
+    assert series_list.selectionMode() == QAbstractItemView.SelectionMode.ExtendedSelection
+    series_list.item(0).setSelected(True)
+    series_list.item(2).setSelected(True)
+    window.inspector._set_selected_series_visibility(False)
+    graph = window.controller.workspace.graphs[0]
+    assert [series.visible for series in graph.series] == [False, True, False]
+    assert [series_list.item(index).checkState() for index in range(3)] == [
+        Qt.CheckState.Unchecked,
+        Qt.CheckState.Checked,
+        Qt.CheckState.Unchecked,
+    ]
+    window.controller.workspace.dirty = False
+    window.close()
+
+
 def test_inspector_tabs_and_annotations_default_inside_data_and_render(qapp):
     window = MainWindow()
     window.controller.add_dataset(Dataset(q=[10, 20], intensity=[100, 200]))
@@ -363,6 +516,21 @@ def test_annotation_dialog_returns_real_enum_kinds(qapp):
         assert isinstance(annotation.kind, AnnotationKind)
         assert annotation.kind is kind
         dialog.close()
+
+
+def test_annotation_dialog_update_button_emits_current_annotation(qapp):
+    original = Annotation(AnnotationKind.TEXT, (1.0, 2.0), text="before")
+    dialog = AnnotationDialog(original)
+    updates = []
+    dialog.previewRequested.connect(updates.append)
+    dialog.x.setValue(3.5)
+    dialog.text.setText("after")
+    dialog.update_button.click()
+    assert len(updates) == 1
+    assert updates[0].id == original.id
+    assert updates[0].position == (3.5, 2.0)
+    assert updates[0].text == "after"
+    dialog.close()
 
 
 def test_every_annotation_kind_reaches_the_canvas(qapp):

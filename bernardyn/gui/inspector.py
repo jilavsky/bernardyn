@@ -8,6 +8,7 @@ from typing import Mapping
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QCheckBox,
     QColorDialog,
     QComboBox,
@@ -20,6 +21,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QMenu,
     QPushButton,
     QScrollArea,
     QSpinBox,
@@ -123,6 +125,10 @@ class InspectorWidget(QScrollArea):
         grid_layout.setContentsMargins(0, 0, 0, 0)
         grid_layout.addWidget(self.x_grid)
         grid_layout.addWidget(self.y_grid)
+        self.box_axes = QCheckBox("Show top and right axes", group)
+        self.box_axes.toggled.connect(self._edit_axes)
+        self.minor_tick_labels = QCheckBox("Show minor tick labels", group)
+        self.minor_tick_labels.toggled.connect(self._edit_axes)
         self.axis_thickness = self._double(0.1, 10, 1)
         self.axis_thickness.editingFinished.connect(self._edit_axes)
         self.axis_color = QPushButton("Choose…", group)
@@ -142,6 +148,7 @@ class InspectorWidget(QScrollArea):
         self.legend_frame.toggled.connect(self._edit_legend)
         self.legend_columns = QSpinBox(group)
         self.legend_columns.setRange(1, 8)
+        self.legend_columns.setMinimumWidth(90)
         self.legend_columns.editingFinished.connect(self._edit_legend)
         self.font_family = QFontComboBox(group)
         self.font_family.currentFontChanged.connect(self._edit_typography)
@@ -184,6 +191,8 @@ class InspectorWidget(QScrollArea):
         form.addRow("X range:", self._paired_row("Min", self.axis_x_min, "Max", self.axis_x_max, group))
         form.addRow("Y range:", self._paired_row("Min", self.axis_y_min, "Max", self.axis_y_max, group))
         form.addRow("Grid:", grid_row)
+        form.addRow("Box axes:", self.box_axes)
+        form.addRow("Tick labels:", self.minor_tick_labels)
         form.addRow("Axes:", self._paired_row("Width", self.axis_thickness, "Color", self.axis_color, group))
         form.addRow("Legend:", self.legend)
         form.addRow("Legend position:", self.legend_position)
@@ -247,6 +256,9 @@ class InspectorWidget(QScrollArea):
         layout = QVBoxLayout(group)
         self.series_list = QListWidget(group)
         self.series_list.setMaximumHeight(240)
+        self.series_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.series_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.series_list.customContextMenuRequested.connect(self._show_series_context_menu)
         self.series_list.currentItemChanged.connect(self._series_selected)
         self.series_list.itemChanged.connect(self._series_visibility)
         layout.addWidget(self.series_list)
@@ -414,6 +426,8 @@ class InspectorWidget(QScrollArea):
         )
         self.x_grid.setChecked(graph.x_axis.grid_major)
         self.y_grid.setChecked(graph.y_axis.grid_major)
+        self.box_axes.setChecked(graph.box_axes)
+        self.minor_tick_labels.setChecked(graph.x_axis.minor_tick_labels)
         self.axis_thickness.setValue(graph.x_axis.thickness)
         self.axis_color.setStyleSheet(
             f"background: rgba({graph.x_axis.color[0]}, {graph.x_axis.color[1]}, "
@@ -576,6 +590,7 @@ class InspectorWidget(QScrollArea):
                 maximum=self._optional_float(self.axis_x_max),
                 auto_range=self.x_auto.isChecked(),
                 grid_major=self.x_grid.isChecked(),
+                minor_tick_labels=self.minor_tick_labels.isChecked(),
                 thickness=self.axis_thickness.value(),
             )
             y_axis = replace(
@@ -585,9 +600,15 @@ class InspectorWidget(QScrollArea):
                 maximum=self._optional_float(self.axis_y_max),
                 auto_range=self.y_auto.isChecked(),
                 grid_major=self.y_grid.isChecked(),
+                minor_tick_labels=self.minor_tick_labels.isChecked(),
                 thickness=self.axis_thickness.value(),
             )
-            graph = replace(self._graph, x_axis=x_axis, y_axis=y_axis)
+            graph = replace(
+                self._graph,
+                x_axis=x_axis,
+                y_axis=y_axis,
+                box_axes=self.box_axes.isChecked(),
+            )
         except ValueError:
             self.set_graph(self._graph, self._datasets)
             return
@@ -733,6 +754,51 @@ class InspectorWidget(QScrollArea):
             text="Toggle dataset visibility",
         )
 
+    def _show_series_context_menu(self, position) -> None:
+        """Offer one visibility action for the current multi-selection."""
+        item = self.series_list.itemAt(position)
+        if item is not None and not item.isSelected():
+            self.series_list.clearSelection()
+            item.setSelected(True)
+            self.series_list.setCurrentItem(item)
+        selected = self.series_list.selectedItems()
+        if not selected:
+            return
+        menu = QMenu(self.series_list)
+        show_action = menu.addAction("Check selected")
+        hide_action = menu.addAction("Uncheck selected")
+        action = menu.exec(self.series_list.viewport().mapToGlobal(position))
+        if action is show_action:
+            self._set_selected_series_visibility(True)
+        elif action is hide_action:
+            self._set_selected_series_visibility(False)
+
+    def _set_selected_series_visibility(self, visible: bool) -> None:
+        if self._syncing or self._graph is None:
+            return
+        selected_ids = {
+            item.data(Qt.ItemDataRole.UserRole) for item in self.series_list.selectedItems()
+        }
+        if not selected_ids:
+            return
+        state = Qt.CheckState.Checked if visible else Qt.CheckState.Unchecked
+        self._syncing = True
+        try:
+            for item in self.series_list.selectedItems():
+                item.setCheckState(state)
+        finally:
+            self._syncing = False
+        graph = self._graph.replace_series(
+            replace(series, visible=visible) if series.id in selected_ids else series
+            for series in self._graph.series
+        )
+        self._graph = graph
+        self.graphChanged.emit(
+            graph,
+            False,
+            "Show selected datasets" if visible else "Hide selected datasets",
+        )
+
     def _edit_series_label(self) -> None:
         if self._syncing or (series := self._series()) is None:
             return
@@ -837,11 +903,33 @@ class InspectorWidget(QScrollArea):
             return
         position, end = self._annotation_defaults()
         dialog = AnnotationDialog(default_position=position, default_end=end, parent=self)
+        dialog.previewRequested.connect(
+            lambda replacement: self._preview_annotation(dialog, replacement)
+        )
         if dialog.exec() != dialog.DialogCode.Accepted:
             return
-        graph = replace(self._graph, annotations=(*self._graph.annotations, dialog.value()))
+        self._upsert_annotation(dialog.value(), "Add annotation")
+
+    def _preview_annotation(self, dialog: AnnotationDialog, replacement) -> None:
+        # The explicit button is a commit, rather than an ephemeral overlay:
+        # it lets the user continue adjusting a visible annotation and keeps
+        # a newly added annotation's ID stable for subsequent updates.
+        dialog.annotation = replacement
+        self._upsert_annotation(replacement, "Update annotation")
+
+    def _upsert_annotation(self, replacement, text: str) -> None:
+        if self._graph is None:
+            return
+        if any(value.id == replacement.id for value in self._graph.annotations):
+            annotations = tuple(
+                replacement if value.id == replacement.id else value
+                for value in self._graph.annotations
+            )
+        else:
+            annotations = (*self._graph.annotations, replacement)
+        graph = replace(self._graph, annotations=annotations)
         self._graph = graph
-        self.graphChanged.emit(graph, False, "Add annotation")
+        self.graphChanged.emit(graph, False, text)
 
     def _annotation_defaults(self) -> tuple[tuple[float, float], tuple[float, float]]:
         """Place a new annotation in the visible data region by default."""
@@ -897,17 +985,12 @@ class InspectorWidget(QScrollArea):
         if annotation is None or self._graph is None:
             return
         dialog = AnnotationDialog(annotation, parent=self)
+        dialog.previewRequested.connect(
+            lambda replacement: self._preview_annotation(dialog, replacement)
+        )
         if dialog.exec() != dialog.DialogCode.Accepted:
             return
-        replacement = dialog.value()
-        graph = replace(
-            self._graph,
-            annotations=tuple(
-                replacement if value.id == replacement.id else value for value in self._graph.annotations
-            ),
-        )
-        self._graph = graph
-        self.graphChanged.emit(graph, False, "Edit annotation")
+        self._upsert_annotation(dialog.value(), "Edit annotation")
 
     def _delete_annotation(self) -> None:
         annotation = self._selected_annotation()

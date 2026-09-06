@@ -191,6 +191,7 @@ class AxisSpec:
     auto_range: bool = True
     grid_major: bool = True
     grid_minor: bool = False
+    minor_tick_labels: bool = False
     color: RGBA = (30, 30, 30, 255)
     thickness: float = 1.0
 
@@ -248,6 +249,7 @@ class GraphDocument:
     y_axis: AxisSpec = field(default_factory=lambda: AxisSpec(label="Intensity [cm⁻¹]", log=True))
     typography: TypographySpec = field(default_factory=TypographySpec)
     legend: LegendSpec = field(default_factory=LegendSpec)
+    box_axes: bool = False
     annotations: tuple[Annotation, ...] = ()
     background: RGBA = (255, 255, 255, 255)
     width_px: int = 1950
@@ -321,6 +323,7 @@ class GraphDocument:
             y_axis=AxisSpec(**y_axis),
             typography=TypographySpec(**value.get("typography", {})),
             legend=LegendSpec(**value.get("legend", {})),
+            box_axes=bool(value.get("box_axes", False)),
             annotations=annotations,
             background=tuple(value.get("background", (255, 255, 255, 255))),
             width_px=int(value.get("width_px", 1950)),

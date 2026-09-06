@@ -6,6 +6,7 @@ import logging
 import os
 import sys
 
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
 
 from bernardyn.gui.main_window import MainWindow
@@ -24,6 +25,9 @@ def main() -> int:
     app.setOrganizationName("Bernardyn")
     window = MainWindow()
     window.show()
+    # Run after the window is visible so a stored dock layout can be restored
+    # along with the saved workspace.
+    QTimer.singleShot(0, window.restore_last_workspace)
     return app.exec()
 
 
