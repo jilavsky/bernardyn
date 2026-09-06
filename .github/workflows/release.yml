@@ -25,7 +25,9 @@ jobs:
       - name: Install package and test tools
         run: python -m pip install -e ".[dev]"
       - name: Run tests
-        run: python -m pytest -p no:cacheprovider
+        # Timing thresholds are acceptance measurements for reference desktop
+        # hardware, not reliable gates on variable shared CI runners.
+        run: python -m pytest -p no:cacheprovider -m "not performance"
       - name: Lint
         run: python -m ruff check bernardyn tests
 

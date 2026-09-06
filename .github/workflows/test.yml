@@ -25,7 +25,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes libegl1 libgl1
       - run: python -m pip install -e ".[dev]"
-      - run: python -m pytest -p no:cacheprovider
+      # Timing thresholds are acceptance measurements for reference desktop
+      # hardware, not reliable gates on variable shared CI runners.
+      - run: python -m pytest -p no:cacheprovider -m "not performance"
       - run: python -m ruff check bernardyn tests
 
   build:

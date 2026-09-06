@@ -261,21 +261,43 @@ class HDF5SourceAdapter:
                         internal_path=group_path,
                         display_name=f"{path.name}: {group_path}",
                         variant="slit-smeared" if "smr" in name.lower() else "default",
-                        metadata={"mapping": {"q": q_name, "intensity": i_name}},
+                        metadata={
+                            "mapping": {"q": q_name, "intensity": i_name},
+                            **_q_unit_metadata(path, group_path),
+                        },
                     )
                 )
 
             handle.visititems(visitor)
         if not locations:
             raise ValueError(f"no recognizable 1D scattering datasets found in {path.name}")
-        return locations
+        return self._prefer_sasdata_locations(locations)
+
+    @staticmethod
+    def _prefer_sasdata_locations(
+        locations: list[ScatteringLocation],
+    ) -> list[ScatteringLocation]:
+        """Use NXcanSAS SASdata curves when a file also exposes auxiliaries.
+
+        Instrument files commonly contain Blank/QRS/background curves beside
+        the actual NXcanSAS ``sasdata`` entry.  Those auxiliaries are not the
+        normal plotting target.  If a file has SASdata groups, keep all of
+        them (including an explicitly available slit-smeared sibling); for a
+        simple HDF5 file without SASdata, retain every discoverable 1-D group.
+        """
+        sasdata = [
+            location
+            for location in locations
+            if location.internal_path and location.internal_path.rstrip("/").lower().endswith("/sasdata")
+        ]
+        return sasdata or locations
 
     def _discover_with_pyirena(self, path: Path) -> list[ScatteringLocation]:
         try:
             from pyirena.io import discover_scattering
 
             discovered_locations = discover_scattering(path)
-            return [
+            locations = [
                 ScatteringLocation(
                     path=item.path,
                     adapter_id=self.id,
@@ -290,6 +312,7 @@ class HDF5SourceAdapter:
                 )
                 for index, item in enumerate(discovered_locations)
             ]
+            return self._prefer_sasdata_locations(locations)
         except (ImportError, ValueError):
             pass
         try:
@@ -305,7 +328,7 @@ class HDF5SourceAdapter:
                 return []
         except Exception:
             return []
-        return [
+        locations = [
             ScatteringLocation(
                 path=path,
                 adapter_id=self.id,
@@ -320,6 +343,7 @@ class HDF5SourceAdapter:
             )
             for item in discovered
         ]
+        return self._prefer_sasdata_locations(locations)
 
     def load(
         self,
@@ -400,12 +424,16 @@ class HDF5SourceAdapter:
             if key.lower().endswith(("attrs", "attributes"))
         }
         metadata.update(_pyirena_fit_metadata(location.path, location.variant))
+        source_q_unit = str(_decode(q_attrs.get("units")) or "").strip()
+        missing_q_unit = not bool(source_q_unit)
+        if missing_q_unit:
+            metadata["q_unit_assumed"] = q_unit
         return ScatteringRecord(
             q=np.asarray(q, dtype=float),
             intensity=np.asarray(intensity, dtype=float),
             uncertainty=None if result.get("Error") is None else np.asarray(result["Error"], dtype=float),
             dq=None if result.get("dQ") is None else np.asarray(result["dQ"], dtype=float),
-            q_unit=str(_decode(q_attrs.get("units")) or q_unit),
+            q_unit=source_q_unit or q_unit,
             intensity_unit=str(_decode(i_attrs.get("units", "1/cm"))),
             label=location.display_name,
             metadata=metadata,
@@ -415,6 +443,7 @@ class HDF5SourceAdapter:
                 "internal_path": location.internal_path,
                 "adapter": "pyirena.io.hdf5",
                 "variant": location.variant,
+                **({"q_unit_assumed": q_unit} if missing_q_unit else {}),
             },
             source_fingerprint=_fingerprint(location.path),
         )
@@ -448,16 +477,19 @@ class HDF5SourceAdapter:
             intensity = np.asarray(i_dataset[()], dtype=float)
             uncertainty = None if e_name is None else np.asarray(group[e_name][()], dtype=float)
             dq = None if dq_name is None else np.asarray(group[dq_name][()], dtype=float)
+            source_q_unit = str(_decode(q_dataset.attrs.get("units")) or "").strip()
+            missing_q_unit = not bool(source_q_unit)
             return ScatteringRecord(
                 q=q,
                 intensity=intensity,
                 uncertainty=uncertainty,
                 dq=dq,
-                q_unit=str(_decode(q_dataset.attrs.get("units")) or q_unit),
+                q_unit=source_q_unit or q_unit,
                 intensity_unit=str(_decode(i_dataset.attrs.get("units", "1/cm"))),
                 label=location.display_name,
                 metadata={
                     "group_attributes": _attrs(group),
+                    **({"q_unit_assumed": q_unit} if missing_q_unit else {}),
                     **_pyirena_fit_metadata(location.path, location.variant),
                 },
                 provenance={
@@ -466,6 +498,7 @@ class HDF5SourceAdapter:
                     "internal_path": location.internal_path,
                     "adapter": self.id,
                     "variant": location.variant,
+                    **({"q_unit_assumed": q_unit} if missing_q_unit else {}),
                 },
                 source_fingerprint=_fingerprint(location.path),
             )
