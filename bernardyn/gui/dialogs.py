@@ -548,8 +548,8 @@ class AnnotationDialog(QDialog):
         form.addRow("Text:", self.text)
         form.addRow("X:", self.x)
         form.addRow("Y:", self.y)
-        form.addRow("Arrow end X:", self.end_x)
-        form.addRow("Arrow end Y:", self.end_y)
+        form.addRow("End X (arrow/box):", self.end_x)
+        form.addRow("End Y (arrow/box):", self.end_y)
         form.addRow("Color:", self.color)
         form.addRow("Line width:", self.line_width)
         form.addRow("Font size:", self.font_size)
@@ -588,7 +588,11 @@ class AnnotationDialog(QDialog):
         # never the AnnotationKind member that was put in -- see the warning
         # above AnnotationKind in core/models.py.  Convert explicitly.
         kind = AnnotationKind(self.kind.currentData())
-        end = (self.end_x.value(), self.end_y.value()) if kind is AnnotationKind.ARROW else None
+        end = (
+            (self.end_x.value(), self.end_y.value())
+            if kind in (AnnotationKind.ARROW, AnnotationKind.BOX)
+            else None
+        )
         options = {
             "kind": kind,
             "position": (self.x.value(), self.y.value()),

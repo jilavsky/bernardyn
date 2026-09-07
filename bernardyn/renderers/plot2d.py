@@ -15,7 +15,7 @@ import pyqtgraph.exporters
 from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QRect, QRectF, QSize, Qt
 from PySide6.QtGui import QColor, QFont, QPainter
 from PySide6.QtSvg import QSvgGenerator
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QGraphicsRectItem
 
 from bernardyn.core.models import Annotation, AnnotationKind, GraphDocument, PlotSeries, SeriesStyle
 
@@ -24,6 +24,7 @@ log = logging.getLogger(__name__)
 # Annotations sit above every curve, error bar and legend.  The document's
 # own ``z_order`` only orders annotations against each other.
 ANNOTATION_BASE_Z = 100_000
+BOX_ANNOTATION_BASE_Z = -10_000
 
 LINE_STYLES = {
     "none": Qt.PenStyle.NoPen,
@@ -40,6 +41,7 @@ class PublicationAxisItem(pg.AxisItem):
     def __init__(self, orientation: str, **kwargs) -> None:
         super().__init__(orientation, **kwargs)
         self.disable_auto_si_prefix()
+        self.show_minor_tick_labels = False
 
     def disable_auto_si_prefix(self) -> None:
         """Disable and fully clear PyQtGraph's persisted SI tick scaling.
@@ -73,6 +75,25 @@ class PublicationAxisItem(pg.AxisItem):
             else:
                 labels.append(f"{displayed:.3e}")
         return labels
+
+    def logTickValues(self, minVal, maxVal, size, stdTicks):  # noqa: N802 - PyQtGraph API
+        """Keep decade labels readable when the view is narrower than a decade.
+
+        PyQtGraph promotes 2–9 log ticks to its first (always-labelled) level
+        when no regular major-tick spacing is available.  That makes a zoomed
+        log axis label every minor tick despite ``maxTextLevel=0``.  Preserve
+        those ticks as an unlabelled lower level instead.
+        """
+        if self.show_minor_tick_labels:
+            return super().logTickValues(minVal, maxVal, size, stdTicks)
+        first = math.ceil(minVal)
+        last = math.floor(maxVal)
+        major = [float(value) for value in range(first, last + 1)]
+        minor = []
+        for exponent in range(math.floor(minVal), math.ceil(maxVal)):
+            minor.extend(exponent + np.log10(np.arange(2, 10)))
+        minor = [value for value in minor if minVal < value < maxVal]
+        return [(1.0, major), (None, minor)]
 
 
 def _color(value: tuple[int, int, int, int], opacity: float = 1.0) -> QColor:
@@ -140,7 +161,13 @@ class Plot2DWidget(pg.PlotWidget):
         # addLegend() return a detached object, leaving legend controls with
         # no visible effect after the first render.
         self._remove_legend(plot)
-        self.setBackground(_color(graph.background))
+        background = _color(graph.background)
+        if graph.background_scope == "plot":
+            self.setBackground(QColor(255, 255, 255, 255))
+            plot.vb.setBackgroundColor(background)
+        else:
+            self.setBackground(background)
+            plot.vb.setBackgroundColor(QColor(0, 0, 0, 0))
         plot.setTitle(
             graph.title,
             color=_color(graph.x_axis.color).name(),
@@ -172,12 +199,20 @@ class Plot2DWidget(pg.PlotWidget):
             axis = plot.getAxis(axis_name)
             axis.disable_auto_si_prefix()
             axis.setTickFont(tick_font)
+            axis.show_minor_tick_labels = spec.minor_tick_labels
             axis.setPen(pg.mkPen(_color(spec.color), width=spec.thickness))
             axis.setTextPen(pg.mkPen(_color(spec.color)))
             # AxisItem uses rendered font metrics and available axis length
             # to omit crowded lower-level labels.  Level 0 keeps major labels
             # only while retaining minor tick marks.
-            axis.setStyle(maxTextLevel=2 if spec.minor_tick_labels else 0)
+            axis.setStyle(
+                maxTextLevel=2 if spec.minor_tick_labels else 0,
+                hideOverlappingLabels=True,
+                # Log axes can otherwise label every 2–9 minor interval at
+                # smaller window widths.  Leave generous space between major
+                # labels, with PyQtGraph pruning them as the view shrinks.
+                textFillLimits=[(0, 0.55), (2, 0.45), (4, 0.35), (6, 0.25)],
+            )
         for axis_name, spec in (("top", graph.x_axis), ("right", graph.y_axis)):
             axis = plot.getAxis(axis_name)
             axis.disable_auto_si_prefix()
@@ -380,10 +415,8 @@ class Plot2DWidget(pg.PlotWidget):
     def _add_annotation(
         self, plot: pg.PlotItem, graph: GraphDocument, annotation: Annotation
     ) -> None:
-        # Annotations are plot-view overlays, not canvas decorations.  Keep
-        # them out of automatic range calculations and above every curve,
-        # error bar, legend, and the plot background.  The document's own
-        # z_order only orders annotations against each other.
+        # Most annotations are plot-view overlays above curves. Boxes are an
+        # intentional exception: they are a highlighted region behind data.
         overlay_z = ANNOTATION_BASE_Z + annotation.z_order
 
         def add_overlay(item) -> None:
@@ -432,6 +465,18 @@ class Plot2DWidget(pg.PlotWidget):
                 pos=(end_x, end_y), angle=180 - angle, brush=color, pen=color
             )
             add_overlay(arrow)
+        elif annotation.kind is AnnotationKind.BOX:
+            if annotation.end is None:  # pragma: no cover - blocked by the model
+                raise ValueError("box annotation has no end point")
+            end_x, end_y = self._plot_position(graph, annotation.end)
+            rectangle = QGraphicsRectItem(
+                QRectF(min(x, end_x), min(y, end_y), abs(end_x - x), abs(end_y - y))
+            )
+            rectangle.setPen(pg.mkPen(color, width=annotation.line_width))
+            rectangle.setBrush(pg.mkBrush(color))
+            rectangle.setZValue(BOX_ANNOTATION_BASE_Z + annotation.z_order)
+            plot.addItem(rectangle, ignoreBounds=True)
+            self._annotation_items.append((annotation, rectangle))
         else:
             # No branch matched, so nothing was drawn.  Never let that pass
             # quietly: an annotation that is in the document but not on the
@@ -625,7 +670,14 @@ class Plot2DWidget(pg.PlotWidget):
                 painter.end()
             return destination
         exporter = pyqtgraph.exporters.ImageExporter(self.getPlotItem())
-        exporter.parameters()["width"] = width or (self._graph.width_px if self._graph else 1600)
+        image_width = width or (self._graph.width_px if self._graph else 1600)
+        image_height = self._graph.height_px if self._graph else 1000
+        exporter.parameters()["width"] = image_width
+        # ImageExporter normally derives height from the current on-screen
+        # widget.  A graph's output size is instead an explicit export size.
+        exporter.parameters().param("height").setValue(
+            image_height, blockSignal=exporter.widthChanged
+        )
         image = exporter.export(toBytes=True)
         dpi = self._graph.dpi if self._graph else 300
         image.setDotsPerMeterX(round(dpi / 0.0254))
@@ -636,6 +688,10 @@ class Plot2DWidget(pg.PlotWidget):
     def copy_to_clipboard(self) -> None:
         exporter = pyqtgraph.exporters.ImageExporter(self.getPlotItem())
         exporter.parameters()["width"] = self._graph.width_px if self._graph else 1600
+        exporter.parameters().param("height").setValue(
+            self._graph.height_px if self._graph else 1000,
+            blockSignal=exporter.widthChanged,
+        )
         QApplication.clipboard().setImage(exporter.export(toBytes=True))
 
     def export_csv(self, path: str | Path) -> Path:

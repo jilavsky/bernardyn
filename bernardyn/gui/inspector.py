@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Mapping
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -38,6 +38,7 @@ from bernardyn.gui.dialogs import AnnotationDialog
 class InspectorWidget(QScrollArea):
     graphChanged = Signal(object, bool, str)
     transformRequested = Signal(str)
+    resetRequested = Signal()
 
     def __init__(self, transforms: TransformRegistry, parent=None) -> None:
         super().__init__(parent)
@@ -48,6 +49,11 @@ class InspectorWidget(QScrollArea):
         # are deliberately kept separate from the canonical Dataset catalog.
         self._snapshots: Mapping[str, PlotSeries] = {}
         self._syncing = False
+        self._pending_live_edit = None
+        self._live_update_timer = QTimer(self)
+        self._live_update_timer.setSingleShot(True)
+        self._live_update_timer.setInterval(100)  # at most 10 graph updates/s
+        self._live_update_timer.timeout.connect(self._flush_live_edit)
         self.setWidgetResizable(True)
         content = QWidget(self)
         self.setWidget(content)
@@ -130,7 +136,12 @@ class InspectorWidget(QScrollArea):
         self.minor_tick_labels = QCheckBox("Show minor tick labels", group)
         self.minor_tick_labels.toggled.connect(self._edit_axes)
         self.axis_thickness = self._double(0.1, 10, 1)
-        self.axis_thickness.editingFinished.connect(self._edit_axes)
+        self.axis_thickness.valueChanged.connect(
+            lambda _: self._schedule_live_edit(self._edit_axes)
+        )
+        self.axis_thickness.editingFinished.connect(
+            lambda: self._finish_live_edit(self._edit_axes)
+        )
         self.axis_color = QPushButton("Choose…", group)
         self.axis_color.clicked.connect(self._choose_axis_color)
         self.legend = QCheckBox("Show legend", group)
@@ -149,7 +160,12 @@ class InspectorWidget(QScrollArea):
         self.legend_columns = QSpinBox(group)
         self.legend_columns.setRange(1, 8)
         self.legend_columns.setMinimumWidth(90)
-        self.legend_columns.editingFinished.connect(self._edit_legend)
+        self.legend_columns.valueChanged.connect(
+            lambda _: self._schedule_live_edit(self._edit_legend)
+        )
+        self.legend_columns.editingFinished.connect(
+            lambda: self._finish_live_edit(self._edit_legend)
+        )
         self.font_family = QFontComboBox(group)
         self.font_family.currentFontChanged.connect(self._edit_typography)
         self.title_font_size = QSpinBox(group)
@@ -179,6 +195,12 @@ class InspectorWidget(QScrollArea):
             control.editingFinished.connect(self._edit_dimensions)
         self.background = QPushButton("Choose…", group)
         self.background.clicked.connect(self._choose_background)
+        self.background_scope = QComboBox(group)
+        self.background_scope.addItem("Entire canvas", "canvas")
+        self.background_scope.addItem("Plot area only", "plot")
+        self.background_scope.currentIndexChanged.connect(self._edit_background_scope)
+        self.reset_graph = QPushButton("Reset graph to defaults…", group)
+        self.reset_graph.clicked.connect(self.resetRequested)
         form.addRow("Title:", self.title)
         form.addRow("Description:", self.description)
         form.addRow("Notes:", self.notes)
@@ -205,6 +227,8 @@ class InspectorWidget(QScrollArea):
         form.addRow("Output (in):", self._paired_row("Width", self.width_in, "Height", self.height_in, group))
         form.addRow("Output DPI:", self.dpi)
         form.addRow("Background:", self.background)
+        form.addRow("Apply background to:", self.background_scope)
+        form.addRow("", self.reset_graph)
         return group
 
     def _build_3d_group(self) -> QGroupBox:
@@ -380,6 +404,25 @@ class InspectorWidget(QScrollArea):
         spin.setValue(value)
         return spin
 
+    def _schedule_live_edit(self, callback) -> None:
+        """Coalesce spin-box arrow changes to a maximum of ten redraws/s."""
+        if self._syncing:
+            return
+        self._pending_live_edit = callback
+        self._live_update_timer.start()
+
+    def _flush_live_edit(self) -> None:
+        callback, self._pending_live_edit = self._pending_live_edit, None
+        if callback is not None:
+            callback()
+
+    def _finish_live_edit(self, callback) -> None:
+        if self._syncing:
+            return
+        self._live_update_timer.stop()
+        self._pending_live_edit = None
+        callback()
+
     def set_graph(
         self,
         graph: GraphDocument | None,
@@ -452,6 +495,13 @@ class InspectorWidget(QScrollArea):
         self.background.setStyleSheet(
             f"background: rgba({graph.background[0]}, {graph.background[1]}, "
             f"{graph.background[2]}, {graph.background[3]})"
+        )
+        self.background_scope.setCurrentIndex(
+            max(0, self.background_scope.findData(graph.background_scope))
+        )
+        self.background_scope.setEnabled(not graph.renderer_id.startswith("opengl"))
+        self.background_scope.setToolTip(
+            "Plot-area backgrounds are available for 2-D graphs; 3-D graphs use one canvas."
         )
         config = graph.renderer_config
         self.opengl_group.setVisible(graph.renderer_id.startswith("opengl"))
@@ -689,6 +739,13 @@ class InspectorWidget(QScrollArea):
         graph = replace(self._graph, background=color)
         self._graph = graph
         self.graphChanged.emit(graph, False, "Change graph background")
+
+    def _edit_background_scope(self) -> None:
+        if self._syncing or self._graph is None:
+            return
+        graph = replace(self._graph, background_scope=self.background_scope.currentData())
+        self._graph = graph
+        self.graphChanged.emit(graph, False, "Change graph background scope")
 
     def _choose_axis_color(self) -> None:
         if self._graph is None:

@@ -133,15 +133,17 @@ def test_log_mask_removes_points_individually(dataset):
 
 
 def test_graph_document_json_round_trip(dataset):
-    annotation = Annotation(AnnotationKind.ARROW, (1, 2), end=(3, 4), text="note")
+    annotation = Annotation(AnnotationKind.BOX, (1, 2), end=(3, 4), text="note")
     graph = GraphDocument(
         title="Publication",
         series=(SeriesView(dataset_id=dataset.id),),
         annotations=(annotation,),
+        background_scope="plot",
     )
     restored = GraphDocument.from_dict(graph.to_dict())
     assert restored == graph
-    assert restored.annotations[0].kind is AnnotationKind.ARROW
+    assert restored.annotations[0].kind is AnnotationKind.BOX
+    assert restored.background_scope == "plot"
 
 
 def test_series_multiplier_and_range(dataset):

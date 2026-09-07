@@ -7,8 +7,9 @@ from pathlib import Path
 from typing import Mapping
 
 import numpy as np
-from PySide6.QtCore import QByteArray
-from PySide6.QtGui import QPixmap
+from PySide6.QtCore import QByteArray, QRect, Qt
+from PySide6.QtGui import QImage, QPainter, QPixmap
+from PySide6.QtPrintSupport import QPrinter
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
 from bernardyn.core.models import GraphDocument, PlotSeries
@@ -39,7 +40,10 @@ class GraphPage(QWidget):
         self.fallback_reason: str | None = None
         self.render_warnings: list[str] = []
         self._layout = QVBoxLayout(self)
-        self._layout.setContentsMargins(0, 0, 0, 0)
+        # Keep the right boxed axis clear of an adjacent dock/widget edge.
+        # The small standoff is visible only around the interactive canvas,
+        # never added to exported graph dimensions.
+        self._layout.setContentsMargins(0, 0, 10, 0)
         self._build_renderer(graph)
 
     def _build_renderer(self, graph: GraphDocument) -> None:
@@ -93,6 +97,26 @@ class GraphPage(QWidget):
         pixmap = QPixmap()
         pixmap.loadFromData(QByteArray(self.capture_preview()), "PNG")
         QApplication.clipboard().setPixmap(pixmap)
+
+    def print_to(self, printer: QPrinter) -> None:
+        """Print a high-quality raster snapshot while preserving graph aspect."""
+        image = QImage.fromData(self.capture_preview(), "PNG")
+        if image.isNull():
+            raise OSError("could not create a printable graph image")
+        target = printer.pageRect(QPrinter.Unit.DevicePixel)
+        size = image.size()
+        size.scale(target.size(), Qt.AspectRatioMode.KeepAspectRatio)
+        rect = QRect(
+            target.x() + (target.width() - size.width()) // 2,
+            target.y() + (target.height() - size.height()) // 2,
+            size.width(),
+            size.height(),
+        )
+        painter = QPainter(printer)
+        try:
+            painter.drawImage(rect, image)
+        finally:
+            painter.end()
 
     def export_csv(self, path: str | Path) -> Path:
         return export_displayed_csv(path, self._graph, self._snapshots)

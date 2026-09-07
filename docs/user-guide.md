@@ -53,7 +53,8 @@ Use the **Graph** tab in the right-side inspector for graph-wide settings.
 
 - Choose 2-D, 3-D waterfall, or 3-D surface rendering.
 - Set axis labels, logarithmic axes, automatic or fixed ranges, grid lines,
-  axis colour, and width.
+  axis colour, and width. Numeric arrow controls redraw while they are used,
+  at no more than ten updates per second; pressing Enter applies immediately.
 - Enable **Show top and right axes** under **Box axes** to draw a boxed 2-D
   plot. The added axes carry tick marks but no duplicate numeric labels.
 - Leave **Show minor tick labels** off for dense log plots. Major labels and
@@ -62,6 +63,12 @@ Use the **Graph** tab in the right-side inspector for graph-wide settings.
 - Tick labels always use the plotted data values; Bernardyn does not apply a
   hidden SI-prefix multiplier to a log axis.
 - Enable and place the legend; set its frame, column count, and font size.
+- Choose whether the background colour applies to the whole canvas or only to
+  the interior plot area. The latter leaves a white frame around the axes and
+  is available for 2-D graphs.
+- **Reset graph to defaults…** restores graph-wide settings, axes, legend,
+  annotations, background, and output settings while keeping the loaded curves
+  and their styles. The action can be undone.
 
 Graphs keep their own configuration, so editing one graph does not alter
 another graph tab unless you deliberately apply a graph template.
@@ -69,7 +76,10 @@ another graph tab unless you deliberately apply a graph template.
 ## Add and refine annotations
 
 Open the **Annotations** tab and use **Add**, **Edit**, or **Delete**. Text,
-arrows, horizontal rules, and vertical rules use plotted data coordinates.
+arrows, horizontal rules, vertical rules, and boxes use plotted data
+coordinates. A box is drawn behind the curves, making it useful for lightly
+highlighting a region without obscuring data. Use its two coordinate pairs as
+opposite corners and choose a colour with transparency for its fill.
 
 When editing an annotation, change its coordinates or appearance and press
 **Update graph**. The dialog remains open while the graph updates, allowing
@@ -87,6 +97,17 @@ Bernardyn remembers the last successfully opened or saved **workspace** package
 and reopens it at the next application launch. Saving a single graph does not
 replace that remembered workspace. If the remembered file was moved, deleted,
 or cannot be read, Bernardyn starts with a new empty workspace instead.
+
+**Copy graph image** (Edit menu or Cmd/Ctrl+C) places a raster graph image on
+the system clipboard for pasting into other applications. **File → Print
+graph…** opens the system print dialog and prints the same graph image while
+preserving its aspect ratio.
+
+**Output (in)** and **Output DPI** control the size and resolution of exported
+PNG/JPEG files and the clipboard image. The interactive canvas continues to
+fill the available application window; changing output dimensions therefore
+does not resize the on-screen graph. SVG remains vector output, but uses the
+same requested physical dimensions.
 
 Use the export actions for images (PNG/JPEG/SVG), displayed data (CSV/Igor
 ITX), or canonical datasets (Igor H5XP). These exports serve different

@@ -24,6 +24,13 @@ behavior changes.
 - Automatic reopening of the last successfully opened or saved workspace
   package at application startup. Single-graph package exports do not replace
   the remembered workspace.
+- **Copy graph image** support (Edit menu / Cmd/Ctrl+C) and **Print graph…**
+  in the File menu.
+- A graph reset control that restores default graph settings while preserving
+  loaded curves and their styles.
+- Background application choices: the whole canvas or only the plot area.
+- Rectangle/box annotations with fill and outline, rendered behind plotted
+  data.
 
 ### Changed
 
@@ -31,6 +38,10 @@ behavior changes.
   `sasdata` group (for example, `PP15_25C_1min`); otherwise they use the
   filename rather than a long HDF5 path.
 - The **Legend columns** control has a wider field.
+- Arrow-button edits to **Axes: Width** and **Legend columns** redraw live at
+  a rate-limited maximum of ten updates per second; Enter applies immediately.
+- Output width, height, and DPI now determine the pixel dimensions of PNG/JPEG
+  exports and clipboard images.
 
 ### Fixed
 
@@ -39,3 +50,5 @@ behavior changes.
   the ticks now always show the plotted data values.
 - Dock widgets have stable IDs, so saved window layouts can restore without
   Qt's missing-`objectName` warnings.
+- Boxed axes retain a right-side standoff so the right border is not obscured
+  by an adjacent panel. Dense log tick labels are pruned more aggressively.

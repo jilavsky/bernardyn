@@ -76,9 +76,9 @@ Each `/graphs/<graph-uuid>` has:
 - optional `/renderer-data/<name>` numeric arrays with checksums.
 
 `GraphDocument` contains ordered `SeriesView` values, axis range/log/grid/style
-state, full RGBA colors, font family and sizes, legend state, graph pixel and
-physical inch dimensions plus output DPI,
-text/arrows/horizontal/vertical annotations with coordinates and
+state, full RGBA colors, a canvas-or-plot-area background scope, font family
+and sizes, legend state, graph pixel and physical inch dimensions plus output DPI,
+text/arrows/horizontal/vertical/box annotations with coordinates and
 z-order, descriptions and notes, plus opaque renderer configuration. A 3D
 configuration records mode, spacing, normalization, common-grid sample count,
 series-axis mapping, grid visibility, projection, and camera state.

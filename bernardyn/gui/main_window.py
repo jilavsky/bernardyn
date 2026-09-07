@@ -27,6 +27,7 @@ from PySide6.QtGui import (
     QUndoCommand,
     QUndoStack,
 )
+from PySide6.QtPrintSupport import QPrintDialog, QPrinter
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QDockWidget,
@@ -220,6 +221,7 @@ class MainWindow(QMainWindow):
         self.inspector = InspectorWidget(self.controller.transforms, self)
         self.inspector.graphChanged.connect(self._queue_graph_change)
         self.inspector.transformRequested.connect(self._set_transform)
+        self.inspector.resetRequested.connect(self._reset_graph_defaults)
         self._build_docks()
         self._build_actions()
         self._build_menus()
@@ -291,14 +293,16 @@ class MainWindow(QMainWindow):
         self.save_as_action = self._action("Save workspace package as…", self._save_workspace_as, QKeySequence.StandardKey.SaveAs)
         self.save_graph_action = self._action("Save graph package…", self._save_graph)
         self.export_image_action = self._action("Export image…", self._export_image, "Ctrl+E")
+        self.print_action = self._action("Print graph…", self._print_graph, QKeySequence.StandardKey.Print)
         self.export_csv_action = self._action("Export displayed data as CSV…", self._export_csv)
         self.export_itx_action = self._action("Export displayed data as Igor ITX…", self._export_itx)
         self.export_h5xp_action = self._action("Export canonical data to Igor h5xp…", self._export_h5xp)
-        self.copy_action = self._action("Copy graph", self._copy_graph, QKeySequence.StandardKey.Copy)
+        self.copy_action = self._action("Copy graph image", self._copy_graph, QKeySequence.StandardKey.Copy)
         self.new_2d_action = self._action("New 2D graph", lambda: self._new_graph("plot2d"))
         self.new_waterfall_action = self._action("New 3D waterfall", lambda: self._new_graph("opengl_waterfall"))
         self.new_surface_action = self._action("New 3D surface", lambda: self._new_graph("opengl_surface"))
         self.recompute_action = self._action("Recompute with current version", self._recompute_graph)
+        self.reset_graph_action = self._action("Reset graph to defaults…", self._reset_graph_defaults)
         self.color_preset_action = self._action(
             "Color preset", lambda: self._apply_series_preset("color")
         )
@@ -323,7 +327,8 @@ class MainWindow(QMainWindow):
             self.open_data_action, self.open_folder_action, self.browse_datasets_action,
             self.open_package_action,
             self.import_graph_action, None, self.save_action, self.save_as_action,
-            self.save_graph_action, None, self.export_image_action, self.export_csv_action,
+            self.save_graph_action, None, self.export_image_action, self.copy_action,
+            self.print_action, self.export_csv_action,
             self.export_itx_action, self.export_h5xp_action,
         ):
             file_menu.addSeparator() if action is None else file_menu.addAction(action)
@@ -331,7 +336,13 @@ class MainWindow(QMainWindow):
         edit_menu.addActions([self.undo_action, self.redo_action, self.copy_action])
         graph_menu = self.menuBar().addMenu("&Graph")
         graph_menu.addActions(
-            [self.new_2d_action, self.new_waterfall_action, self.new_surface_action, self.recompute_action]
+            [
+                self.new_2d_action,
+                self.new_waterfall_action,
+                self.new_surface_action,
+                self.recompute_action,
+                self.reset_graph_action,
+            ]
         )
         preset_menu = graph_menu.addMenu("Series presets")
         preset_menu.addActions(
@@ -925,6 +936,42 @@ class MainWindow(QMainWindow):
         page = self._current_page()
         if isinstance(page, GraphPage):
             page.copy_to_clipboard()
+            self.statusBar().showMessage("Graph image copied to the clipboard", 3000)
+
+    def _print_graph(self) -> None:
+        page = self._current_page()
+        if not isinstance(page, GraphPage):
+            return
+        printer = QPrinter(QPrinter.PrinterMode.HighResolution)
+        dialog = QPrintDialog(printer, self)
+        if dialog.exec() != dialog.DialogCode.Accepted:
+            return
+        try:
+            page.print_to(printer)
+        except Exception as exc:
+            QMessageBox.critical(self, "Print graph", str(exc))
+
+    def _reset_graph_defaults(self) -> None:
+        graph = self._current_graph()
+        if graph is None:
+            return
+        answer = QMessageBox.question(
+            self,
+            "Reset graph to defaults",
+            "Reset graph settings, axes, legend, annotations, and background?\n"
+            "Loaded datasets and their curve styles will be kept.",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        defaults = GraphDocument(
+            id=graph.id,
+            title=graph.title,
+            renderer_id=graph.renderer_id,
+            series=graph.series,
+            description=graph.description,
+            notes=graph.notes,
+        )
+        self.undo_stack.push(GraphEditCommand(self, graph, defaults, True, "Reset graph to defaults"))
 
     def _export_csv(self) -> None:
         page = self._current_page()

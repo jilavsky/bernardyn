@@ -89,6 +89,7 @@ class AnnotationKind(str, Enum):
     ARROW = "arrow"
     HLINE = "horizontal_line"
     VLINE = "vertical_line"
+    BOX = "box"
 
 
 @dataclass(frozen=True)
@@ -235,8 +236,8 @@ class Annotation:
         # boundary every annotation passes through, is what lets the renderer
         # rely on `kind` being a real member and compare it with `is`.
         object.__setattr__(self, "kind", AnnotationKind(self.kind))
-        if self.kind is AnnotationKind.ARROW and self.end is None:
-            raise ValueError("arrow annotations require an end point")
+        if self.kind in (AnnotationKind.ARROW, AnnotationKind.BOX) and self.end is None:
+            raise ValueError(f"{self.kind.value} annotations require an end point")
 
 
 @dataclass(frozen=True)
@@ -252,6 +253,7 @@ class GraphDocument:
     box_axes: bool = False
     annotations: tuple[Annotation, ...] = ()
     background: RGBA = (255, 255, 255, 255)
+    background_scope: str = "canvas"
     width_px: int = 1950
     height_px: int = 1350
     width_in: float = 6.5
@@ -268,6 +270,8 @@ class GraphDocument:
         object.__setattr__(self, "series", tuple(self.series))
         object.__setattr__(self, "annotations", tuple(self.annotations))
         object.__setattr__(self, "renderer_config", dict(self.renderer_config))
+        if self.background_scope not in {"canvas", "plot"}:
+            raise ValueError("background scope must be 'canvas' or 'plot'")
         if self.width_px < 100 or self.height_px < 100:
             raise ValueError("graph dimensions must be at least 100 pixels")
         if self.width_in <= 0 or self.height_in <= 0 or self.dpi <= 0:
@@ -326,6 +330,7 @@ class GraphDocument:
             box_axes=bool(value.get("box_axes", False)),
             annotations=annotations,
             background=tuple(value.get("background", (255, 255, 255, 255))),
+            background_scope=str(value.get("background_scope", "canvas")),
             width_px=int(value.get("width_px", 1950)),
             height_px=int(value.get("height_px", 1350)),
             width_in=float(value.get("width_in", 6.5)),

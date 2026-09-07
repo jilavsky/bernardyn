@@ -4,7 +4,7 @@ import numpy as np
 import pyqtgraph as pg
 import pytest
 from PySide6.QtCore import QMimeData, QPointF, Qt, QUrl
-from PySide6.QtGui import QDropEvent
+from PySide6.QtGui import QDropEvent, QImage
 from PySide6.QtWidgets import QAbstractItemView, QDockWidget
 
 from bernardyn.core.controller import ApplicationController
@@ -173,6 +173,8 @@ def test_2d_page_renders_and_exports_png_and_svg(qapp, tmp_path):
     dataset = Dataset(q=np.geomspace(0.001, 1, 100), intensity=np.geomspace(1000, 1, 100), label="sample")
     window.controller.add_dataset(dataset)
     graph = window.controller.workspace.graphs[0]
+    graph = replace(graph, width_px=640, height_px=480, width_in=6.4, height_in=4.8, dpi=100)
+    window.controller.update_graph(graph, recompute=False)
     window._render_graph(graph.id)
     page = window.tabs.currentWidget()
     assert isinstance(page, GraphPage)
@@ -185,6 +187,8 @@ def test_2d_page_renders_and_exports_png_and_svg(qapp, tmp_path):
     page.export_csv(csv)
     page.export_itx(itx)
     assert png.stat().st_size > 100
+    assert QImage(str(png)).size().width() == 640
+    assert QImage(str(png)).size().height() == 480
     assert b"<svg" in svg.read_bytes()[:500]
     assert csv.read_text().startswith("series,x,y,dx,dy,source_index")
     assert itx.read_text().startswith("IGOR\n")
@@ -239,6 +243,15 @@ def test_publication_axis_uses_direct_numbers_before_scientific_notation(qapp):
     ]
     assert axis.tickStrings([10, 100, 1000], 1.0, 10) == ["10", "100", "1000"]
     assert not axis.autoSIPrefix
+
+
+def test_log_axis_keeps_minor_ticks_but_not_minor_labels_by_default(qapp):
+    axis = PublicationAxisItem("bottom")
+    levels = axis.logTickValues(-4.0, -1.0, 400, [])
+    assert levels[0][1] == [-4.0, -3.0, -2.0, -1.0]
+    assert levels[1][1]  # 2–9 ticks remain available as unlabelled minor ticks.
+    axis.show_minor_tick_labels = True
+    assert axis.logTickValues(-4.0, -1.0, 400, []) != levels
 
 
 def test_log_axis_labels_do_not_keep_stale_si_scaling_after_rerender(qapp):
