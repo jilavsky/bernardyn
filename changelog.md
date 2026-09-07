@@ -45,6 +45,8 @@ behavior changes.
 
 ### Fixed
 
+- The cross-platform GitHub Actions test workflow no longer uses the
+  unavailable `runner` context in job-level environment configuration.
 - Legend controls now recreate the PyQtGraph legend correctly after rerendering.
 - Log-axis labels no longer retain stale PyQtGraph SI scaling after a rerender;
   the ticks now always show the plotted data values.
