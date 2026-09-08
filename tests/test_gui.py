@@ -36,6 +36,30 @@ def test_main_window_starts_with_independent_graph_model(qapp):
     window.close()
 
 
+def test_2d_canvas_previews_output_aspect_with_canvas_coloured_right_standoff(qapp):
+    graph = GraphDocument(
+        width_px=800,
+        height_px=400,
+        width_in=8,
+        height_in=4,
+        dpi=100,
+        background=(220, 230, 240, 255),
+    )
+    page = GraphPage(graph)
+    page.resize(800, 400)
+    page.show()
+    page.render(graph, {})
+    qapp.processEvents()
+    assert page.renderer.geometry().right() < page.canvas.width() - 1
+    assert page.canvas.palette().color(page.canvas.backgroundRole()).getRgb() == (220, 230, 240, 255)
+    # The graph fills the requested 2:1 shape, while the canvas keeps a clear
+    # right-side background margin for the boxed right axis.
+    geometry = page.renderer.geometry()
+    assert geometry.width() / geometry.height() == pytest.approx(2.0, rel=0.01)
+    assert page.canvas.width() - geometry.right() - 1 >= page.canvas.RIGHT_STANDOFF_PX
+    page.close()
+
+
 def test_last_workspace_is_remembered_on_save_and_restored(qapp, tmp_path, monkeypatch):
     state_path = tmp_path / "preferences.json"
     package_path = tmp_path / "saved-workspace.bernardyn.h5"

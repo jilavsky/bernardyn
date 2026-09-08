@@ -42,6 +42,8 @@ behavior changes.
   a rate-limited maximum of ten updates per second; Enter applies immediately.
 - Output width, height, and DPI now determine the pixel dimensions of PNG/JPEG
   exports and clipboard images.
+- The interactive 2-D canvas now previews the selected output aspect ratio
+  using canvas-coloured padding rather than changing its absolute screen size.
 
 ### Fixed
 
@@ -53,4 +55,5 @@ behavior changes.
 - Dock widgets have stable IDs, so saved window layouts can restore without
   Qt's missing-`objectName` warnings.
 - Boxed axes retain a right-side standoff so the right border is not obscured
-  by an adjacent panel. Dense log tick labels are pruned more aggressively.
+  by an adjacent panel; the standoff now uses the graph canvas colour. Dense
+  log tick labels are pruned more aggressively.

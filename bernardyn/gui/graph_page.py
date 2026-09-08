@@ -8,7 +8,7 @@ from typing import Mapping
 
 import numpy as np
 from PySide6.QtCore import QByteArray, QRect, Qt
-from PySide6.QtGui import QImage, QPainter, QPixmap
+from PySide6.QtGui import QColor, QImage, QPainter, QPalette, QPixmap
 from PySide6.QtPrintSupport import QPrinter
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
@@ -20,6 +20,57 @@ from bernardyn.renderers import (
     RendererRegistry,
     builtin_renderers,
 )
+
+
+class GraphCanvas(QWidget):
+    """Canvas-coloured frame that previews a graph's output aspect ratio."""
+
+    RIGHT_STANDOFF_PX = 12
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._renderer = None
+        self._aspect_ratio: float | None = None
+        self.setAutoFillBackground(True)
+
+    def set_renderer(self, renderer) -> None:
+        if self._renderer is not None:
+            self._renderer.hide()
+        self._renderer = renderer
+        if renderer is not None:
+            renderer.setParent(self)
+            renderer.show()
+        self._layout_renderer()
+
+    def set_graph_appearance(self, graph: GraphDocument, *, constrain_aspect: bool) -> None:
+        # Plot-area-only backgrounds retain a white outer canvas, matching the
+        # renderer's own canvas outside its coloured ViewBox.
+        color = graph.background if graph.background_scope == "canvas" else (255, 255, 255, 255)
+        palette = self.palette()
+        palette.setColor(QPalette.ColorRole.Window, QColor(*color))
+        self.setPalette(palette)
+        self._aspect_ratio = graph.width_px / graph.height_px if constrain_aspect else None
+        self._layout_renderer()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt API
+        super().resizeEvent(event)
+        self._layout_renderer()
+
+    def _layout_renderer(self) -> None:
+        if self._renderer is None:
+            return
+        available = self.contentsRect().adjusted(0, 0, -self.RIGHT_STANDOFF_PX, 0)
+        if available.width() <= 0 or available.height() <= 0:
+            return
+        width, height = available.width(), available.height()
+        if self._aspect_ratio is not None:
+            if width / height > self._aspect_ratio:
+                width = round(height * self._aspect_ratio)
+            else:
+                height = round(width / self._aspect_ratio)
+        x = available.x() + (available.width() - width) // 2
+        y = available.y() + (available.height() - height) // 2
+        self._renderer.setGeometry(QRect(x, y, width, height))
 
 
 class GraphPage(QWidget):
@@ -40,25 +91,27 @@ class GraphPage(QWidget):
         self.fallback_reason: str | None = None
         self.render_warnings: list[str] = []
         self._layout = QVBoxLayout(self)
-        # Keep the right boxed axis clear of an adjacent dock/widget edge.
-        # The small standoff is visible only around the interactive canvas,
-        # never added to exported graph dimensions.
-        self._layout.setContentsMargins(0, 0, 10, 0)
+        self._layout.setContentsMargins(0, 0, 0, 0)
+        self.canvas = GraphCanvas(self)
+        self._layout.addWidget(self.canvas)
         self._build_renderer(graph)
 
     def _build_renderer(self, graph: GraphDocument) -> None:
         if self.renderer is not None:
-            self._layout.removeWidget(self.renderer)
+            self.canvas.set_renderer(None)
             self.renderer.deleteLater()
         self.fallback_reason = None
         try:
-            self.renderer = self.renderers.get(graph.renderer_id).create(self)
+            self.renderer = self.renderers.get(graph.renderer_id).create(self.canvas)
             self._renderer_id = graph.renderer_id
         except Exception as exc:
             self.fallback_reason = str(exc)
-            self.renderer = Plot2DWidget(self)
+            self.renderer = Plot2DWidget(self.canvas)
             self._renderer_id = graph.renderer_id
-        self._layout.addWidget(self.renderer)
+        self.canvas.set_renderer(self.renderer)
+        self.canvas.set_graph_appearance(
+            graph, constrain_aspect=isinstance(self.renderer, Plot2DWidget)
+        )
 
     def render(self, graph: GraphDocument, snapshots: Mapping[str, PlotSeries]) -> None:
         self._graph = graph
@@ -79,6 +132,9 @@ class GraphPage(QWidget):
         # slot and every widget has one, so getattr would silently find it.
         refresh = getattr(self.renderer, "apply_graph", None) or self.renderer.render
         refresh(graph, rendered_snapshots)
+        self.canvas.set_graph_appearance(
+            graph, constrain_aspect=isinstance(self.renderer, Plot2DWidget)
+        )
         self.render_warnings = list(getattr(self.renderer, "render_warnings", []))
 
     def capture_preview(self) -> bytes:

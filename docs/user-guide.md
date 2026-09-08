@@ -104,10 +104,11 @@ graph…** opens the system print dialog and prints the same graph image while
 preserving its aspect ratio.
 
 **Output (in)** and **Output DPI** control the size and resolution of exported
-PNG/JPEG files and the clipboard image. The interactive canvas continues to
-fill the available application window; changing output dimensions therefore
-does not resize the on-screen graph. SVG remains vector output, but uses the
-same requested physical dimensions.
+PNG/JPEG files and the clipboard image. The interactive 2-D graph is fitted to
+the available window at the same output aspect ratio; unused space is canvas-
+coloured padding. It therefore previews the output shape without trying to
+match the output's absolute physical size. SVG remains vector output, but uses
+the same requested physical dimensions.
 
 Use the export actions for images (PNG/JPEG/SVG), displayed data (CSV/Igor
 ITX), or canonical datasets (Igor H5XP). These exports serve different
