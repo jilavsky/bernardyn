@@ -41,11 +41,16 @@ behavior changes.
   filename rather than a long HDF5 path.
 - The **Legend columns** control has a wider field.
 - Arrow-button edits to **Axes: Width** and **Legend columns** redraw live at
-  a rate-limited maximum of ten updates per second; Enter applies immediately.
+  a rate-limited maximum of five updates per second; Enter applies immediately.
 - Output width, height, and DPI now determine the pixel dimensions of PNG/JPEG
   exports and clipboard images.
 - The interactive 2-D canvas now previews the selected output aspect ratio
   using canvas-coloured padding rather than changing its absolute screen size.
+- Typography size controls now redraw from their arrow buttons after a
+  rate-limited 200 ms delay, and their fields are wider for readability.
+- The Graph inspector combines background colour and scope on one row and
+  places **Preview output…** beside **Reset graph to defaults…**.
+- The interactive graph displays its current on-screen canvas pixel size.
 
 ### Fixed
 

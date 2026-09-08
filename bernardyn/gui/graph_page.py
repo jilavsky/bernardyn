@@ -41,6 +41,18 @@ class GraphCanvas(QWidget):
         self._renderer = None
         self._aspect_ratio: float | None = None
         self.setAutoFillBackground(True)
+        self.size_badge = QLabel(self)
+        self.size_badge.setStyleSheet(
+            "QLabel { background: rgba(255, 255, 255, 185); color: #444; "
+            "border: 1px solid rgba(80, 80, 80, 110); border-radius: 3px; "
+            "padding: 2px 5px; }"
+        )
+        self.size_badge.setToolTip(
+            "Current on-screen graph canvas size. This changes with the window; "
+            "compare it with Canvas (px) when adjusting relative font sizes."
+        )
+        self.size_badge.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.size_badge.hide()
 
     def set_renderer(self, renderer) -> None:
         if self._renderer is not None:
@@ -49,6 +61,8 @@ class GraphCanvas(QWidget):
         if renderer is not None:
             renderer.setParent(self)
             renderer.show()
+        else:
+            self.size_badge.hide()
         self._layout_renderer()
 
     def set_graph_appearance(self, graph: GraphDocument, *, constrain_aspect: bool) -> None:
@@ -80,6 +94,11 @@ class GraphCanvas(QWidget):
         x = available.x() + (available.width() - width) // 2
         y = available.y() + (available.height() - height) // 2
         self._renderer.setGeometry(QRect(x, y, width, height))
+        self.size_badge.setText(f"Display: {width} × {height} px")
+        self.size_badge.adjustSize()
+        self.size_badge.move(x + width - self.size_badge.width() - 6, y + 6)
+        self.size_badge.raise_()
+        self.size_badge.show()
 
 
 class OutputPreviewDialog(QDialog):

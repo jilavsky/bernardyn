@@ -57,6 +57,7 @@ def test_2d_canvas_previews_output_aspect_with_canvas_coloured_right_standoff(qa
     geometry = page.renderer.geometry()
     assert geometry.width() / geometry.height() == pytest.approx(2.0, rel=0.01)
     assert page.canvas.width() - geometry.right() - 1 >= page.canvas.RIGHT_STANDOFF_PX
+    assert page.canvas.size_badge.text() == f"Display: {geometry.width()} × {geometry.height()} px"
     page.close()
 
 
@@ -89,6 +90,19 @@ def test_documentation_button_is_present(qapp):
     assert window.documentation_button.parent() is not window.menuBar()
     assert window.findChild(QDockWidget, "datasetsDock") is not None
     assert window.findChild(QDockWidget, "graphInspectorDock") is not None
+    window.controller.workspace.dirty = False
+    window.close()
+
+
+def test_typography_spin_boxes_update_after_a_rate_limited_arrow_change(qapp):
+    window = MainWindow()
+    inspector = window.inspector
+    original = window.controller.workspace.graphs[0].typography.title_size
+    assert inspector.title_font_size.minimumWidth() >= 88
+    inspector.title_font_size.setValue(original + 1)
+    assert inspector._live_update_timer.isActive()
+    inspector._flush_live_edit()
+    assert window.controller.workspace.graphs[0].typography.title_size == original + 1
     window.controller.workspace.dirty = False
     window.close()
 

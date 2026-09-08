@@ -54,7 +54,7 @@ Use the **Graph** tab in the right-side inspector for graph-wide settings.
 - Choose 2-D, 3-D waterfall, or 3-D surface rendering.
 - Set axis labels, logarithmic axes, automatic or fixed ranges, grid lines,
   axis colour, and width. Numeric arrow controls redraw while they are used,
-  at no more than ten updates per second; pressing Enter applies immediately.
+  at no more than five updates per second; pressing Enter applies immediately.
 - Enable **Show top and right axes** under **Box axes** to draw a boxed 2-D
   plot. The added axes carry tick marks but no duplicate numeric labels.
 - Leave **Show minor tick labels** off for dense log plots. Major labels and
@@ -109,6 +109,11 @@ the available window at the same output aspect ratio; unused space is canvas-
 coloured padding. It therefore previews the output shape without trying to
 match the output's absolute physical size. SVG remains vector output, but uses
 the same requested physical dimensions.
+
+The small **Display: W × H px** badge at the upper-right of the graph shows
+the current on-screen canvas size. It changes when the application window is
+resized; it is useful for comparing the fitted display with **Canvas (px)**,
+but it is not the exported image size.
 
 Use **Preview output…** beside the output controls (or in the File/Graph menu)
 to open a separate, exact-pixel raster preview. It is generated only on demand;

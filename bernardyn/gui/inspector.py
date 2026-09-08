@@ -53,7 +53,7 @@ class InspectorWidget(QScrollArea):
         self._pending_live_edit = None
         self._live_update_timer = QTimer(self)
         self._live_update_timer.setSingleShot(True)
-        self._live_update_timer.setInterval(100)  # at most 10 graph updates/s
+        self._live_update_timer.setInterval(200)  # at most 5 graph updates/s
         self._live_update_timer.timeout.connect(self._flush_live_edit)
         self.setWidgetResizable(True)
         content = QWidget(self)
@@ -180,7 +180,13 @@ class InspectorWidget(QScrollArea):
             self.legend_font_size,
         ):
             control.setRange(6, 144)
-            control.editingFinished.connect(self._edit_typography)
+            control.setMinimumWidth(88)
+            control.valueChanged.connect(
+                lambda _: self._schedule_live_edit(self._edit_typography)
+            )
+            control.editingFinished.connect(
+                lambda: self._finish_live_edit(self._edit_typography)
+            )
         self.canvas_width = QSpinBox(group)
         self.canvas_height = QSpinBox(group)
         for control, value in ((self.canvas_width, 1950), (self.canvas_height, 1350)):
@@ -205,6 +211,14 @@ class InspectorWidget(QScrollArea):
         self.background_scope.currentIndexChanged.connect(self._edit_background_scope)
         self.reset_graph = QPushButton("Reset graph to defaults…", group)
         self.reset_graph.clicked.connect(self.resetRequested)
+        background_row = self._paired_row(
+            "Color", self.background, "Apply to", self.background_scope, group
+        )
+        output_actions = QWidget(group)
+        output_actions_layout = QHBoxLayout(output_actions)
+        output_actions_layout.setContentsMargins(0, 0, 0, 0)
+        output_actions_layout.addWidget(self.output_preview, 1)
+        output_actions_layout.addWidget(self.reset_graph, 1)
         form.addRow("Title:", self.title)
         form.addRow("Description:", self.description)
         form.addRow("Notes:", self.notes)
@@ -230,10 +244,8 @@ class InspectorWidget(QScrollArea):
         form.addRow("Canvas (px):", self._paired_row("Width", self.canvas_width, "Height", self.canvas_height, group))
         form.addRow("Output (in):", self._paired_row("Width", self.width_in, "Height", self.height_in, group))
         form.addRow("Output DPI:", self.dpi)
-        form.addRow("", self.output_preview)
-        form.addRow("Background:", self.background)
-        form.addRow("Apply background to:", self.background_scope)
-        form.addRow("", self.reset_graph)
+        form.addRow("Background:", background_row)
+        form.addRow("", output_actions)
         return group
 
     def _build_3d_group(self) -> QGroupBox:
@@ -410,7 +422,7 @@ class InspectorWidget(QScrollArea):
         return spin
 
     def _schedule_live_edit(self, callback) -> None:
-        """Coalesce spin-box arrow changes to a maximum of ten redraws/s."""
+        """Coalesce spin-box arrow changes to a maximum of five redraws/s."""
         if self._syncing:
             return
         self._pending_live_edit = callback
