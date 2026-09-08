@@ -52,7 +52,7 @@ from bernardyn.gui.dialogs import (
     LocationDialog,
     SeriesTransformParameterDialog,
 )
-from bernardyn.gui.graph_page import GraphPage, PreviewPage
+from bernardyn.gui.graph_page import GraphPage, OutputPreviewDialog, PreviewPage
 from bernardyn.gui.inspector import InspectorWidget
 from bernardyn.io.container import load_package
 from bernardyn.io.igor import export_datasets_to_h5xp
@@ -199,6 +199,7 @@ class MainWindow(QMainWindow):
         self.renderers = builtin_renderers()
         self.thread_pool = QThreadPool.globalInstance()
         self._workers: set[SourceLoadWorker] = set()
+        self._output_previews: list[OutputPreviewDialog] = []
         self._pending_graph_renders: set[str] = set()
         self._refreshing_dataset_list = False
         self._startup_restore_pending = True
@@ -222,6 +223,7 @@ class MainWindow(QMainWindow):
         self.inspector.graphChanged.connect(self._queue_graph_change)
         self.inspector.transformRequested.connect(self._set_transform)
         self.inspector.resetRequested.connect(self._reset_graph_defaults)
+        self.inspector.outputPreviewRequested.connect(self._preview_output)
         self._build_docks()
         self._build_actions()
         self._build_menus()
@@ -293,6 +295,7 @@ class MainWindow(QMainWindow):
         self.save_as_action = self._action("Save workspace package as…", self._save_workspace_as, QKeySequence.StandardKey.SaveAs)
         self.save_graph_action = self._action("Save graph package…", self._save_graph)
         self.export_image_action = self._action("Export image…", self._export_image, "Ctrl+E")
+        self.output_preview_action = self._action("Preview output…", self._preview_output)
         self.print_action = self._action("Print graph…", self._print_graph, QKeySequence.StandardKey.Print)
         self.export_csv_action = self._action("Export displayed data as CSV…", self._export_csv)
         self.export_itx_action = self._action("Export displayed data as Igor ITX…", self._export_itx)
@@ -328,7 +331,7 @@ class MainWindow(QMainWindow):
             self.open_package_action,
             self.import_graph_action, None, self.save_action, self.save_as_action,
             self.save_graph_action, None, self.export_image_action, self.copy_action,
-            self.print_action, self.export_csv_action,
+            self.print_action, self.output_preview_action, self.export_csv_action,
             self.export_itx_action, self.export_h5xp_action,
         ):
             file_menu.addSeparator() if action is None else file_menu.addAction(action)
@@ -341,6 +344,7 @@ class MainWindow(QMainWindow):
                 self.new_waterfall_action,
                 self.new_surface_action,
                 self.recompute_action,
+                self.output_preview_action,
                 self.reset_graph_action,
             ]
         )
@@ -937,6 +941,26 @@ class MainWindow(QMainWindow):
         if isinstance(page, GraphPage):
             page.copy_to_clipboard()
             self.statusBar().showMessage("Graph image copied to the clipboard", 3000)
+
+    def _preview_output(self) -> None:
+        page = self._current_page()
+        graph = self._current_graph()
+        if not isinstance(page, GraphPage) or graph is None:
+            return
+        try:
+            image = page.output_preview_image()
+        except Exception as exc:
+            QMessageBox.critical(self, "Preview output", str(exc))
+            return
+        dialog = OutputPreviewDialog(image, graph.title, self)
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        dialog.destroyed.connect(
+            lambda *_: self._output_previews.remove(dialog)
+            if dialog in self._output_previews
+            else None
+        )
+        self._output_previews.append(dialog)
+        dialog.show()
 
     def _print_graph(self) -> None:
         page = self._current_page()

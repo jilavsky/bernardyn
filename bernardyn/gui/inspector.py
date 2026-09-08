@@ -39,6 +39,7 @@ class InspectorWidget(QScrollArea):
     graphChanged = Signal(object, bool, str)
     transformRequested = Signal(str)
     resetRequested = Signal()
+    outputPreviewRequested = Signal()
 
     def __init__(self, transforms: TransformRegistry, parent=None) -> None:
         super().__init__(parent)
@@ -193,6 +194,9 @@ class InspectorWidget(QScrollArea):
         self.dpi.setValue(300)
         for control in (self.width_in, self.height_in, self.dpi):
             control.editingFinished.connect(self._edit_dimensions)
+        self.output_preview = QPushButton("Preview output…", group)
+        self.output_preview.setToolTip("Open an exact-pixel preview in a separate window")
+        self.output_preview.clicked.connect(self.outputPreviewRequested)
         self.background = QPushButton("Choose…", group)
         self.background.clicked.connect(self._choose_background)
         self.background_scope = QComboBox(group)
@@ -226,6 +230,7 @@ class InspectorWidget(QScrollArea):
         form.addRow("Canvas (px):", self._paired_row("Width", self.canvas_width, "Height", self.canvas_height, group))
         form.addRow("Output (in):", self._paired_row("Width", self.width_in, "Height", self.height_in, group))
         form.addRow("Output DPI:", self.dpi)
+        form.addRow("", self.output_preview)
         form.addRow("Background:", self.background)
         form.addRow("Apply background to:", self.background_scope)
         form.addRow("", self.reset_graph)

@@ -31,6 +31,8 @@ behavior changes.
 - Background application choices: the whole canvas or only the plot area.
 - Rectangle/box annotations with fill and outline, rendered behind plotted
   data.
+- An on-demand **Preview output…** window showing the exact export pixel image,
+  with independent copy and print controls.
 
 ### Changed
 
@@ -57,3 +59,5 @@ behavior changes.
 - Boxed axes retain a right-side standoff so the right border is not obscured
   by an adjacent panel; the standoff now uses the graph canvas colour. Dense
   log tick labels are pruned more aggressively.
+- Boxed right axes reserve a small internal graphics-view margin so their line
+  is not clipped in the interactive window.

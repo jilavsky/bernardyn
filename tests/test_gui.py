@@ -213,6 +213,8 @@ def test_2d_page_renders_and_exports_png_and_svg(qapp, tmp_path):
     assert png.stat().st_size > 100
     assert QImage(str(png)).size().width() == 640
     assert QImage(str(png)).size().height() == 480
+    assert page.output_preview_image().size().width() == 640
+    assert page.output_preview_image().size().height() == 480
     assert b"<svg" in svg.read_bytes()[:500]
     assert csv.read_text().startswith("series,x,y,dx,dy,source_index")
     assert itx.read_text().startswith("IGOR\n")

@@ -110,6 +110,11 @@ coloured padding. It therefore previews the output shape without trying to
 match the output's absolute physical size. SVG remains vector output, but uses
 the same requested physical dimensions.
 
+Use **Preview output…** beside the output controls (or in the File/Graph menu)
+to open a separate, exact-pixel raster preview. It is generated only on demand;
+the preview window can be closed independently and has its own **Copy image**
+and **Print…** buttons.
+
 Use the export actions for images (PNG/JPEG/SVG), displayed data (CSV/Igor
 ITX), or canonical datasets (Igor H5XP). These exports serve different
 purposes and do not replace a Bernardyn workspace package.

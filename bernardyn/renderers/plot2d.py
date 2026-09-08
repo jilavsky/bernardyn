@@ -168,6 +168,10 @@ class Plot2DWidget(pg.PlotWidget):
         else:
             self.setBackground(background)
             plot.vb.setBackgroundColor(QColor(0, 0, 0, 0))
+        # The right boxed axis is drawn against the outer edge of the graphics
+        # view.  Reserve a few pixels *inside* that view so its pen is not
+        # clipped on screen (the exporter does not have this clipping).
+        plot.layout.setContentsMargins(0, 0, 4 if graph.box_axes else 0, 0)
         plot.setTitle(
             graph.title,
             color=_color(graph.x_axis.color).name(),
@@ -646,6 +650,24 @@ class Plot2DWidget(pg.PlotWidget):
 
     capture_snapshot = capture_preview
 
+    def capture_output_image(self, width: int | None = None):
+        """Render the exact raster image used for export and clipboard copy."""
+        graph = self._graph
+        image_width = width or (graph.width_px if graph else 1600)
+        image_height = (
+            round(image_width * graph.height_px / graph.width_px)
+            if width is not None and graph is not None
+            else (graph.height_px if graph else 1000)
+        )
+        exporter = pyqtgraph.exporters.ImageExporter(self.getPlotItem())
+        exporter.parameters()["width"] = image_width
+        # ImageExporter normally derives height from the current on-screen
+        # widget.  A graph's output size is instead an explicit export size.
+        exporter.parameters().param("height").setValue(
+            image_height, blockSignal=exporter.widthChanged
+        )
+        return exporter.export(toBytes=True)
+
     def save_image(self, path: str | Path, width: int | None = None) -> Path:
         destination = Path(path)
         if destination.suffix.lower() == ".svg":
@@ -669,16 +691,7 @@ class Plot2DWidget(pg.PlotWidget):
             finally:
                 painter.end()
             return destination
-        exporter = pyqtgraph.exporters.ImageExporter(self.getPlotItem())
-        image_width = width or (self._graph.width_px if self._graph else 1600)
-        image_height = self._graph.height_px if self._graph else 1000
-        exporter.parameters()["width"] = image_width
-        # ImageExporter normally derives height from the current on-screen
-        # widget.  A graph's output size is instead an explicit export size.
-        exporter.parameters().param("height").setValue(
-            image_height, blockSignal=exporter.widthChanged
-        )
-        image = exporter.export(toBytes=True)
+        image = self.capture_output_image(width)
         dpi = self._graph.dpi if self._graph else 300
         image.setDotsPerMeterX(round(dpi / 0.0254))
         image.setDotsPerMeterY(round(dpi / 0.0254))
@@ -686,13 +699,7 @@ class Plot2DWidget(pg.PlotWidget):
         return destination
 
     def copy_to_clipboard(self) -> None:
-        exporter = pyqtgraph.exporters.ImageExporter(self.getPlotItem())
-        exporter.parameters()["width"] = self._graph.width_px if self._graph else 1600
-        exporter.parameters().param("height").setValue(
-            self._graph.height_px if self._graph else 1000,
-            blockSignal=exporter.widthChanged,
-        )
-        QApplication.clipboard().setImage(exporter.export(toBytes=True))
+        QApplication.clipboard().setImage(self.capture_output_image())
 
     def export_csv(self, path: str | Path) -> Path:
         destination = Path(path)

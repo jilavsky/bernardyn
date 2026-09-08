@@ -7,10 +7,19 @@ from pathlib import Path
 from typing import Mapping
 
 import numpy as np
-from PySide6.QtCore import QByteArray, QRect, Qt
+from PySide6.QtCore import QByteArray, QRect, Qt, QTimer
 from PySide6.QtGui import QColor, QImage, QPainter, QPalette, QPixmap
-from PySide6.QtPrintSupport import QPrinter
-from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
+from PySide6.QtPrintSupport import QPrintDialog, QPrinter
+from PySide6.QtWidgets import (
+    QApplication,
+    QDialog,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QScrollArea,
+    QVBoxLayout,
+    QWidget,
+)
 
 from bernardyn.core.models import GraphDocument, PlotSeries
 from bernardyn.io.curve_export import export_displayed_csv, export_displayed_itx
@@ -71,6 +80,91 @@ class GraphCanvas(QWidget):
         x = available.x() + (available.width() - width) // 2
         y = available.y() + (available.height() - height) // 2
         self._renderer.setGeometry(QRect(x, y, width, height))
+
+
+class OutputPreviewDialog(QDialog):
+    """A disposable, exact-pixel raster output preview."""
+
+    def __init__(self, image: QImage, title: str, parent=None) -> None:
+        super().__init__(parent)
+        self._image = image
+        self._fit = True
+        self.setWindowTitle(f"Output preview — {title}")
+        self.image_label = QLabel(self)
+        self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.scroll = QScrollArea(self)
+        self.scroll.setWidget(self.image_label)
+        self.scroll.setWidgetResizable(False)
+        self.info = QLabel(f"Exact output: {image.width()} × {image.height()} px (shown fitted)", self)
+        fit = QPushButton("Fit", self)
+        fit.setCheckable(True)
+        fit.setChecked(True)
+        fit.toggled.connect(self._set_fit)
+        copy = QPushButton("Copy image", self)
+        copy.clicked.connect(lambda: QApplication.clipboard().setImage(self._image))
+        print_button = QPushButton("Print…", self)
+        print_button.clicked.connect(self._print_image)
+        close = QPushButton("Close", self)
+        close.clicked.connect(self.close)
+        buttons = QHBoxLayout()
+        buttons.addWidget(fit)
+        buttons.addStretch(1)
+        buttons.addWidget(copy)
+        buttons.addWidget(print_button)
+        buttons.addWidget(close)
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.info)
+        layout.addWidget(self.scroll, 1)
+        layout.addLayout(buttons)
+        self.resize(1050, 760)
+        QTimer.singleShot(0, self._refresh_image)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt API
+        super().resizeEvent(event)
+        if self._fit:
+            self._refresh_image()
+
+    def _set_fit(self, fit: bool) -> None:
+        self._fit = fit
+        self.info.setText(
+            f"Exact output: {self._image.width()} × {self._image.height()} px "
+            f"({'shown fitted' if fit else 'shown at 100%'})"
+        )
+        self._refresh_image()
+
+    def _refresh_image(self) -> None:
+        image = self._image
+        if self._fit and self.scroll.viewport().size().isValid():
+            image = image.scaled(
+                self.scroll.viewport().size(),
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+        pixmap = QPixmap.fromImage(image)
+        self.image_label.setPixmap(pixmap)
+        self.image_label.resize(pixmap.size())
+
+    def _print_image(self) -> None:
+        printer = QPrinter(QPrinter.PrinterMode.HighResolution)
+        dialog = QPrintDialog(printer, self)
+        if dialog.exec() != dialog.DialogCode.Accepted:
+            return
+        target = printer.pageRect(QPrinter.Unit.DevicePixel)
+        size = self._image.size()
+        size.scale(target.size(), Qt.AspectRatioMode.KeepAspectRatio)
+        painter = QPainter(printer)
+        try:
+            painter.drawImage(
+                QRect(
+                    target.x() + (target.width() - size.width()) // 2,
+                    target.y() + (target.height() - size.height()) // 2,
+                    size.width(),
+                    size.height(),
+                ),
+                self._image,
+            )
+        finally:
+            painter.end()
 
 
 class GraphPage(QWidget):
@@ -153,6 +247,18 @@ class GraphPage(QWidget):
         pixmap = QPixmap()
         pixmap.loadFromData(QByteArray(self.capture_preview()), "PNG")
         QApplication.clipboard().setPixmap(pixmap)
+
+    def output_preview_image(self) -> QImage:
+        capture = getattr(self.renderer, "capture_output_image", None)
+        if capture is not None:
+            return capture()
+        image = QImage.fromData(self.capture_preview(), "PNG")
+        return image.scaled(
+            self._graph.width_px,
+            self._graph.height_px,
+            Qt.AspectRatioMode.IgnoreAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
 
     def print_to(self, printer: QPrinter) -> None:
         """Print a high-quality raster snapshot while preserving graph aspect."""
