@@ -1,5 +1,5 @@
 {% set name = "bernardyn" %}
-{% set version = "0.0.1b3" %}
+{% set version = "0.0.1b4" %}
 
 package:
   name: {{ name|lower }}
@@ -28,7 +28,8 @@ requirements:
     - pyside6
     - pyqtgraph >=0.13
     - pyopengl >=3.1.7
-    - pyirena >=1.1.0b12,<2
+    - pyirena >=1.1.0,<2
+    - six >=1.16
 
 test:
   imports:

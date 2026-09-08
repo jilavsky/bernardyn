@@ -8,7 +8,8 @@ dependencies:
   - pyside6
   - pyqtgraph
   - pyopengl>=3.1.7
+  - six>=1.16
   - pip
   - pip:
-      - "pyirena[qtplot]>=1.1.0b12,<2"
+      - "pyirena[qtplot]>=1.1.0,<2"
       - -e .

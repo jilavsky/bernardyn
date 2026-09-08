@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import platform
 import sys
@@ -48,6 +49,10 @@ def diagnose() -> dict[str, Any]:
         checks["hdf5_round_trip"] = False
         checks["hdf5_error"] = str(exc)
     try:
+        # Import the implementation first.  PyIrena's package facade treats a
+        # missing optional dependency as an empty API, which otherwise hides
+        # the actionable dependency error from the user.
+        importlib.import_module("pyirena.io.scattering")
         from pyirena.io import discover_scattering, load_scattering  # noqa: F401
 
         checks["pyirena_shared_api"] = True
@@ -87,6 +92,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"HDF5 round-trip: {'ok' if result['hdf5_round_trip'] else 'failed'}")
         print(f"PyIrena: {result['pyirena'] or 'missing'}")
         print(f"PyIrena shared API: {'ok' if result['pyirena_shared_api'] else 'missing'}")
+        if not result["pyirena_shared_api"]:
+            print(f"  {result.get('pyirena_api_error', 'no import detail available')}")
+            if "No module named 'six'" in result.get("pyirena_api_error", ""):
+                print("  Repair: python -m pip install six")
         print(f"PySide6 / PyQtGraph: {result['pyside6'] or 'missing'} / {result['pyqtgraph'] or 'missing'}")
         print(f"OpenGL 3D: {'ready' if result['three_d_ready'] else result['opengl_message']}")
     return 0 if result["healthy"] else 1

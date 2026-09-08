@@ -66,6 +66,11 @@ bernardyn-doctor
 bernardyn-doctor --json
 ```
 
+If an existing environment reports that the PyIrena shared API is missing with
+`No module named 'six'`, repair that older environment with
+`python -m pip install six`. New Bernardyn installations install this
+compatibility dependency automatically.
+
 The OpenGL renderer needs a usable graphics context. If it cannot initialize,
 Bernardyn displays a 2D offset-waterfall fallback and retains the 3D document
 configuration.

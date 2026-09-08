@@ -20,4 +20,4 @@ __all__ = [
     "Workspace",
 ]
 
-__version__ = "0.0.1b3"
+__version__ = "0.0.1b4"

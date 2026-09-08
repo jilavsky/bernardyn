@@ -4,6 +4,20 @@ This file records user-visible changes in Bernardyn. Update it, together with
 the relevant user documentation, whenever a feature is added or an existing
 behavior changes.
 
+## 0.0.1b4 — 2026-09-08
+
+### Fixed
+
+- Bernardyn installations now include `six`, which PyIrena 1.1.0 currently
+  requires for its public HDF5/shared scattering-data API. `bernardyn-doctor`
+  shows the underlying import error and the repair command for older
+  environments.
+
+### Changed
+
+- Bernardyn now requires the stable PyIrena 1.1.0 shared API rather than its
+  pre-release identifier.
+
 ## 0.0.1b3 — 2026-09-08
 
 ### Added

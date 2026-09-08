@@ -9,6 +9,8 @@ dependencies:
   - numpy>=2
   - scipy>=1.8
   - h5py>=3
+  # PyIrena's public HDF5 reader currently imports this compatibility module.
+  - six>=1.16
   # PyIrena excludes PySide 6.7 and 6.10.  PySide 6.9.1 is excluded here too:
   # QGraphicsItem.setParentItem silently fails in that release, so
   # ViewBox.addItem never parents plot items and every plot renders empty.
@@ -17,7 +19,6 @@ dependencies:
   - pyqtgraph>=0.13.7
   - pyopengl>=3.1.7
   - pip:
-      # The current Bernardyn beta uses the unreleased PyIrena shared API.
       # Both repositories are expected to be sibling directories.
       - -e ../pyirena[qtplot]
       - -e .[dev]
