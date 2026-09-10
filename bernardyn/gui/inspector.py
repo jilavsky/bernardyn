@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Mapping
 
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import QSignalBlocker, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -40,6 +40,7 @@ class InspectorWidget(QScrollArea):
     transformRequested = Signal(str)
     resetRequested = Signal()
     outputPreviewRequested = Signal()
+    autoscaleRequested = Signal()
 
     def __init__(self, transforms: TransformRegistry, parent=None) -> None:
         super().__init__(parent)
@@ -111,6 +112,11 @@ class InspectorWidget(QScrollArea):
         auto_layout.setContentsMargins(0, 0, 0, 0)
         auto_layout.addWidget(self.x_auto)
         auto_layout.addWidget(self.y_auto)
+        auto_layout.addStretch(1)
+        self.autoscale = QPushButton("Autoscale", group)
+        self.autoscale.setToolTip("Enable Auto X and Auto Y, then fit the displayed data")
+        self.autoscale.clicked.connect(self._autoscale_axes)
+        auto_layout.addWidget(self.autoscale)
         self.axis_x_min = QLineEdit(group)
         self.axis_x_max = QLineEdit(group)
         self.axis_y_min = QLineEdit(group)
@@ -145,39 +151,15 @@ class InspectorWidget(QScrollArea):
         )
         self.axis_color = QPushButton("Choose…", group)
         self.axis_color.clicked.connect(self._choose_axis_color)
-        self.legend = QCheckBox("Show legend", group)
-        self.legend.toggled.connect(self._edit_legend)
-        self.legend_position = QComboBox(group)
-        for label, value in (
-            ("Top right", "top-right"),
-            ("Top left", "top-left"),
-            ("Bottom right", "bottom-right"),
-            ("Bottom left", "bottom-left"),
-        ):
-            self.legend_position.addItem(label, value)
-        self.legend_position.currentIndexChanged.connect(self._edit_legend)
-        self.legend_frame = QCheckBox("Frame", group)
-        self.legend_frame.toggled.connect(self._edit_legend)
-        self.legend_columns = QSpinBox(group)
-        self.legend_columns.setRange(1, 8)
-        self.legend_columns.setMinimumWidth(90)
-        self.legend_columns.valueChanged.connect(
-            lambda _: self._schedule_live_edit(self._edit_legend)
-        )
-        self.legend_columns.editingFinished.connect(
-            lambda: self._finish_live_edit(self._edit_legend)
-        )
         self.font_family = QFontComboBox(group)
         self.font_family.currentFontChanged.connect(self._edit_typography)
         self.title_font_size = QSpinBox(group)
         self.font_size = QSpinBox(group)
         self.tick_font_size = QSpinBox(group)
-        self.legend_font_size = QSpinBox(group)
         for control in (
             self.title_font_size,
             self.font_size,
             self.tick_font_size,
-            self.legend_font_size,
         ):
             control.setRange(6, 144)
             control.setMinimumWidth(88)
@@ -234,13 +216,9 @@ class InspectorWidget(QScrollArea):
         form.addRow("Box axes:", self.box_axes)
         form.addRow("Tick labels:", self.minor_tick_labels)
         form.addRow("Axes:", self._paired_row("Width", self.axis_thickness, "Color", self.axis_color, group))
-        form.addRow("Legend:", self.legend)
-        form.addRow("Legend position:", self.legend_position)
-        form.addRow("Legend frame:", self.legend_frame)
-        form.addRow("Legend columns:", self.legend_columns)
         form.addRow("Font family:", self.font_family)
         form.addRow("Font sizes:", self._paired_row("Title", self.title_font_size, "Axis", self.font_size, group))
-        form.addRow("", self._paired_row("Ticks", self.tick_font_size, "Legend", self.legend_font_size, group))
+        form.addRow("", self._paired_row("Ticks", self.tick_font_size, "", None, group))
         form.addRow("Canvas (px):", self._paired_row("Width", self.canvas_width, "Height", self.canvas_height, group))
         form.addRow("Output (in):", self._paired_row("Width", self.width_in, "Height", self.height_in, group))
         form.addRow("Output DPI:", self.dpi)
@@ -313,6 +291,56 @@ class InspectorWidget(QScrollArea):
             button.clicked.connect(callback)
             row.addWidget(button)
         layout.addLayout(row)
+        legend_group = QGroupBox("Legend", group)
+        legend_form = QFormLayout(legend_group)
+        self.legend = QCheckBox("Show legend", legend_group)
+        self.legend.toggled.connect(self._edit_legend)
+        self.legend_position = QComboBox(legend_group)
+        for label, value in (
+            ("Top right", "top-right"),
+            ("Top left", "top-left"),
+            ("Bottom right", "bottom-right"),
+            ("Bottom left", "bottom-left"),
+        ):
+            self.legend_position.addItem(label, value)
+        self.legend_position.currentIndexChanged.connect(self._edit_legend)
+        self.legend_frame = QCheckBox("Frame", legend_group)
+        self.legend_frame.toggled.connect(self._edit_legend)
+        self.legend_columns = QSpinBox(legend_group)
+        self.legend_columns.setRange(1, 8)
+        self.legend_columns.setMinimumWidth(90)
+        self.legend_columns.valueChanged.connect(
+            lambda _: self._schedule_live_edit(self._edit_legend)
+        )
+        self.legend_columns.editingFinished.connect(
+            lambda: self._finish_live_edit(self._edit_legend)
+        )
+        self.legend_symbol_size = self._double(1, 50, 8)
+        self.legend_symbol_size.setDecimals(1)
+        self.legend_symbol_size.valueChanged.connect(
+            lambda _: self._schedule_live_edit(self._edit_legend)
+        )
+        self.legend_symbol_size.editingFinished.connect(
+            lambda: self._finish_live_edit(self._edit_legend)
+        )
+        self.legend_font_size = QSpinBox(legend_group)
+        self.legend_font_size.setRange(6, 144)
+        self.legend_font_size.setMinimumWidth(88)
+        self.legend_font_size.setToolTip("Uses the Font family selected on the Graph tab")
+        self.legend_font_size.valueChanged.connect(
+            lambda _: self._schedule_live_edit(self._edit_typography)
+        )
+        self.legend_font_size.editingFinished.connect(
+            lambda: self._finish_live_edit(self._edit_typography)
+        )
+        legend_form.addRow("Display:", self.legend)
+        legend_form.addRow("Position:", self.legend_position)
+        legend_form.addRow("Frame:", self.legend_frame)
+        legend_form.addRow("Columns:", self.legend_columns)
+        legend_form.addRow("Symbol size:", self.legend_symbol_size)
+        legend_form.addRow("Font size:", self.legend_font_size)
+        legend_form.addRow("Color:", QLabel("Same as axes", legend_group))
+        layout.addWidget(legend_group)
         form = QFormLayout()
         self.series_label = QLineEdit(group)
         self.series_label.editingFinished.connect(self._edit_series_label)
@@ -499,6 +527,7 @@ class InspectorWidget(QScrollArea):
         )
         self.legend_frame.setChecked(graph.legend.framed)
         self.legend_columns.setValue(graph.legend.columns)
+        self.legend_symbol_size.setValue(graph.legend.symbol_size)
         self.font_family.setCurrentFont(QFont(graph.typography.family))
         self.title_font_size.setValue(graph.typography.title_size)
         self.font_size.setValue(graph.typography.axis_label_size)
@@ -679,8 +708,25 @@ class InspectorWidget(QScrollArea):
         except ValueError:
             self.set_graph(self._graph, self._datasets)
             return
+        recompute = (
+            graph.x_axis.log != self._graph.x_axis.log
+            or graph.y_axis.log != self._graph.y_axis.log
+        )
         self._graph = graph
-        self.graphChanged.emit(graph, True, "Change axis scale")
+        self.graphChanged.emit(graph, recompute, "Change axes")
+
+    def _autoscale_axes(self) -> None:
+        """Fit both axes, including after an interactive zoom on auto axes."""
+        if self._syncing or self._graph is None:
+            return
+        changed = not (self.x_auto.isChecked() and self.y_auto.isChecked())
+        with QSignalBlocker(self.x_auto), QSignalBlocker(self.y_auto):
+            self.x_auto.setChecked(True)
+            self.y_auto.setChecked(True)
+        if not changed:
+            self.autoscaleRequested.emit()
+            return
+        self._edit_axes()
 
     def _edit_legend(self) -> None:
         if self._syncing or self._graph is None:
@@ -693,6 +739,7 @@ class InspectorWidget(QScrollArea):
                 position=self.legend_position.currentData(),
                 framed=self.legend_frame.isChecked(),
                 columns=self.legend_columns.value(),
+                symbol_size=self.legend_symbol_size.value(),
             ),
         )
         self._graph = graph

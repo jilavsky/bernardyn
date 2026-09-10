@@ -216,6 +216,13 @@ class LegendSpec:
     position: str = "top-right"
     framed: bool = True
     columns: int = 1
+    symbol_size: float = 8.0
+
+    def __post_init__(self) -> None:
+        if self.columns < 1:
+            raise ValueError("legend columns must be at least one")
+        if self.symbol_size <= 0:
+            raise ValueError("legend symbol size must be positive")
 
 
 @dataclass(frozen=True)

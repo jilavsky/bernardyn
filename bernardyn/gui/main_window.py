@@ -224,6 +224,7 @@ class MainWindow(QMainWindow):
         self.inspector.transformRequested.connect(self._set_transform)
         self.inspector.resetRequested.connect(self._reset_graph_defaults)
         self.inspector.outputPreviewRequested.connect(self._preview_output)
+        self.inspector.autoscaleRequested.connect(self._autoscale_current_graph)
         self._build_docks()
         self._build_actions()
         self._build_menus()
@@ -521,6 +522,19 @@ class MainWindow(QMainWindow):
             if isinstance(page, GraphPage) and page.graph_id == graph_id:
                 self._render_page(page, graph)
                 self.tabs.setTabText(index, graph.title)
+                return
+
+    def _autoscale_current_graph(self) -> None:
+        """Refit an already-auto graph after the user has zoomed it manually."""
+        graph = self._current_graph()
+        if graph is None:
+            return
+        for index in range(self.tabs.count()):
+            page = self.tabs.widget(index)
+            if isinstance(page, GraphPage) and page.graph_id == graph.id:
+                autoscale = getattr(page.renderer, "autoscale", None)
+                if autoscale is not None:
+                    autoscale()
                 return
 
     def _sync_inspector(self) -> None:

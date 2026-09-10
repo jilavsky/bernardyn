@@ -6,6 +6,7 @@ from bernardyn.core.models import (
     AnnotationKind,
     Dataset,
     GraphDocument,
+    LegendSpec,
     PlotSeries,
     SeriesView,
 )
@@ -139,10 +140,12 @@ def test_graph_document_json_round_trip(dataset):
         series=(SeriesView(dataset_id=dataset.id),),
         annotations=(annotation,),
         background_scope="plot",
+        legend=LegendSpec(symbol_size=15),
     )
     restored = GraphDocument.from_dict(graph.to_dict())
     assert restored == graph
     assert restored.annotations[0].kind is AnnotationKind.BOX
+    assert restored.legend.symbol_size == 15
     assert restored.background_scope == "plot"
 
 

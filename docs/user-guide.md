@@ -36,8 +36,8 @@ are drawn. Drag rows within this list to change drawing order, or select rows
 and use **Remove selected from graph** to hide them from that graph. Removing a
 row does not delete the canonical dataset from the workspace.
 
-The inspector's **Datasets** tab provides per-series controls and visibility
-checkboxes.
+The inspector's **Datasets** tab provides per-series controls, visibility
+checkboxes, and the legend controls for the active graph.
 
 - Click a row to edit its style, legend label, visible Q range, multiplier,
   and offset.
@@ -46,6 +46,9 @@ checkboxes.
   remove individual rows from the selection.
 - Right-click a selected group and choose **Check selected** or **Uncheck
   selected** to show or hide the whole selection.
+- Use the **Legend** group to show, position, frame, and arrange the legend.
+  Its text uses the Graph tab's font family, its color matches the axes, and
+  its marker size can be made independent of the plotted markers.
 
 ## Edit a graph
 
@@ -55,6 +58,9 @@ Use the **Graph** tab in the right-side inspector for graph-wide settings.
 - Set axis labels, logarithmic axes, automatic or fixed ranges, grid lines,
   axis colour, and width. Numeric arrow controls redraw while they are used,
   at no more than five updates per second; pressing Enter applies immediately.
+- **Autoscale** enables both automatic axes and immediately fits the displayed
+  data. Presentation-only choices such as grid, legend, or tick-label settings
+  preserve an interactive zoom instead of refitting the graph.
 - Enable **Show top and right axes** under **Box axes** to draw a boxed 2-D
   plot. The added axes carry tick marks but no duplicate numeric labels.
 - Leave **Show minor tick labels** off for dense log plots. Major labels and
@@ -62,7 +68,6 @@ Use the **Graph** tab in the right-side inspector for graph-wide settings.
   minor labels.
 - Tick labels always use the plotted data values; Bernardyn does not apply a
   hidden SI-prefix multiplier to a log axis.
-- Enable and place the legend; set its frame, column count, and font size.
 - Choose whether the background colour applies to the whole canvas or only to
   the interior plot area. The latter leaves a white frame around the axes and
   is available for 2-D graphs.

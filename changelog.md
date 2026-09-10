@@ -4,7 +4,14 @@ This file records user-visible changes in Bernardyn. Update it, together with
 the relevant user documentation, whenever a feature is added or an existing
 behavior changes.
 
-## 0.0.1b4 — 2026-09-08
+## 0.0.1b4 — 2026-09-09
+
+### Added
+
+- An **Autoscale** button beside the automatic range controls. It enables both
+  axes and immediately fits the displayed data.
+- Independent legend-symbol sizing, alongside the other legend controls in
+  the **Datasets** tab.
 
 ### Fixed
 
@@ -12,11 +19,18 @@ behavior changes.
   requires for its public HDF5/shared scattering-data API. `bernardyn-doctor`
   shows the underlying import error and the repair command for older
   environments.
+- Legends now inherit the selected graph font family and axis color, and their
+  text scales with the rest of the graph in output preview, clipboard, and
+  image export.
+- Presentation-only graph controls no longer reset an interactive zoom or
+  refit the axes.
 
 ### Changed
 
 - Bernardyn now requires the stable PyIrena 1.1.0 shared API rather than its
   pre-release identifier.
+- Legend controls are grouped with the datasets they describe rather than with
+  the general graph settings.
 
 ## 0.0.1b3 — 2026-09-08
 

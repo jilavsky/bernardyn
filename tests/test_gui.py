@@ -14,7 +14,9 @@ from bernardyn.core.models import (
     AxisSpec,
     Dataset,
     GraphDocument,
+    LegendSpec,
     PlotSeries,
+    TypographySpec,
 )
 from bernardyn.gui import main_window
 from bernardyn.gui.dialogs import AnnotationDialog, DataFileSelectorDialog, LocationDialog
@@ -332,6 +334,79 @@ def test_legend_is_recreated_after_an_initial_empty_render(qapp):
     assert isinstance(page, GraphPage)
     assert page.renderer._legend is page.renderer.getPlotItem().legend
     assert len(page.renderer._legend.items) == 1
+    window.controller.workspace.dirty = False
+    window.close()
+
+
+def test_legend_uses_graph_typography_axis_colour_and_own_symbol_size(qapp):
+    controller = ApplicationController()
+    controller.add_dataset(Dataset(q=[1, 2, 3], intensity=[3, 2, 1], label="sample"))
+    original = controller.workspace.graphs[0]
+    graph = replace(
+        original,
+        x_axis=replace(original.x_axis, color=(15, 80, 150, 255)),
+        legend=LegendSpec(symbol_size=16),
+        typography=TypographySpec(family="Arial", legend_size=12),
+    )
+    widget = Plot2DWidget()
+    widget.render(graph, controller.snapshots[original.id])
+    legend = widget._legend
+    assert legend is not None
+    sample, label = legend.items[0]
+    assert label.opts["family"] == "Arial"
+    assert label.opts["size"] == "12pt"
+    assert label.opts["color"].getRgb() == (15, 80, 150, 255)
+    assert sample.item.opts["legend_symbol_size"] == 16
+    ignores_transform = bool(
+        legend.flags() & legend.GraphicsItemFlag.ItemIgnoresTransformations
+    )
+    assert ignores_transform
+    assert not widget.capture_output_image().isNull()
+    assert bool(legend.flags() & legend.GraphicsItemFlag.ItemIgnoresTransformations)
+    widget.close()
+
+
+def test_presentation_change_does_not_reset_the_interactive_view_range(qapp):
+    controller = ApplicationController()
+    controller.add_dataset(Dataset(q=[1, 2, 3, 4], intensity=[1, 4, 9, 16]))
+    graph = controller.workspace.graphs[0]
+    widget = Plot2DWidget()
+    widget.render(graph, controller.snapshots[graph.id])
+    widget.getPlotItem().vb.setRange(xRange=(1.5, 2.5), yRange=(3, 6), padding=0)
+    before = widget.getPlotItem().vb.viewRange()
+    changed = replace(graph, x_axis=replace(graph.x_axis, minor_tick_labels=True))
+    widget.render(changed, controller.snapshots[graph.id])
+    after = widget.getPlotItem().vb.viewRange()
+    assert after[0] == pytest.approx(before[0])
+    assert after[1] == pytest.approx(before[1])
+    widget.close()
+
+
+def test_minor_tick_label_control_does_not_recompute_or_refit_the_graph(qapp):
+    window = MainWindow()
+    window.controller.add_dataset(Dataset(q=[1, 2, 3, 4], intensity=[1, 4, 9, 16]))
+    graph = window.controller.workspace.graphs[0]
+    window._render_graph(graph.id)
+    page = window.tabs.currentWidget()
+    assert isinstance(page, GraphPage)
+    page.renderer.getPlotItem().vb.setRange(xRange=(1.5, 2.5), yRange=(3, 6), padding=0)
+    before = page.renderer.getPlotItem().vb.viewRange()
+    snapshots = window.controller.snapshots[graph.id]
+    window.inspector.minor_tick_labels.setChecked(True)
+    after = page.renderer.getPlotItem().vb.viewRange()
+    assert after[0] == pytest.approx(before[0])
+    assert after[1] == pytest.approx(before[1])
+    assert window.controller.snapshots[graph.id] is snapshots
+    window.controller.workspace.dirty = False
+    window.close()
+
+
+def test_legend_controls_are_grouped_with_datasets_and_autoscale_is_available(qapp):
+    window = MainWindow()
+    inspector = window.inspector
+    assert inspector.autoscale.text() == "Autoscale"
+    assert inspector.legend.parent().title() == "Legend"
+    assert inspector.legend.parent().parent().title() == "Datasets in graph"
     window.controller.workspace.dirty = False
     window.close()
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import logging
 import math
+from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 from typing import Mapping
@@ -12,10 +13,11 @@ from typing import Mapping
 import numpy as np
 import pyqtgraph as pg
 import pyqtgraph.exporters
+from pyqtgraph.graphicsItems.LegendItem import ItemSample
 from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QRect, QRectF, QSize, Qt
 from PySide6.QtGui import QColor, QFont, QPainter
 from PySide6.QtSvg import QSvgGenerator
-from PySide6.QtWidgets import QApplication, QGraphicsRectItem
+from PySide6.QtWidgets import QApplication, QGraphicsItem, QGraphicsRectItem
 
 from bernardyn.core.models import Annotation, AnnotationKind, GraphDocument, PlotSeries, SeriesStyle
 
@@ -115,6 +117,26 @@ def _coordinate(values: np.ndarray, logarithmic: bool) -> np.ndarray:
     return np.log10(values) if logarithmic else values
 
 
+class LegendSymbolSample(ItemSample):
+    """Legend sample whose marker size is independent of the plotted marker."""
+
+    def paint(self, painter, *args) -> None:  # noqa: N802 - PyQtGraph API
+        if not isinstance(self.item, pg.PlotDataItem):
+            super().paint(painter, *args)
+            return
+        options = self.item.scatter.opts
+        previous = options.get("size")
+        size = self.item.opts.get("legend_symbol_size")
+        if size is None:
+            super().paint(painter, *args)
+            return
+        options["size"] = size
+        try:
+            super().paint(painter, *args)
+        finally:
+            options["size"] = previous
+
+
 class Plot2DWidget(pg.PlotWidget):
     renderer_id = "plot2d"
 
@@ -143,10 +165,16 @@ class Plot2DWidget(pg.PlotWidget):
         self._annotation_items: list[tuple[Annotation, object]] = []
 
     def render(self, graph: GraphDocument, snapshots: Mapping[str, PlotSeries]) -> None:
+        previous_graph = self._graph
+        previous_snapshots = self._snapshots
+        plot = self.getPlotItem()
+        previous_range = plot.getViewBox().viewRange() if previous_graph is not None else None
+        reset_ranges = self._ranges_need_reset(
+            previous_graph, graph, previous_snapshots, snapshots
+        )
         self._graph = graph
         self._snapshots = dict(snapshots)
         self.render_warnings = []
-        plot = self.getPlotItem()
         # PlotDataItem clipping/downsampling is view-dependent. Leaving
         # PyQtGraph's persistent auto-range enabled makes the view rescale
         # against its newly clipped bounds, which can visibly oscillate.
@@ -241,8 +269,11 @@ class Plot2DWidget(pg.PlotWidget):
             self._legend = plot.addLegend(
                 offset=offsets.get(graph.legend.position, (-12, 12)),
                 colCount=graph.legend.columns,
+                frame=graph.legend.framed,
+                labelTextColor=_color(graph.x_axis.color),
+                labelTextSize=f"{graph.typography.legend_size}pt",
+                sampleType=LegendSymbolSample,
             )
-            self._legend.setLabelTextSize(f"{graph.typography.legend_size}pt")
             if graph.legend.framed:
                 self._legend.setBrush(pg.mkBrush(255, 255, 255, 220))
                 self._legend.setPen(pg.mkPen(90, 90, 90))
@@ -259,13 +290,19 @@ class Plot2DWidget(pg.PlotWidget):
                 # loop, and Qt swallows exceptions raised inside slots.
                 log.exception("Could not draw series %r", snapshot.label)
                 self.render_warnings.append(f"Could not draw {snapshot.label!r}: {exc}")
+        self._apply_legend_typography(graph)
         try:
             self._add_annotations(graph)
         except Exception as exc:  # pragma: no cover - depends on Qt/PyQtGraph
             log.exception("Could not draw annotations")
             self.render_warnings.append(f"Could not draw annotations: {exc}")
         try:
-            self._apply_ranges(graph)
+            if reset_ranges:
+                self._apply_ranges(graph)
+            elif previous_range is not None:
+                plot.getViewBox().setRange(
+                    xRange=previous_range[0], yRange=previous_range[1], padding=0
+                )
         except Exception as exc:  # pragma: no cover - depends on Qt/PyQtGraph
             log.exception("Could not apply axis ranges")
             self.render_warnings.append(f"Could not apply axis ranges: {exc}")
@@ -274,6 +311,48 @@ class Plot2DWidget(pg.PlotWidget):
             self._review_annotations(graph)
         except Exception:  # pragma: no cover - diagnostics must never break a plot
             log.exception("Could not review annotation placement")
+
+    @staticmethod
+    def _range_signature(graph: GraphDocument) -> tuple:
+        return (
+            graph.x_axis.log,
+            graph.x_axis.minimum,
+            graph.x_axis.maximum,
+            graph.x_axis.auto_range,
+            graph.y_axis.log,
+            graph.y_axis.minimum,
+            graph.y_axis.maximum,
+            graph.y_axis.auto_range,
+            tuple((view.id, view.visible) for view in graph.series),
+        )
+
+    def _ranges_need_reset(
+        self,
+        previous: GraphDocument | None,
+        graph: GraphDocument,
+        previous_snapshots: Mapping[str, PlotSeries],
+        snapshots: Mapping[str, PlotSeries],
+    ) -> bool:
+        """Return whether a change genuinely changes the fitted data extent."""
+        if previous is None or self._range_signature(previous) != self._range_signature(graph):
+            return True
+        return (
+            set(previous_snapshots) != set(snapshots)
+            or any(previous_snapshots[key] is not snapshots[key] for key in snapshots)
+        )
+
+    def _apply_legend_typography(self, graph: GraphDocument) -> None:
+        if self._legend is None:
+            return
+        color = _color(graph.x_axis.color)
+        for _, label in self._legend.items:
+            label.setText(
+                label.text,
+                family=graph.typography.family,
+                color=color,
+                size=f"{graph.typography.legend_size}pt",
+            )
+        self._legend.updateSize()
 
     def _remove_legend(self, plot) -> None:
         """Fully dispose of PyQtGraph's out-of-band legend item."""
@@ -308,6 +387,7 @@ class Plot2DWidget(pg.PlotWidget):
             symbolBrush=pg.mkBrush(_color(style.color, style.opacity)),
             connect="finite",
         )
+        item.opts["legend_symbol_size"] = graph.legend.symbol_size
         plot.addItem(item)
         self._curve_items[series_id] = item
         item.setDownsampling(auto=True, method="peak")
@@ -609,6 +689,11 @@ class Plot2DWidget(pg.PlotWidget):
             elif not graph.y_axis.log:
                 plot.setYRange(low, high, padding=0)
 
+    def autoscale(self) -> None:
+        """Fit the current data without requiring a document rerender."""
+        if self._graph is not None:
+            self._apply_ranges(self._graph)
+
     def _resolved_bounds(
         self, graph: GraphDocument
     ) -> tuple[tuple[float, float] | None, tuple[float, float] | None]:
@@ -638,10 +723,26 @@ class Plot2DWidget(pg.PlotWidget):
 
         return span(x_values), span(y_values)
 
+    @contextmanager
+    def _legend_follows_export_scale(self):
+        """Temporarily make the interactive legend participate in export scaling."""
+        legend = self._legend
+        flag = QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations
+        ignores_transform = False
+        if legend is not None:
+            ignores_transform = bool(legend.flags() & flag)
+            legend.setFlag(flag, False)
+        try:
+            yield
+        finally:
+            if legend is not None:
+                legend.setFlag(flag, ignores_transform)
+
     def capture_preview(self, width: int = 1200) -> bytes:
-        exporter = pyqtgraph.exporters.ImageExporter(self.getPlotItem())
-        exporter.parameters()["width"] = width
-        image = exporter.export(toBytes=True)
+        with self._legend_follows_export_scale():
+            exporter = pyqtgraph.exporters.ImageExporter(self.getPlotItem())
+            exporter.parameters()["width"] = width
+            image = exporter.export(toBytes=True)
         data = QByteArray()
         buffer = QBuffer(data)
         buffer.open(QIODevice.OpenModeFlag.WriteOnly)
@@ -659,14 +760,17 @@ class Plot2DWidget(pg.PlotWidget):
             if width is not None and graph is not None
             else (graph.height_px if graph else 1000)
         )
-        exporter = pyqtgraph.exporters.ImageExporter(self.getPlotItem())
-        exporter.parameters()["width"] = image_width
-        # ImageExporter normally derives height from the current on-screen
-        # widget.  A graph's output size is instead an explicit export size.
-        exporter.parameters().param("height").setValue(
-            image_height, blockSignal=exporter.widthChanged
-        )
-        return exporter.export(toBytes=True)
+        # LegendItem ignores scene transforms while users zoom.  During
+        # export, let it follow the scene scale so it matches the axis font.
+        with self._legend_follows_export_scale():
+            exporter = pyqtgraph.exporters.ImageExporter(self.getPlotItem())
+            exporter.parameters()["width"] = image_width
+            # ImageExporter normally derives height from the current on-screen
+            # widget.  A graph's output size is instead an explicit export size.
+            exporter.parameters().param("height").setValue(
+                image_height, blockSignal=exporter.widthChanged
+            )
+            return exporter.export(toBytes=True)
 
     def save_image(self, path: str | Path, width: int | None = None) -> Path:
         destination = Path(path)
@@ -683,11 +787,12 @@ class Plot2DWidget(pg.PlotWidget):
             generator.setTitle(self._graph.title if self._graph else "Bernardyn graph")
             painter = QPainter(generator)
             try:
-                self.scene().render(
-                    painter,
-                    QRectF(0, 0, size.width(), size.height()),
-                    self.scene().sceneRect(),
-                )
+                with self._legend_follows_export_scale():
+                    self.scene().render(
+                        painter,
+                        QRectF(0, 0, size.width(), size.height()),
+                        self.scene().sceneRect(),
+                    )
             finally:
                 painter.end()
             return destination
