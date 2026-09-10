@@ -351,7 +351,12 @@ class InspectorWidget(QScrollArea):
             self.line_style.addItem(value.title(), value)
         self.line_style.currentIndexChanged.connect(self._edit_style)
         self.line_width = self._double(0, 20, 1.5)
-        self.line_width.editingFinished.connect(self._edit_style)
+        self.line_width.valueChanged.connect(
+            lambda _: self._schedule_live_edit(self._edit_style)
+        )
+        self.line_width.editingFinished.connect(
+            lambda: self._finish_live_edit(self._edit_style)
+        )
         self.symbol = QComboBox(group)
         for label, value in (
             ("Circle", "o"), ("Square", "s"), ("Triangle", "t"),
@@ -360,16 +365,42 @@ class InspectorWidget(QScrollArea):
             self.symbol.addItem(label, value)
         self.symbol.currentIndexChanged.connect(self._edit_style)
         self.symbol_size = self._double(0, 50, 6)
-        self.symbol_size.editingFinished.connect(self._edit_style)
+        self.symbol_size.valueChanged.connect(
+            lambda _: self._schedule_live_edit(self._edit_style)
+        )
+        self.symbol_size.editingFinished.connect(
+            lambda: self._finish_live_edit(self._edit_style)
+        )
         self.opacity = self._double(0, 1, 1)
         self.opacity.setSingleStep(0.1)
         self.opacity.editingFinished.connect(self._edit_style)
-        self.error_bars = QCheckBox("Visible", group)
-        self.error_bars.toggled.connect(self._edit_style)
+        self.show_y_error_bars = QCheckBox("Y", group)
+        self.show_y_error_bars.setToolTip("Show intensity uncertainty bars")
+        self.show_x_error_bars = QCheckBox("X", group)
+        self.show_x_error_bars.setToolTip("Show Q-resolution bars")
+        self.error_caps = QCheckBox("Caps", group)
+        self.error_caps.setToolTip("Draw end caps on enabled error bars")
+        for control in (self.show_y_error_bars, self.show_x_error_bars, self.error_caps):
+            control.toggled.connect(self._edit_style)
+        self.error_cap_size = self._double(0, 10, 0.5)
+        self.error_cap_size.setDecimals(2)
+        self.error_cap_size.setSuffix(" %")
+        self.error_cap_size.setToolTip("Cap length as a percentage of the relevant axis span")
+        self.error_cap_size.valueChanged.connect(
+            lambda _: self._schedule_live_edit(self._edit_style)
+        )
+        self.error_cap_size.editingFinished.connect(
+            lambda: self._finish_live_edit(self._edit_style)
+        )
         self.error_color = QPushButton("Choose…", group)
         self.error_color.clicked.connect(self._choose_error_color)
         self.error_width = self._double(0, 20, 1)
-        self.error_width.editingFinished.connect(self._edit_style)
+        self.error_width.valueChanged.connect(
+            lambda _: self._schedule_live_edit(self._edit_style)
+        )
+        self.error_width.editingFinished.connect(
+            lambda: self._finish_live_edit(self._edit_style)
+        )
         self.multiplier = self._double(-1e12, 1e12, 1)
         self.multiplier.setDecimals(8)
         self.multiplier.editingFinished.connect(self._edit_series_transform)
@@ -387,8 +418,9 @@ class InspectorWidget(QScrollArea):
         form.addRow("Line:", self._paired_row("Style", self.line_style, "Width", self.line_width, group))
         form.addRow("Symbol:", self._paired_row("Type", self.symbol, "Size", self.symbol_size, group))
         form.addRow("Opacity:", self.opacity)
-        form.addRow("Errors:", self._paired_row("Show", self.error_bars, "Color", self.error_color, group))
-        form.addRow("", self._paired_row("Width", self.error_width, "", None, group))
+        form.addRow("Errors:", self._paired_row("Show Y", self.show_y_error_bars, "Show X", self.show_x_error_bars, group))
+        form.addRow("", self._paired_row("Caps", self.error_caps, "Size", self.error_cap_size, group))
+        form.addRow("", self._paired_row("Width", self.error_width, "Color", self.error_color, group))
         form.addRow("Multiplier:", self.multiplier)
         form.addRow("Offset:", self.offset)
         form.addRow("Q minimum:", self.q_min)
@@ -396,7 +428,8 @@ class InspectorWidget(QScrollArea):
         layout.addLayout(form)
         self.series_controls = [
             self.series_label, self.color, self.line_style, self.line_width, self.symbol,
-            self.symbol_size, self.opacity, self.error_bars, self.multiplier, self.offset,
+            self.symbol_size, self.opacity, self.show_y_error_bars, self.show_x_error_bars,
+            self.error_caps, self.error_cap_size, self.multiplier, self.offset,
             self.error_color, self.error_width, self.q_min, self.q_max,
         ]
         return group
@@ -852,7 +885,10 @@ class InspectorWidget(QScrollArea):
         self.symbol.setCurrentIndex(max(0, self.symbol.findData(style.symbol or "none")))
         self.symbol_size.setValue(style.symbol_size)
         self.opacity.setValue(style.opacity)
-        self.error_bars.setChecked(style.show_error_bars)
+        self.show_y_error_bars.setChecked(style.show_error_bars and style.show_y_error_bars)
+        self.show_x_error_bars.setChecked(style.show_error_bars and style.show_x_error_bars)
+        self.error_caps.setChecked(style.error_caps)
+        self.error_cap_size.setValue(style.error_cap_size)
         self.error_color.setStyleSheet(
             f"background: rgba({style.error_color[0]}, {style.error_color[1]}, "
             f"{style.error_color[2]}, {style.error_color[3]})"
@@ -954,7 +990,13 @@ class InspectorWidget(QScrollArea):
             symbol=None if self.symbol.currentData() == "none" else self.symbol.currentData(),
             symbol_size=self.symbol_size.value(),
             opacity=self.opacity.value(),
-            show_error_bars=self.error_bars.isChecked(),
+            show_error_bars=(
+                self.show_y_error_bars.isChecked() or self.show_x_error_bars.isChecked()
+            ),
+            show_x_error_bars=self.show_x_error_bars.isChecked(),
+            show_y_error_bars=self.show_y_error_bars.isChecked(),
+            error_caps=self.error_caps.isChecked(),
+            error_cap_size=self.error_cap_size.value(),
             error_width=self.error_width.value(),
         )
         self._replace_series(replace(series, style=style), recompute=False, text="Change dataset style")

@@ -12,9 +12,14 @@ behavior changes.
   axes and immediately fits the displayed data.
 - Independent legend-symbol sizing, alongside the other legend controls in
   the **Datasets** tab.
+- Separate **Show X** (Q resolution) and **Show Y** (intensity uncertainty)
+  error bars, with optional end caps and adjustable cap length. The default
+  cap length is 0.5% of the relevant axis span.
 
 ### Fixed
 
+- Windows package saves now open their temporary HDF5 file with a writable
+  descriptor for the final disk-sync operation, as required by Windows.
 - Bernardyn installations now include `six`, which PyIrena 1.1.0 currently
   requires for its public HDF5/shared scattering-data API. `bernardyn-doctor`
   shows the underlying import error and the repair command for older
@@ -31,6 +36,9 @@ behavior changes.
   pre-release identifier.
 - Legend controls are grouped with the datasets they describe rather than with
   the general graph settings.
+- Dataset line, symbol, and error-width spin boxes now update while their arrow
+  buttons are used, at the existing rate-limited maximum of five redraws per
+  second.
 
 ## 0.0.1b3 — 2026-09-08
 

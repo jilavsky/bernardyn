@@ -336,7 +336,10 @@ def save_package(
                             raise ValueError(f"invalid renderer-data name {name!r}")
                         _create_numeric(renderer_group, name, np.asarray(value))
             handle.flush()
-        with temp_path.open("rb") as stream:
+        # Windows requires a writable file descriptor for ``os.fsync``.  The
+        # package was just closed by h5py, so reopening read/write is safe and
+        # keeps the durability check portable across all supported platforms.
+        with temp_path.open("r+b") as stream:
             os.fsync(stream.fileno())
         validated = load_package(temp_path)
         if validated.warnings:

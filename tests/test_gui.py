@@ -401,6 +401,57 @@ def test_minor_tick_label_control_does_not_recompute_or_refit_the_graph(qapp):
     window.close()
 
 
+def test_error_bars_can_independently_show_x_y_and_caps(qapp):
+    controller = ApplicationController()
+    controller.add_dataset(
+        Dataset(q=[1, 2, 3], intensity=[3, 2, 1], dq=[0.1, 0.1, 0.1], uncertainty=[0.2, 0.2, 0.2])
+    )
+    original = controller.workspace.graphs[0]
+    series = original.series[0]
+    graph = original.replace_series((
+        replace(
+            series,
+            style=replace(series.style, show_error_bars=True, error_caps=True),
+        ),
+    ))
+    widget = Plot2DWidget()
+    widget.render(graph, controller.snapshots[original.id])
+    errors = widget._error_items[series.id]
+    assert len(errors) == 2
+    assert any(error.opts["top"] is not None and error.opts["beam"] > 0 for error in errors)
+    assert any(error.opts["left"] is not None and error.opts["beam"] > 0 for error in errors)
+    y_only = graph.replace_series((
+        replace(
+            series,
+            style=replace(
+                series.style,
+                show_error_bars=True,
+                show_x_error_bars=False,
+                show_y_error_bars=True,
+            ),
+        ),
+    ))
+    widget.render(y_only, controller.snapshots[original.id])
+    assert len(widget._error_items[series.id]) == 1
+    assert widget._error_items[series.id][0].opts["top"] is not None
+    widget.close()
+
+
+def test_dataset_style_spin_boxes_update_after_a_rate_limited_arrow_change(qapp):
+    window = MainWindow()
+    window.controller.add_dataset(Dataset(q=[1, 2], intensity=[3, 4]))
+    window._render_graph(window.controller.workspace.graphs[0].id)
+    window._sync_inspector()
+    inspector = window.inspector
+    original = window.controller.workspace.graphs[0].series[0].style.symbol_size
+    inspector.symbol_size.setValue(original + 1)
+    assert inspector._live_update_timer.isActive()
+    inspector._flush_live_edit()
+    assert window.controller.workspace.graphs[0].series[0].style.symbol_size == original + 1
+    window.controller.workspace.dirty = False
+    window.close()
+
+
 def test_legend_controls_are_grouped_with_datasets_and_autoscale_is_available(qapp):
     window = MainWindow()
     inspector = window.inspector

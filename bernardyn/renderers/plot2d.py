@@ -157,7 +157,7 @@ class Plot2DWidget(pg.PlotWidget):
         self._snapshots: dict[str, PlotSeries] = {}
         self._legend = None
         self._curve_items: dict[str, pg.PlotDataItem] = {}
-        self._error_items: dict[str, pg.ErrorBarItem] = {}
+        self._error_items: dict[str, list[pg.ErrorBarItem]] = {}
         # Problems met during the last render.  Curves, annotations and axis
         # ranges are drawn independently, so a failure in one must be
         # reported rather than silently truncating the rest of the plot.
@@ -393,9 +393,9 @@ class Plot2DWidget(pg.PlotWidget):
         item.setDownsampling(auto=True, method="peak")
         item.setClipToView(True)
         if style.show_error_bars and (snapshot.dx is not None or snapshot.dy is not None):
-            error = self._add_error_bars(graph, snapshot, style)
-            if error is not None:
-                self._error_items[series_id] = error
+            errors = self._add_error_bars(graph, snapshot, style)
+            if errors:
+                self._error_items[series_id] = errors
 
     def apply_graph(self, graph: GraphDocument, snapshots: Mapping[str, PlotSeries]) -> None:
         """Refresh the plot for ``graph``, restyling in place where possible.
@@ -418,8 +418,7 @@ class Plot2DWidget(pg.PlotWidget):
             item.setSymbolSize(style.symbol_size)
             item.setSymbolPen(pg.mkPen(_color(style.color, style.opacity)))
             item.setSymbolBrush(pg.mkBrush(_color(style.color, style.opacity)))
-            error = self._error_items.get(view.id)
-            if error is not None:
+            for error in self._error_items.get(view.id, []):
                 error.setOpts(
                     pen=pg.mkPen(_color(style.error_color), width=style.error_width)
                 )
@@ -439,7 +438,13 @@ class Plot2DWidget(pg.PlotWidget):
         for old, new in zip(previous.series, graph.series):
             if replace(old, style=new.style) != new:
                 return False
-            if old.style.show_error_bars != new.style.show_error_bars:
+            if (
+                old.style.show_error_bars != new.style.show_error_bars
+                or old.style.show_x_error_bars != new.style.show_x_error_bars
+                or old.style.show_y_error_bars != new.style.show_y_error_bars
+                or old.style.error_caps != new.style.error_caps
+                or old.style.error_cap_size != new.style.error_cap_size
+            ):
                 return False
             if new.id not in self._curve_items:
                 return False
@@ -447,42 +452,68 @@ class Plot2DWidget(pg.PlotWidget):
 
     def _add_error_bars(
         self, graph: GraphDocument, snapshot: PlotSeries, style: SeriesStyle
-    ) -> pg.ErrorBarItem | None:
+    ) -> list[pg.ErrorBarItem]:
         x = _coordinate(snapshot.x, graph.x_axis.log)
         y = _coordinate(snapshot.y, graph.y_axis.log)
-        options: dict[str, np.ndarray | float] = {"x": x, "y": y, "beam": 0.0}
-        valid = np.isfinite(x) & np.isfinite(y)
-        if snapshot.dy is not None:
+        valid_coordinates = np.isfinite(x) & np.isfinite(y)
+        errors: list[pg.ErrorBarItem] = []
+
+        def cap_size(values: np.ndarray) -> float:
+            if not len(values):
+                return 0.0
+            span = float(np.max(values) - np.min(values))
+            fraction = style.error_cap_size / 100
+            return fraction * span if span > 0 else max(abs(float(values[0])) * fraction, 1.0)
+
+        if style.show_y_error_bars and snapshot.dy is not None:
+            valid = valid_coordinates.copy()
             if graph.y_axis.log:
                 upper = snapshot.y + snapshot.dy
                 lower = snapshot.y - snapshot.dy
                 valid &= (upper > 0) & (lower > 0)
-                options["top"] = np.log10(upper) - y
-                options["bottom"] = y - np.log10(lower)
+                top = np.log10(upper) - y
+                bottom = y - np.log10(lower)
             else:
-                options["top"] = snapshot.dy
-                options["bottom"] = snapshot.dy
-        if snapshot.dx is not None:
+                top = snapshot.dy
+                bottom = snapshot.dy
+            valid &= np.isfinite(top) & np.isfinite(bottom)
+            if np.any(valid):
+                errors.append(
+                    pg.ErrorBarItem(
+                        x=x[valid],
+                        y=y[valid],
+                        top=top[valid],
+                        bottom=bottom[valid],
+                        beam=cap_size(x[valid]) if style.error_caps else 0.0,
+                        pen=pg.mkPen(_color(style.error_color), width=style.error_width),
+                    )
+                )
+        if style.show_x_error_bars and snapshot.dx is not None:
+            valid = valid_coordinates.copy()
             if graph.x_axis.log:
                 right = snapshot.x + snapshot.dx
                 left = snapshot.x - snapshot.dx
                 valid &= (right > 0) & (left > 0)
-                options["right"] = np.log10(right) - x
-                options["left"] = x - np.log10(left)
+                right = np.log10(right) - x
+                left = x - np.log10(left)
             else:
-                options["right"] = snapshot.dx
-                options["left"] = snapshot.dx
-        for key, value in tuple(options.items()):
-            if isinstance(value, np.ndarray):
-                options[key] = value[valid]
-        if not np.any(valid):
-            return None
-        error = pg.ErrorBarItem(
-            **options,
-            pen=pg.mkPen(_color(style.error_color), width=style.error_width),
-        )
-        self.getPlotItem().addItem(error)
-        return error
+                right = snapshot.dx
+                left = snapshot.dx
+            valid &= np.isfinite(right) & np.isfinite(left)
+            if np.any(valid):
+                errors.append(
+                    pg.ErrorBarItem(
+                        x=x[valid],
+                        y=y[valid],
+                        right=right[valid],
+                        left=left[valid],
+                        beam=cap_size(y[valid]) if style.error_caps else 0.0,
+                        pen=pg.mkPen(_color(style.error_color), width=style.error_width),
+                    )
+                )
+        for error in errors:
+            self.getPlotItem().addItem(error)
+        return errors
 
     def _add_annotations(self, graph: GraphDocument) -> None:
         plot = self.getPlotItem()

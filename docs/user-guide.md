@@ -49,6 +49,10 @@ checkboxes, and the legend controls for the active graph.
 - Use the **Legend** group to show, position, frame, and arrange the legend.
   Its text uses the Graph tab's font family, its color matches the axes, and
   its marker size can be made independent of the plotted markers.
+- In the per-dataset **Errors** controls, choose intensity uncertainty (**Show
+  Y**) and Q resolution (**Show X**) independently. Enable **Caps** to draw
+  conventional end caps on the selected error bars; **Size** controls their
+  length as a percentage of the relevant axis span (0.5% by default).
 
 ## Edit a graph
 

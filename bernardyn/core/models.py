@@ -150,6 +150,10 @@ class SeriesStyle:
     symbol_size: float = 6.0
     opacity: float = 1.0
     show_error_bars: bool = False
+    show_x_error_bars: bool = True
+    show_y_error_bars: bool = True
+    error_caps: bool = False
+    error_cap_size: float = 0.5
     error_color: RGBA = (90, 90, 90, 180)
     error_width: float = 1.0
 
@@ -157,7 +161,12 @@ class SeriesStyle:
         for color in (self.color, self.error_color):
             if len(color) != 4 or any(not 0 <= int(channel) <= 255 for channel in color):
                 raise ValueError("colors must be RGBA values between 0 and 255")
-        if self.line_width < 0 or self.symbol_size < 0 or not 0 <= self.opacity <= 1:
+        if (
+            self.line_width < 0
+            or self.symbol_size < 0
+            or self.error_cap_size < 0
+            or not 0 <= self.opacity <= 1
+        ):
             raise ValueError("invalid series style dimensions or opacity")
 
 
