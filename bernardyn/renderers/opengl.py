@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from functools import lru_cache
 import logging
 import math
-from pathlib import Path
 import subprocess
 import sys
+from functools import lru_cache
+from pathlib import Path
 from typing import Mapping
 
 import numpy as np
