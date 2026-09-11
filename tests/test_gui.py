@@ -616,6 +616,19 @@ def test_opengl_page_falls_back_without_eager_failure(qapp):
     window.close()
 
 
+def test_opengl_context_failure_uses_safe_2d_fallback(qapp, monkeypatch):
+    monkeypatch.setattr(
+        "bernardyn.gui.graph_page.opengl_available",
+        lambda: (False, "Qt could not create a usable OpenGL/GLX context"),
+    )
+    graph = GraphDocument(renderer_id="opengl_waterfall")
+    page = GraphPage(graph)
+    page.render(graph, {})
+    assert isinstance(page.renderer, Plot2DWidget)
+    assert page.fallback_reason == "Qt could not create a usable OpenGL/GLX context"
+    page.close()
+
+
 def test_opengl_surface_uses_common_non_extrapolated_grid(qapp):
     available, reason = opengl_available()
     if not available:

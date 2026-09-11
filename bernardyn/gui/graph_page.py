@@ -28,6 +28,7 @@ from bernardyn.renderers import (
     Plot2DWidget,
     RendererRegistry,
     builtin_renderers,
+    opengl_available,
 )
 
 
@@ -215,6 +216,10 @@ class GraphPage(QWidget):
             self.renderer.deleteLater()
         self.fallback_reason = None
         try:
+            if graph.renderer_id.startswith("opengl"):
+                available, reason = opengl_available()
+                if not available:
+                    raise RuntimeError(reason)
             self.renderer = self.renderers.get(graph.renderer_id).create(self.canvas)
             self._renderer_id = graph.renderer_id
         except Exception as exc:

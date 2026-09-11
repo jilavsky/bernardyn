@@ -71,9 +71,12 @@ If an existing environment reports that the PyIrena shared API is missing with
 `python -m pip install six`. New Bernardyn installations install this
 compatibility dependency automatically.
 
-The OpenGL renderer needs a usable graphics context. If it cannot initialize,
-Bernardyn displays a 2D offset-waterfall fallback and retains the 3D document
-configuration.
+The OpenGL renderer needs a usable graphics context. Before enabling a 3D
+renderer, Bernardyn checks that Qt can create the required OpenGL/GLX widget
+in a separate process. If that check fails (for example on a remote or
+headless X session), Bernardyn stays running, displays a 2D offset-waterfall
+fallback, and retains the 3D document configuration. `bernardyn-doctor` also
+reports whether the actual 3D context is ready.
 
 ## Development
 

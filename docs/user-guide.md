@@ -58,7 +58,11 @@ checkboxes, and the legend controls for the active graph.
 
 Use the **Graph** tab in the right-side inspector for graph-wide settings.
 
-- Choose 2-D, 3-D waterfall, or 3-D surface rendering.
+- Choose 2-D, 3-D waterfall, or 3-D surface rendering. Before Bernardyn
+  opens a 3-D view, it checks whether Qt can create the necessary OpenGL/GLX
+  context. On remote or headless X sessions where that is unavailable,
+  Bernardyn remains open and shows a 2-D offset-waterfall fallback instead;
+  the status bar explains why and the 3-D graph settings are retained.
 - Set axis labels, logarithmic axes, automatic or fixed ranges, grid lines,
   axis colour, and width. Numeric arrow controls redraw while they are used,
   at no more than five updates per second; pressing Enter applies immediately.

@@ -18,6 +18,9 @@ behavior changes.
 
 ### Fixed
 
+- Switching to a 3D renderer no longer lets a missing or incompatible GLX
+  configuration abort Bernardyn. A disposable preflight check now detects the
+  problem and uses a 2D waterfall fallback with an explanatory warning.
 - Windows package saves now open their temporary HDF5 file with a writable
   descriptor for the final disk-sync operation, as required by Windows.
 - Bernardyn installations now include `six`, which PyIrena 1.1.0 currently

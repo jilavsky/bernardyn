@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from functools import lru_cache
 import logging
 import math
 from pathlib import Path
+import subprocess
+import sys
 from typing import Mapping
 
 import numpy as np
@@ -17,13 +20,71 @@ from bernardyn.core.models import GraphDocument, PlotSeries
 log = logging.getLogger(__name__)
 
 
+_OPENGL_CONTEXT_PROBE = """
+import sys
+
+from PySide6.QtCore import QTimer
+from PySide6.QtWidgets import QApplication
+from pyqtgraph import opengl as gl
+
+app = QApplication([])
+view = gl.GLViewWidget()
+view.resize(16, 16)
+view.show()
+
+def finish():
+    context = view.context()
+    ready = bool(view.isValid() and context is not None and context.isValid())
+    print("BERNARDYN_OPENGL_READY" if ready else "BERNARDYN_OPENGL_UNAVAILABLE")
+    app.exit(0 if ready else 1)
+
+QTimer.singleShot(100, finish)
+raise SystemExit(app.exec())
+"""
+
+
+@lru_cache(maxsize=1)
+def _opengl_context_available() -> tuple[bool, str]:
+    """Probe the actual Qt OpenGL widget in a disposable child process.
+
+    A missing GLX framebuffer configuration can make Qt abort the whole
+    process while it creates a ``QOpenGLWidget``.  That cannot be caught by a
+    Python ``try`` block, so deliberately exercise the same widget in a short
+    lived child process before creating one in Bernardyn itself.
+    """
+    try:
+        probe = subprocess.run(
+            [sys.executable, "-c", _OPENGL_CONTEXT_PROBE],
+            capture_output=True,
+            text=True,
+            timeout=8,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return False, "OpenGL context check timed out"
+    except OSError as exc:
+        return False, f"could not run OpenGL context check: {exc}"
+
+    if probe.returncode == 0 and "BERNARDYN_OPENGL_READY" in probe.stdout:
+        return True, "PyOpenGL, PyQtGraph, and a Qt OpenGL context are available"
+
+    detail = " ".join(
+        line.strip()
+        for line in probe.stderr.splitlines()
+        if line.strip() and not line.startswith("QStandardPaths")
+    )
+    if detail:
+        detail = f" ({detail[-500:]})"
+    return False, "Qt could not create a usable OpenGL/GLX context" + detail
+
+
 def opengl_available() -> tuple[bool, str]:
     try:
         import OpenGL  # noqa: F401
         import pyqtgraph.opengl  # noqa: F401
     except Exception as exc:
         return False, str(exc)
-    return True, "PyOpenGL and pyqtgraph.opengl are available"
+    return _opengl_context_available()
 
 
 def _projection_view_class(gl):
