@@ -814,13 +814,26 @@ class Plot2DWidget(pg.PlotWidget):
         )
         temporary = Path(handle.name)
         handle.close()
+
+        def discard_temporary() -> None:
+            """Do not let cleanup hide the original export failure on Windows."""
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
+
         if destination.suffix.lower() == ".svg":
             size = QSize(
                 self._graph.width_px if self._graph else 1600,
                 self._graph.height_px if self._graph else 1000,
             )
+            data = QByteArray()
+            buffer = QBuffer(data)
+            if not buffer.open(QIODevice.OpenModeFlag.WriteOnly):
+                discard_temporary()
+                raise OSError(f"could not create SVG output: {destination}")
             generator = QSvgGenerator()
-            generator.setFileName(str(temporary))
+            generator.setOutputDevice(buffer)
             generator.setSize(size)
             generator.setViewBox(QRect(0, 0, size.width(), size.height()))
             generator.setResolution(self._graph.dpi if self._graph else 300)
@@ -835,20 +848,29 @@ class Plot2DWidget(pg.PlotWidget):
                     )
             finally:
                 painter.end()
+                # Rendering to memory avoids an SVG-generator file handle
+                # locking the temporary file before its atomic replacement.
+                del painter
+                del generator
+                buffer.close()
+            if not data:
+                discard_temporary()
+                raise OSError(f"could not write image: {destination}")
+            temporary.write_bytes(bytes(data))
         else:
             image = self.capture_output_image(width)
             dpi = self._graph.dpi if self._graph else 300
             image.setDotsPerMeterX(round(dpi / 0.0254))
             image.setDotsPerMeterY(round(dpi / 0.0254))
             if not image.save(str(temporary), destination.suffix.lstrip(".").upper()):
-                temporary.unlink(missing_ok=True)
+                discard_temporary()
                 raise OSError(f"could not write image: {destination}")
         try:
             if not temporary.is_file() or temporary.stat().st_size == 0:
                 raise OSError(f"could not write image: {destination}")
             os.replace(temporary, destination)
         except Exception:
-            temporary.unlink(missing_ok=True)
+            discard_temporary()
             raise
         return destination
 

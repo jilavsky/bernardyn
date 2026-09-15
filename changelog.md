@@ -11,6 +11,10 @@ behavior changes.
 - **Add pyIrena results…** imports a selected saved Unified Fit or Size
   Distribution as a paired measured-data/model I(Q) overlay. Result roles,
   fit metadata, and source provenance are embedded in the graph package.
+- Right-click selected datasets in the active-graph list to **Copy selected
+  to…** or **Move selected to…** an existing graph or a newly created 2-D
+  graph. Transfers are undoable and retain the workspace's shared data catalog.
+- **New 2D graph** now has the Ctrl/Cmd+Shift+N shortcut.
 
 ### Fixed
 

@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPushButton,
     QTabWidget,
@@ -287,7 +288,9 @@ class MainWindow(QMainWindow):
         self.dataset_list.setDragDropMode(QAbstractItemView.DragDropMode.DragDrop)
         self.dataset_list.setDefaultDropAction(Qt.DropAction.MoveAction)
         self.dataset_list.setDragEnabled(True)
+        self.dataset_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.dataset_list.pathsDropped.connect(self._dropped_data_paths)
+        self.dataset_list.customContextMenuRequested.connect(self._dataset_context_menu)
         self.dataset_list.model().rowsMoved.connect(
             lambda *_: QTimer.singleShot(0, self._dataset_list_reordered)
         )
@@ -380,7 +383,9 @@ class MainWindow(QMainWindow):
         self.export_itx_action = self._action("Export displayed data as Igor ITX…", self._export_itx)
         self.export_h5xp_action = self._action("Export canonical data to Igor h5xp…", self._export_h5xp)
         self.copy_action = self._action("Copy graph image", self._copy_graph, QKeySequence.StandardKey.Copy)
-        self.new_2d_action = self._action("New 2D graph", lambda: self._new_graph("plot2d"))
+        self.new_2d_action = self._action(
+            "New 2D graph", lambda: self._new_graph("plot2d"), "Ctrl+Shift+N"
+        )
         self.new_waterfall_action = self._action("New 3D waterfall", lambda: self._new_graph("opengl_waterfall"))
         self.new_surface_action = self._action("New 3D surface", lambda: self._new_graph("opengl_surface"))
         self.recompute_action = self._action("Recompute with current version", self._recompute_graph)
@@ -785,6 +790,66 @@ class MainWindow(QMainWindow):
             self.undo_stack.push(DatasetImportCommand(self, (dataset,), graph.id))
         except Exception as exc:
             QMessageBox.warning(self, "Add from workspace", str(exc))
+
+    def _dataset_context_menu(self, position) -> None:
+        item = self.dataset_list.itemAt(position)
+        if item is not None and not item.isSelected():
+            self.dataset_list.clearSelection()
+            item.setSelected(True)
+        if not self.dataset_list.selectedItems():
+            return
+        menu = QMenu(self.dataset_list)
+        menu.addAction("Copy selected to…", lambda: self._transfer_selected_series(move=False))
+        menu.addAction("Move selected to…", lambda: self._transfer_selected_series(move=True))
+        menu.exec(self.dataset_list.mapToGlobal(position))
+
+    def _transfer_selected_series(self, *, move: bool) -> None:
+        source = self._current_graph()
+        series_ids = {
+            item.data(Qt.ItemDataRole.UserRole) for item in self.dataset_list.selectedItems()
+        }
+        if source is None or not series_ids:
+            return
+        choices = [
+            (f"{index}. {graph.title}", graph.id)
+            for index, graph in enumerate(self.controller.workspace.graphs, start=1)
+            if graph.id != source.id
+        ]
+        choices.insert(0, ("Create new 2D graph", None))
+        verb = "Move" if move else "Copy"
+        selected, accepted = QInputDialog.getItem(
+            self,
+            f"{verb} selected datasets",
+            "Destination graph:",
+            [label for label, _ in choices],
+            0,
+            False,
+        )
+        if not accepted:
+            return
+        target_id = next(graph_id for label, graph_id in choices if label == selected)
+        try:
+            if target_id is None:
+                target = GraphDocument(
+                    title=f"Scattering plot {len(self.controller.workspace.graphs) + 1}"
+                )
+                self.controller.validate_series_transfer(source.id, target, series_ids, move=move)
+
+                def action() -> None:
+                    self.controller.transfer_series_to_new_graph(
+                        source.id, target, series_ids, move=move
+                    )
+            else:
+                target = self.controller.workspace.graph(target_id)
+                self.controller.validate_series_transfer(source.id, target, series_ids, move=move)
+
+                def action() -> None:
+                    self.controller.transfer_series(
+                        source.id, target.id, series_ids, move=move
+                    )
+            self.undo_stack.push(WorkspaceEditCommand(self, f"{verb} datasets", action))
+        except Exception as exc:
+            QMessageBox.warning(self, f"{verb} datasets", str(exc))
 
     def _add_pyirena_results(self) -> None:
         graph = self._current_graph()

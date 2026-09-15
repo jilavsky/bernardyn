@@ -38,6 +38,13 @@ def test_main_window_starts_with_independent_graph_model(qapp):
     window.close()
 
 
+def test_new_2d_graph_has_a_portable_shortcut(qapp):
+    window = MainWindow()
+    assert window.new_2d_action.shortcut().toString() == "Ctrl+Shift+N"
+    window.controller.workspace.dirty = False
+    window.close()
+
+
 def test_2d_canvas_previews_output_aspect_with_canvas_coloured_right_standoff(qapp):
     graph = GraphDocument(
         width_px=800,

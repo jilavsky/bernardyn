@@ -13,6 +13,7 @@ from bernardyn.core.models import (
     SeriesStyle,
     SeriesView,
     Workspace,
+    new_id,
 )
 from bernardyn.core.transforms import TransformRegistry, builtin_transforms, resolve_series
 from bernardyn.io.container import LoadedPackage, import_graphs, load_package, save_package
@@ -234,6 +235,102 @@ class ApplicationController:
         self.add_dataset(dataset, graph_id=graph_id)
         return dataset
 
+    def _prepare_series_transfer(
+        self,
+        source_graph_id: str,
+        target: GraphDocument,
+        series_ids: Iterable[str],
+        *,
+        move: bool,
+    ) -> tuple[GraphDocument, GraphDocument, dict[str, PlotSeries], dict[str, PlotSeries]]:
+        source = self.workspace.graph(source_graph_id)
+        if source.id == target.id:
+            raise ValueError("choose a different destination graph")
+        chosen_ids = set(series_ids)
+        chosen = [view for view in source.series if view.id in chosen_ids]
+        if not chosen:
+            raise ValueError("select one or more datasets to transfer")
+        if len(chosen) != len(chosen_ids):
+            raise ValueError("one or more selected datasets are no longer in the source graph")
+        transferred: list[SeriesView] = []
+        for view in chosen:
+            dataset = self.workspace.datasets[view.dataset_id]
+            parameters = (
+                dict(view.transform_parameters)
+                if view.transform_id == target.view_transform_id
+                else self._default_parameters(dataset, target.view_transform_id)
+            )
+            transferred.append(
+                replace(
+                    view,
+                    id=new_id(),
+                    transform_id=target.view_transform_id,
+                    transform_parameters=parameters,
+                )
+            )
+        target_candidate = target.replace_series((*target.series, *transferred))
+        source_candidate = (
+            source.replace_series(view for view in source.series if view.id not in chosen_ids)
+            if move
+            else source
+        )
+        # Resolve both candidate graphs before changing either document.
+        target_snapshots = self._resolve_graph(target_candidate, self.workspace.datasets)
+        source_snapshots = (
+            self._resolve_graph(source_candidate, self.workspace.datasets)
+            if move
+            else self.snapshots.get(source.id, {})
+        )
+        return source_candidate, target_candidate, source_snapshots, target_snapshots
+
+    def validate_series_transfer(
+        self,
+        source_graph_id: str,
+        target: GraphDocument,
+        series_ids: Iterable[str],
+        *,
+        move: bool,
+    ) -> None:
+        self._prepare_series_transfer(source_graph_id, target, series_ids, move=move)
+
+    def transfer_series(
+        self,
+        source_graph_id: str,
+        target_graph_id: str,
+        series_ids: Iterable[str],
+        *,
+        move: bool,
+    ) -> None:
+        target = self.workspace.graph(target_graph_id)
+        source, target, source_snapshots, target_snapshots = self._prepare_series_transfer(
+            source_graph_id, target, series_ids, move=move
+        )
+        if move:
+            self.workspace.replace_graph(source)
+            self.snapshots[source.id] = source_snapshots
+        self.workspace.replace_graph(target)
+        self.snapshots[target.id] = target_snapshots
+        self.workspace.active_graph_id = target.id
+
+    def transfer_series_to_new_graph(
+        self,
+        source_graph_id: str,
+        target: GraphDocument,
+        series_ids: Iterable[str],
+        *,
+        move: bool,
+    ) -> None:
+        if any(graph.id == target.id for graph in self.workspace.graphs):
+            raise ValueError("new destination graph already exists")
+        source, target, source_snapshots, target_snapshots = self._prepare_series_transfer(
+            source_graph_id, target, series_ids, move=move
+        )
+        self.workspace.add_graph(target)
+        self.snapshots[target.id] = target_snapshots
+        if move:
+            self.workspace.replace_graph(source)
+            self.snapshots[source.id] = source_snapshots
+
     def update_graph(self, graph: GraphDocument, *, recompute: bool = False) -> None:
         snapshots = self.validate_graph_update(graph, recompute=recompute)
         # All potentially failing work happens above this line.  The document,
@@ -410,13 +507,13 @@ class ApplicationController:
         selected = list(graph_ids) if graph_ids is not None else [g.id for g in loaded.workspace.graphs]
         graph_map, snapshots = import_graphs(self.workspace, loaded, selected)
         self.snapshots.update(snapshots)
-        for old_id, new_id in graph_map.items():
+        for old_id, imported_graph_id in graph_map.items():
             if old_id in loaded.previews:
-                self.previews[new_id] = loaded.previews[old_id]
+                self.previews[imported_graph_id] = loaded.previews[old_id]
             if old_id in loaded.renderer_data:
-                self.renderer_data[new_id] = loaded.renderer_data[old_id]
+                self.renderer_data[imported_graph_id] = loaded.renderer_data[old_id]
             if old_id in loaded.read_only_graphs:
-                self.read_only_graphs.add(new_id)
+                self.read_only_graphs.add(imported_graph_id)
         self.warnings.extend(loaded.warnings)
         return graph_map
 

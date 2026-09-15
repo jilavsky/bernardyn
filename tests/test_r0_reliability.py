@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from bernardyn.core.controller import ApplicationController
-from bernardyn.core.models import Dataset
+from bernardyn.core.models import Dataset, GraphDocument
 from bernardyn.gui.main_window import MainWindow, SourceLoadWorker
 from bernardyn.io.curve_export import export_displayed_csv, export_displayed_itx
 from bernardyn.io.sources import ScatteringLocation, ScatteringRecord
@@ -141,3 +141,35 @@ def test_dataset_removal_and_reorder_use_undo(qapp):
     assert [view.dataset_id for view in window.controller.workspace.graphs[0].series] == list(reversed(reordered))
     window.controller.workspace.dirty = False
     window.close()
+
+
+def test_transfer_to_another_graph_uses_target_view_and_shared_catalog_data():
+    controller = ApplicationController()
+    first = Dataset(q=[1, 2], intensity=[3, 4], label="one")
+    second = Dataset(q=[1, 2], intensity=[5, 6], label="two")
+    controller.add_dataset(first)
+    controller.add_dataset(second)
+    source = controller.workspace.graphs[0]
+    target = controller.new_graph(title="Destination")
+    controller.set_transform(target.id, "kratky")
+    controller.transfer_series(source.id, target.id, [source.series[0].id], move=False)
+    copied = controller.workspace.graph(target.id).series[0]
+    assert copied.id != source.series[0].id
+    assert copied.dataset_id == first.id
+    assert copied.transform_id == "kratky"
+    np.testing.assert_allclose(controller.snapshots[target.id][copied.id].y, [3, 16])
+    assert len(controller.workspace.graph(source.id).series) == 2
+    controller.transfer_series(source.id, target.id, [source.series[1].id], move=True)
+    assert len(controller.workspace.graph(source.id).series) == 1
+    assert len(controller.workspace.graph(target.id).series) == 2
+    assert {first.id, second.id} <= set(controller.workspace.datasets)
+
+
+def test_transfer_can_create_a_new_graph_document():
+    controller = ApplicationController()
+    controller.add_dataset(Dataset(q=[1], intensity=[2]))
+    source = controller.workspace.graphs[0]
+    target = GraphDocument(title="Copied data")
+    controller.transfer_series_to_new_graph(source.id, target, [source.series[0].id], move=False)
+    assert controller.workspace.active_graph_id == target.id
+    assert len(controller.workspace.graph(target.id).series) == 1
