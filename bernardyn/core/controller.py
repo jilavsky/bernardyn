@@ -144,10 +144,14 @@ class ApplicationController:
         *,
         graph_id: str | None = None,
         transform_parameters: Iterable[Mapping[str, float] | None] | None = None,
+        series_styles: Iterable[SeriesStyle | None] | None = None,
     ) -> tuple[SeriesView, ...]:
         """Add an ordered import batch as one all-or-nothing graph change."""
         graph, additions, views, candidate, datasets, snapshots = self._prepare_add_datasets(
-            datasets_to_add, graph_id=graph_id, transform_parameters=transform_parameters
+            datasets_to_add,
+            graph_id=graph_id,
+            transform_parameters=transform_parameters,
+            series_styles=series_styles,
         )
         self.workspace.datasets.update({dataset.id: dataset for dataset in additions})
         self.workspace.replace_graph(candidate)
@@ -161,10 +165,14 @@ class ApplicationController:
         *,
         graph_id: str | None = None,
         transform_parameters: Iterable[Mapping[str, float] | None] | None = None,
+        series_styles: Iterable[SeriesStyle | None] | None = None,
     ) -> None:
         """Resolve an import batch without mutating document or catalog state."""
         self._prepare_add_datasets(
-            datasets_to_add, graph_id=graph_id, transform_parameters=transform_parameters
+            datasets_to_add,
+            graph_id=graph_id,
+            transform_parameters=transform_parameters,
+            series_styles=series_styles,
         )
 
     def _prepare_add_datasets(
@@ -173,12 +181,16 @@ class ApplicationController:
         *,
         graph_id: str | None,
         transform_parameters: Iterable[Mapping[str, float] | None] | None,
+        series_styles: Iterable[SeriesStyle | None] | None,
     ):
         graph = self.workspace.graph(graph_id or self.workspace.active_graph_id or "")
         additions = tuple(datasets_to_add)
         given_parameters = tuple(transform_parameters or ())
+        given_styles = tuple(series_styles or ())
         if given_parameters and len(given_parameters) != len(additions):
             raise ValueError("transform parameter rows must match imported datasets")
+        if given_styles and len(given_styles) != len(additions):
+            raise ValueError("series styles must match imported datasets")
         views: list[SeriesView] = []
         for index, dataset in enumerate(additions):
             supplied = given_parameters[index] if given_parameters else None
@@ -193,8 +205,10 @@ class ApplicationController:
                     legend_label=dataset.label,
                     transform_id=graph.view_transform_id,
                     transform_parameters=parameters,
-                    style=SeriesStyle(
-                        color=PALETTE[(len(graph.series) + index) % len(PALETTE)]
+                    style=(
+                        given_styles[index]
+                        if given_styles and given_styles[index] is not None
+                        else SeriesStyle(color=PALETTE[(len(graph.series) + index) % len(PALETTE)])
                     ),
                 )
             )

@@ -39,6 +39,14 @@ Use **Add from workspace…** to place another loaded catalog dataset in the
 active graph without reading its source file again. These changes, along with
 removal and reordering, can be undone and redone.
 
+Use **Add pyIrena results…** to select a saved **Unified Fit** or **Size
+Distribution** result from an HDF5 file. Bernardyn offers only results that
+the installed pyIrena reader reports as available. The R1 choice adds the
+stored measured I(Q) and total fit as a paired overlay: symbols for measured
+data and a matching-colour line for the fit. Select a graph using the General
+I(Q) view first. Modeling results, residuals, and radius distributions are not
+part of this import yet.
+
 The inspector's **Datasets** tab provides per-series controls, visibility
 checkboxes, and the legend controls for the active graph.
 

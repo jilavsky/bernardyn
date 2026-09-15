@@ -56,6 +56,7 @@ from bernardyn.gui.graph_page import GraphPage, OutputPreviewDialog, PreviewPage
 from bernardyn.gui.inspector import InspectorWidget
 from bernardyn.io.container import load_package
 from bernardyn.io.igor import export_datasets_to_h5xp
+from bernardyn.io.results import discover_results, load_result_bundle
 from bernardyn.renderers import builtin_renderers
 from bernardyn.state import UserState
 from bernardyn.template.graph_templates import apply_template, load_template, save_template
@@ -149,12 +150,15 @@ class GraphEditCommand(QUndoCommand):
 class DatasetImportCommand(QUndoCommand):
     """One undoable import preserves both graph views and the dataset catalog."""
 
-    def __init__(self, window, datasets, graph_id: str, transform_parameters=None) -> None:
+    def __init__(
+        self, window, datasets, graph_id: str, transform_parameters=None, series_styles=None
+    ) -> None:
         super().__init__("Import datasets")
         self.window = window
         self.datasets = tuple(datasets)
         self.graph_id = graph_id
         self.transform_parameters = transform_parameters
+        self.series_styles = series_styles
         self.before = None
         self.after = None
 
@@ -165,6 +169,7 @@ class DatasetImportCommand(QUndoCommand):
                 self.datasets,
                 graph_id=self.graph_id,
                 transform_parameters=self.transform_parameters,
+                series_styles=self.series_styles,
             )
             self.after = self.window._controller_state()
         else:
@@ -309,6 +314,8 @@ class MainWindow(QMainWindow):
         open_folder_button.clicked.connect(self._open_folder)
         add_catalog_button = QPushButton("Add from workspace…", data_widget)
         add_catalog_button.clicked.connect(self._add_from_workspace)
+        add_results_button = QPushButton("Add pyIrena results…", data_widget)
+        add_results_button.clicked.connect(self._add_pyirena_results)
         remove_button = QPushButton("Remove selected from graph", data_widget)
         remove_button.clicked.connect(self._remove_datasets)
         cancel_button = QPushButton("Cancel loading", data_widget)
@@ -316,6 +323,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(open_button)
         layout.addWidget(open_folder_button)
         layout.addWidget(add_catalog_button)
+        layout.addWidget(add_results_button)
         layout.addWidget(self.dataset_list, 1)
         layout.addWidget(remove_button)
         layout.addWidget(cancel_button)
@@ -777,6 +785,68 @@ class MainWindow(QMainWindow):
             self.undo_stack.push(DatasetImportCommand(self, (dataset,), graph.id))
         except Exception as exc:
             QMessageBox.warning(self, "Add from workspace", str(exc))
+
+    def _add_pyirena_results(self) -> None:
+        graph = self._current_graph()
+        if graph is None:
+            return
+        if graph.view_transform_id != "raw":
+            QMessageBox.information(
+                self,
+                "pyIrena results",
+                "Result data + fit uses the General I(Q) view. Create or select an I(Q) graph first.",
+            )
+            return
+        paths, _ = QFileDialog.getOpenFileNames(
+            self,
+            "Add saved pyIrena results",
+            str(self.user_state.get("last_data_folder", "")),
+            "HDF5 / NeXus files (*.h5 *.hdf5 *.hdf *.nxs)",
+        )
+        bundles = []
+        for value in paths:
+            try:
+                descriptors = discover_results(value)
+                if not descriptors:
+                    QMessageBox.information(
+                        self, "pyIrena results", f"No supported saved results in {Path(value).name}."
+                    )
+                    continue
+                descriptor = descriptors[0]
+                if len(descriptors) > 1:
+                    title, accepted = QInputDialog.getItem(
+                        self,
+                        "Choose saved result",
+                        f"Available in {Path(value).name}:",
+                        [item.title for item in descriptors],
+                        0,
+                        False,
+                    )
+                    if not accepted:
+                        continue
+                    descriptor = next(item for item in descriptors if item.title == title)
+                bundles.append(load_result_bundle(descriptor))
+            except Exception as exc:
+                QMessageBox.warning(self, "pyIrena results", f"{Path(value).name}: {exc}")
+        if not bundles:
+            return
+        datasets = []
+        styles = []
+        for bundle_index, bundle in enumerate(bundles):
+            color = PALETTE[(len(graph.series) + 2 * bundle_index) % len(PALETTE)]
+            datasets.extend(record.to_dataset() for record in bundle.records)
+            styles.extend(replace(style, color=color) for style in bundle.styles)
+        try:
+            self.controller.validate_add_datasets(
+                datasets, graph_id=graph.id, series_styles=styles
+            )
+            self.undo_stack.push(
+                DatasetImportCommand(self, datasets, graph.id, series_styles=styles)
+            )
+            self.user_state.set("last_data_folder", str(Path(paths[0]).parent))
+            self.user_state.save()
+        except Exception as exc:
+            QMessageBox.warning(self, "pyIrena results", str(exc))
 
     def _dropped_data_paths(self, dropped: list[Path]) -> None:
         """Open dropped files/folders through the normal profile-aware importer."""

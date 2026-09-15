@@ -6,6 +6,12 @@ behavior changes.
 
 ## Unreleased
 
+### Added
+
+- **Add pyIrena results…** imports a selected saved Unified Fit or Size
+  Distribution as a paired measured-data/model I(Q) overlay. Result roles,
+  fit metadata, and source provenance are embedded in the graph package.
+
 ### Fixed
 
 - Graphs now retain their selected scientific view when data are added later;
