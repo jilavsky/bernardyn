@@ -1,4 +1,5 @@
 from dataclasses import replace
+from pathlib import Path
 
 import numpy as np
 import pyqtgraph as pg
@@ -13,6 +14,7 @@ from bernardyn.core.models import (
     AnnotationKind,
     AxisSpec,
     Dataset,
+    GenericCurve,
     GraphDocument,
     LegendSpec,
     PlotSeries,
@@ -41,6 +43,30 @@ def test_main_window_starts_with_independent_graph_model(qapp):
 def test_new_2d_graph_has_a_portable_shortcut(qapp):
     window = MainWindow()
     assert window.new_2d_action.shortcut().toString() == "Ctrl+Shift+N"
+    window.controller.workspace.dirty = False
+    window.close()
+
+
+def test_pyirena_distribution_import_creates_a_typed_linear_graph(qapp, monkeypatch):
+    fixture = Path(__file__).parents[1] / "testData" / "Al_Mg_Si__40C_0min_0498.h5"
+    window = MainWindow()
+    monkeypatch.setattr(
+        main_window.QFileDialog,
+        "getOpenFileNames",
+        lambda *args: ([str(fixture)], ""),
+    )
+    choices = iter((("Size Distribution", True), ("Distribution", True)))
+    monkeypatch.setattr(main_window.QInputDialog, "getItem", lambda *args: next(choices))
+    window._add_pyirena_results()
+    assert len(window.controller.workspace.graphs) == 2
+    graph = window.controller.workspace.graphs[-1]
+    assert graph.x_axis.label == "Radius [angstrom]"
+    assert not graph.x_axis.log and not graph.y_axis.log
+    dataset = window.controller.workspace.datasets[graph.series[0].dataset_id]
+    assert isinstance(dataset, GenericCurve)
+    assert dataset.y_semantic == "volume_fraction_density_per_radius"
+    window.undo_stack.undo()
+    assert len(window.controller.workspace.graphs) == 1
     window.controller.workspace.dirty = False
     window.close()
 

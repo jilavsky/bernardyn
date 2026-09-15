@@ -18,8 +18,10 @@ import numpy as np
 
 from bernardyn import __version__
 from bernardyn.core.models import (
+    CurveRole,
     Dataset,
     DatasetKind,
+    GenericCurve,
     GraphDocument,
     PlotSeries,
     SeriesView,
@@ -29,7 +31,7 @@ from bernardyn.core.models import (
 )
 
 FORMAT_MAGIC = "BERNARDYN_GRAPH_PACKAGE"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 MIN_READER_VERSION = "0.0.1b4"
 DEFAULT_SUFFIX = ".bernardyn.h5"
 UTF8 = h5py.string_dtype(encoding="utf-8")
@@ -96,14 +98,23 @@ def array_checksum(array: np.ndarray) -> str:
     return digest.hexdigest()
 
 
-def dataset_checksum(dataset: Dataset) -> str:
+def dataset_checksum(dataset: Dataset | GenericCurve) -> str:
     digest = hashlib.sha256()
-    for name, array in (
-        ("Q", dataset.q),
-        ("I", dataset.intensity),
-        ("Idev", dataset.uncertainty),
-        ("Qdev", dataset.dq),
-    ):
+    if isinstance(dataset, Dataset):
+        arrays = (
+            ("Q", dataset.q),
+            ("I", dataset.intensity),
+            ("Idev", dataset.uncertainty),
+            ("Qdev", dataset.dq),
+        )
+    else:
+        arrays = (
+            ("x", dataset.x),
+            ("y", dataset.y),
+            ("dx", dataset.dx),
+            ("dy", dataset.dy),
+        )
+    for name, array in arrays:
         digest.update(name.encode("ascii"))
         digest.update(b"NONE" if array is None else array_checksum(array).encode("ascii"))
     return digest.hexdigest()
@@ -156,16 +167,24 @@ def _read_numeric(parent: h5py.Group, name: str, *, required: bool = True) -> tu
     return value, valid
 
 
-def _write_dataset(parent: h5py.Group, dataset: Dataset) -> None:
+def _write_dataset(parent: h5py.Group, dataset: Dataset | GenericCurve) -> None:
     group = parent.create_group(dataset.id)
     group.attrs["dataset_sha256"] = dataset_checksum(dataset)
     data_group = group.create_group("data")
-    _create_numeric(data_group, "Q", dataset.q)
-    _create_numeric(data_group, "I", dataset.intensity)
-    if dataset.uncertainty is not None:
-        _create_numeric(data_group, "Idev", dataset.uncertainty)
-    if dataset.dq is not None:
-        _create_numeric(data_group, "Qdev", dataset.dq)
+    if isinstance(dataset, Dataset):
+        _create_numeric(data_group, "Q", dataset.q)
+        _create_numeric(data_group, "I", dataset.intensity)
+        if dataset.uncertainty is not None:
+            _create_numeric(data_group, "Idev", dataset.uncertainty)
+        if dataset.dq is not None:
+            _create_numeric(data_group, "Qdev", dataset.dq)
+    else:
+        _create_numeric(data_group, "x", dataset.x)
+        _create_numeric(data_group, "y", dataset.y)
+        if dataset.dx is not None:
+            _create_numeric(data_group, "dx", dataset.dx)
+        if dataset.dy is not None:
+            _create_numeric(data_group, "dy", dataset.dy)
     _write_json(group, "metadata", dataset.metadata_dict())
 
 
@@ -366,31 +385,60 @@ def save_package(
     return destination
 
 
-def _read_dataset(group: h5py.Group, warnings: list[str]) -> tuple[Dataset, bool]:
+def _read_dataset(group: h5py.Group, warnings: list[str]) -> tuple[Dataset | GenericCurve, bool]:
     metadata = _read_json(group, "metadata")
     data_group = group.get("data")
     if not isinstance(data_group, h5py.Group):
         raise PackageValidationError(f"missing data group in {group.name}")
-    q, q_ok = _read_numeric(data_group, "Q")
-    intensity, i_ok = _read_numeric(data_group, "I")
-    uncertainty, e_ok = _read_numeric(data_group, "Idev", required=False)
-    dq, dq_ok = _read_numeric(data_group, "Qdev", required=False)
-    valid = q_ok and i_ok and e_ok and dq_ok
     expected = str(group.attrs.get("dataset_sha256", ""))
-    dataset = Dataset(
-        id=str(metadata.get("id", group.name.rsplit("/", 1)[-1])),
-        kind=DatasetKind(metadata.get("kind", DatasetKind.CURVE_1D.value)),
-        q=q,
-        intensity=intensity,
-        uncertainty=uncertainty,
-        dq=dq,
-        label=str(metadata.get("label", "Dataset")),
-        q_unit=str(metadata.get("q_unit", "1/angstrom")),
-        intensity_unit=str(metadata.get("intensity_unit", "1/cm")),
-        metadata=metadata.get("metadata", {}),
-        provenance=metadata.get("provenance", {}),
-        source_fingerprint=metadata.get("source_fingerprint"),
-    )
+    canonical_type = str(metadata.get("canonical_type", "scattering_curve_v1"))
+    if canonical_type == "generic_curve_v2":
+        x, x_ok = _read_numeric(data_group, "x")
+        y, y_ok = _read_numeric(data_group, "y")
+        dx, dx_ok = _read_numeric(data_group, "dx", required=False)
+        dy, dy_ok = _read_numeric(data_group, "dy", required=False)
+        valid = x_ok and y_ok and dx_ok and dy_ok
+        dataset = GenericCurve(
+            id=str(metadata.get("id", group.name.rsplit("/", 1)[-1])),
+            x=x,
+            y=y,
+            dx=dx,
+            dy=dy,
+            label=str(metadata.get("label", "Curve")),
+            role=CurveRole(metadata.get("role", CurveRole.DISTRIBUTION.value)),
+            x_semantic=str(metadata.get("x_semantic", "generic_x")),
+            y_semantic=str(metadata.get("y_semantic", "generic_y")),
+            x_label=str(metadata.get("x_label", "X")),
+            y_label=str(metadata.get("y_label", "Y")),
+            x_unit=str(metadata.get("x_unit", "")),
+            y_unit=str(metadata.get("y_unit", "")),
+            uncertainty_kind=metadata.get("uncertainty_kind"),
+            metadata=metadata.get("metadata", {}),
+            provenance=metadata.get("provenance", {}),
+            source_fingerprint=metadata.get("source_fingerprint"),
+        )
+    elif canonical_type == "scattering_curve_v1":
+        q, q_ok = _read_numeric(data_group, "Q")
+        intensity, i_ok = _read_numeric(data_group, "I")
+        uncertainty, e_ok = _read_numeric(data_group, "Idev", required=False)
+        dq, dq_ok = _read_numeric(data_group, "Qdev", required=False)
+        valid = q_ok and i_ok and e_ok and dq_ok
+        dataset = Dataset(
+            id=str(metadata.get("id", group.name.rsplit("/", 1)[-1])),
+            kind=DatasetKind(metadata.get("kind", DatasetKind.CURVE_1D.value)),
+            q=q,
+            intensity=intensity,
+            uncertainty=uncertainty,
+            dq=dq,
+            label=str(metadata.get("label", "Dataset")),
+            q_unit=str(metadata.get("q_unit", "1/angstrom")),
+            intensity_unit=str(metadata.get("intensity_unit", "1/cm")),
+            metadata=metadata.get("metadata", {}),
+            provenance=metadata.get("provenance", {}),
+            source_fingerprint=metadata.get("source_fingerprint"),
+        )
+    else:
+        raise PackageValidationError(f"unsupported canonical dataset type {canonical_type!r}")
     valid &= bool(expected) and expected == dataset_checksum(dataset)
     if not valid:
         warnings.append(f"canonical dataset checksum failed for {dataset.label}")
@@ -473,7 +521,7 @@ def load_package(path: str | Path) -> LoadedPackage:
         if schema_version < 1:
             raise PackageValidationError(f"unsupported package schema {schema_version}")
 
-        datasets: dict[str, Dataset] = {}
+        datasets: dict[str, Dataset | GenericCurve] = {}
         valid_datasets: dict[str, bool] = {}
         for dataset_id in manifest.get("dataset_ids", []):
             if dataset_id not in handle["datasets"]:

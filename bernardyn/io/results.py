@@ -1,9 +1,9 @@
-"""Public-pyIrena result discovery for the R1 I(Q) overlay workflow.
+"""Public-pyIrena result discovery for saved fitting workflows.
 
 This module intentionally consumes only ``pyirena.io.results.load_result``.
 It does not reproduce HDF5 paths or import Data Explorer's GUI helpers.  The
-returned records are ordinary scattering curves because the R1 acceptance set
-is measured/model I(Q); residuals and distributions remain R2 work.
+Measured/model I(Q) records stay scattering curves.  Residuals and P(r)
+distributions are represented as explicitly typed generic curves.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from typing import Any, Mapping
 
 import numpy as np
 
-from bernardyn.core.models import SeriesStyle
+from bernardyn.core.models import CurveRole, GenericCurve, SeriesStyle
 from bernardyn.io.sources import ScatteringRecord
 
 
@@ -39,6 +39,18 @@ class ResultBundle:
     records: tuple[ScatteringRecord, ...]
     styles: tuple[SeriesStyle, ...]
     metadata: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
+class ResultCurveBundle:
+    """One non-scattering scientific curve from a saved pyIrena result."""
+
+    descriptor: ResultDescriptor
+    curve: GenericCurve
+    style: SeriesStyle
+    graph_title: str
+    x_log: bool
+    y_log: bool
 
 
 _ANALYSES = (
@@ -145,3 +157,107 @@ def load_result_bundle(descriptor: ResultDescriptor) -> ResultBundle:
         ),
         metadata=result_metadata,
     )
+
+
+def _result_context(descriptor: ResultDescriptor, result: Mapping[str, Any]) -> tuple[str, dict[str, Any], dict[str, Any]]:
+    fingerprint = _fingerprint(descriptor.path)
+    result_metadata = {
+        "analysis": descriptor.analysis,
+        "title": descriptor.title,
+        "timestamp": result.get("timestamp"),
+        "program": result.get("program"),
+        "chi_squared": result.get("chi_squared"),
+        "fit_quality": result.get("fit_quality"),
+    }
+    provenance = {
+        "source_name": descriptor.path.name,
+        "source_path": str(descriptor.path),
+        "adapter": "pyirena.io.results.load_result",
+        "adapter_version": "1",
+        "result": result_metadata,
+    }
+    return fingerprint, result_metadata, provenance
+
+
+def available_curve_kinds(descriptor: ResultDescriptor) -> tuple[str, ...]:
+    """Return generic curve views that have complete public-reader arrays."""
+    result = _reader()(descriptor.path, descriptor.analysis)
+    if not result.get("found"):
+        return ()
+    available: list[str] = []
+    if result.get("Q") is not None and result.get("residuals") is not None:
+        available.append("residuals")
+    if (
+        descriptor.analysis == "size_distribution"
+        and result.get("r_grid") is not None
+        and result.get("distribution") is not None
+    ):
+        available.append("volume_distribution")
+    return tuple(available)
+
+
+def load_result_curve(descriptor: ResultDescriptor, kind: str) -> ResultCurveBundle:
+    """Load a supported non-I(Q) curve without assigning scattering semantics."""
+    result = _reader()(descriptor.path, descriptor.analysis)
+    if not result.get("found"):
+        raise ValueError(f"{descriptor.title} is no longer available in {descriptor.path.name}")
+    fingerprint, result_metadata, provenance = _result_context(descriptor, result)
+    stem = descriptor.path.stem
+    if kind == "residuals":
+        q = _array(result, "Q")
+        residuals = _array(result, "residuals", length=len(q))
+        curve = GenericCurve(
+            x=q,
+            y=residuals,
+            label=f"{stem} — {descriptor.title} residuals",
+            role=CurveRole.RESIDUAL,
+            x_semantic="scattering_q",
+            y_semantic="normalised_residual",
+            x_label="q",
+            y_label="Normalised residual",
+            x_unit="1/angstrom",
+            y_unit="dimensionless",
+            metadata={"bernardyn_result": {**result_metadata, "role": "residual"}},
+            provenance=provenance,
+            source_fingerprint=fingerprint,
+        )
+        return ResultCurveBundle(
+            descriptor=descriptor,
+            curve=curve,
+            style=SeriesStyle(line_style="none", symbol="o"),
+            graph_title=f"{descriptor.title} residuals",
+            x_log=True,
+            y_log=False,
+        )
+    if kind == "volume_distribution" and descriptor.analysis == "size_distribution":
+        radii = _array(result, "r_grid")
+        distribution = _array(result, "distribution", length=len(radii))
+        error = result.get("distribution_std")
+        curve = GenericCurve(
+            x=radii,
+            y=distribution,
+            dy=None if error is None else _array(result, "distribution_std", length=len(radii)),
+            label=f"{stem} — {descriptor.title} volume distribution",
+            role=CurveRole.DISTRIBUTION,
+            x_semantic="particle_radius",
+            y_semantic="volume_fraction_density_per_radius",
+            x_label="Radius",
+            y_label="Volume fraction density",
+            x_unit="angstrom",
+            y_unit="1/angstrom",
+            uncertainty_kind="standard_deviation" if error is not None else None,
+            metadata={"bernardyn_result": {**result_metadata, "role": "volume_distribution"}},
+            provenance=provenance,
+            source_fingerprint=fingerprint,
+        )
+        return ResultCurveBundle(
+            descriptor=descriptor,
+            curve=curve,
+            style=SeriesStyle(
+                line_style="solid", symbol="o", show_error_bars=error is not None
+            ),
+            graph_title=f"{descriptor.title} volume distribution",
+            x_log=False,
+            y_log=False,
+        )
+    raise ValueError(f"{kind!r} is not available for {descriptor.title}")

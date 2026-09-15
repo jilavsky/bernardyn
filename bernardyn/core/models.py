@@ -84,6 +84,13 @@ class DatasetKind(str, Enum):
     IMAGE_2D = "image_2d"
 
 
+class CurveRole(str, Enum):
+    """Scientific meaning of a non-scattering one-dimensional curve."""
+
+    RESIDUAL = "residual"
+    DISTRIBUTION = "distribution"
+
+
 class AnnotationKind(str, Enum):
     TEXT = "text"
     ARROW = "arrow"
@@ -130,6 +137,7 @@ class Dataset:
 
     def metadata_dict(self) -> dict[str, Any]:
         return {
+            "canonical_type": "scattering_curve_v1",
             "id": self.id,
             "kind": self.kind.value,
             "label": self.label,
@@ -139,6 +147,79 @@ class Dataset:
             "provenance": json_value(self.provenance),
             "source_fingerprint": self.source_fingerprint,
         }
+
+    @property
+    def point_count(self) -> int:
+        return len(self.q)
+
+
+@dataclass(frozen=True)
+class GenericCurve:
+    """A typed X/Y scientific curve that is not necessarily scattering data.
+
+    Generic curves deliberately carry semantic identifiers and display units
+    instead of borrowing ``q``/``intensity`` names.  That prevents residuals,
+    radius distributions, and future result types from being transformed as
+    I(Q) by accident.
+    """
+
+    x: FloatArray
+    y: FloatArray
+    dx: FloatArray | None = None
+    dy: FloatArray | None = None
+    id: str = field(default_factory=new_id)
+    label: str = "Curve"
+    role: CurveRole = CurveRole.DISTRIBUTION
+    x_semantic: str = "generic_x"
+    y_semantic: str = "generic_y"
+    x_label: str = "X"
+    y_label: str = "Y"
+    x_unit: str = ""
+    y_unit: str = ""
+    uncertainty_kind: str | None = None
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+    provenance: Mapping[str, Any] = field(default_factory=dict)
+    source_fingerprint: str | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "id", _valid_id(self.id))
+        object.__setattr__(self, "role", CurveRole(self.role))
+        x = _array(self.x, name="x")
+        if not len(x):
+            raise ValueError("generic curve arrays cannot be empty")
+        y = _array(self.y, name="y", length=len(x))
+        dx = None if self.dx is None else _array(self.dx, name="dx", length=len(x))
+        dy = None if self.dy is None else _array(self.dy, name="dy", length=len(x))
+        if not self.x_semantic or not self.y_semantic:
+            raise ValueError("generic curves require X and Y semantic identifiers")
+        object.__setattr__(self, "x", x)
+        object.__setattr__(self, "y", y)
+        object.__setattr__(self, "dx", dx)
+        object.__setattr__(self, "dy", dy)
+        object.__setattr__(self, "metadata", dict(self.metadata))
+        object.__setattr__(self, "provenance", dict(self.provenance))
+
+    def metadata_dict(self) -> dict[str, Any]:
+        return {
+            "canonical_type": "generic_curve_v2",
+            "id": self.id,
+            "label": self.label,
+            "role": self.role.value,
+            "x_semantic": self.x_semantic,
+            "y_semantic": self.y_semantic,
+            "x_label": self.x_label,
+            "y_label": self.y_label,
+            "x_unit": self.x_unit,
+            "y_unit": self.y_unit,
+            "uncertainty_kind": self.uncertainty_kind,
+            "metadata": json_value(self.metadata),
+            "provenance": json_value(self.provenance),
+            "source_fingerprint": self.source_fingerprint,
+        }
+
+    @property
+    def point_count(self) -> int:
+        return len(self.x)
 
 
 @dataclass(frozen=True)
@@ -416,7 +497,7 @@ class Workspace:
     id: str = field(default_factory=new_id)
     title: str = "Untitled workspace"
     description: str = ""
-    datasets: dict[str, Dataset] = field(default_factory=dict)
+    datasets: dict[str, Dataset | GenericCurve] = field(default_factory=dict)
     graphs: list[GraphDocument] = field(default_factory=list)
     active_graph_id: str | None = None
     layout_state: str | None = None
@@ -455,7 +536,7 @@ class Workspace:
                 return
         raise KeyError(graph.id)
 
-    def add_dataset(self, dataset: Dataset) -> None:
+    def add_dataset(self, dataset: Dataset | GenericCurve) -> None:
         self.datasets[dataset.id] = dataset
         self.dirty = True
 

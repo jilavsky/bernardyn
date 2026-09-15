@@ -8,6 +8,12 @@ behavior changes.
 
 ### Added
 
+- **Add pyIrena results…** now also imports public-reader residuals and Size
+  Distribution volume distributions as typed generic curves on separate graph
+  tabs. Generic curves preserve their axis semantics, units, provenance, and
+  optional uncertainty without being treated as scattering I(Q) data.
+- Native graph packages now use schema v2 for typed generic curves while
+  retaining full read compatibility with v1 scattering packages.
 - **Add pyIrena results…** imports a selected saved Unified Fit or Size
   Distribution as a paired measured-data/model I(Q) overlay. Result roles,
   fit metadata, and source provenance are embedded in the graph package.

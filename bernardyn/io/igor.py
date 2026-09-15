@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Iterable
 
-from bernardyn.core.models import Workspace
+from bernardyn.core.models import Dataset, Workspace
 
 
 def export_datasets_to_h5xp(
@@ -26,6 +26,8 @@ def export_datasets_to_h5xp(
         used: set[str] = set()
         for dataset_id in selected:
             dataset = workspace.datasets[dataset_id]
+            if not isinstance(dataset, Dataset):
+                continue
             base = "".join(char if char.isalnum() or char == "_" else "_" for char in dataset.label)
             name = base.strip("_") or f"dataset_{len(used) + 1}"
             original = name
@@ -47,4 +49,6 @@ def export_datasets_to_h5xp(
                     "IntensityUnit": dataset.intensity_unit,
                 },
             )
+        if not used:
+            raise ValueError("Igor h5xp export requires at least one scattering I(Q) dataset")
     return destination

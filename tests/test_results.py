@@ -1,10 +1,17 @@
+from dataclasses import replace
 from pathlib import Path
 from shutil import copy2
 
 import numpy as np
 
 from bernardyn.core.controller import ApplicationController
-from bernardyn.io.results import discover_results, load_result_bundle
+from bernardyn.core.models import AxisSpec, GenericCurve
+from bernardyn.io.results import (
+    available_curve_kinds,
+    discover_results,
+    load_result_bundle,
+    load_result_curve,
+)
 
 FIXTURE = Path(__file__).parents[1] / "testData" / "Al_Mg_Si__40C_0min_0498.h5"
 
@@ -45,3 +52,47 @@ def test_real_pyirena_result_fixture_exposes_r1_iq_bundles(tmp_path):
             restored.snapshots[restored_graph.id][restored_graph.series[1].id].y,
             fitted.intensity,
         )
+
+
+def test_real_pyirena_result_fixture_exposes_r2_generic_curves_and_round_trips(tmp_path):
+    source = tmp_path / FIXTURE.name
+    copy2(FIXTURE, source)
+    descriptors = {item.analysis: item for item in discover_results(source)}
+    unified = load_result_curve(descriptors["unified_fit"], "residuals")
+    sized = load_result_curve(descriptors["size_distribution"], "volume_distribution")
+    assert available_curve_kinds(descriptors["unified_fit"]) == ("residuals",)
+    assert available_curve_kinds(descriptors["size_distribution"]) == (
+        "residuals",
+        "volume_distribution",
+    )
+    assert unified.curve.role.value == "residual"
+    assert unified.curve.y_semantic == "normalised_residual"
+    assert unified.curve.y_unit == "dimensionless"
+    assert np.any(unified.curve.y < 0)
+    assert sized.curve.role.value == "distribution"
+    assert sized.curve.x_semantic == "particle_radius"
+    assert sized.curve.y_semantic == "volume_fraction_density_per_radius"
+    assert sized.curve.point_count == 201
+    assert sized.curve.dy is None
+
+    controller = ApplicationController()
+    graph = controller.workspace.graphs[0]
+    graph = replace(
+        graph,
+        x_axis=AxisSpec(label="q [1/angstrom]", log=True),
+        y_axis=AxisSpec(label="Normalised residual [dimensionless]", log=False),
+    )
+    controller.update_graph(graph)
+    controller.add_datasets((unified.curve,), series_styles=(unified.style,))
+    snapshot = controller.snapshots[graph.id][controller.workspace.graph(graph.id).series[0].id]
+    np.testing.assert_allclose(snapshot.y, unified.curve.y)
+    path = controller.save(tmp_path / "residuals")
+    source.unlink()
+    restored = ApplicationController()
+    restored.open_package(path)
+    restored_curve = next(iter(restored.workspace.datasets.values()))
+    assert isinstance(restored_curve, GenericCurve)
+    assert restored_curve.role == unified.curve.role
+    assert restored_curve.x_semantic == unified.curve.x_semantic
+    np.testing.assert_allclose(restored_curve.x, unified.curve.x)
+    np.testing.assert_allclose(restored_curve.y, unified.curve.y)

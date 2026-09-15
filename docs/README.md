@@ -5,7 +5,8 @@
 - [Data flow and file formats](data-flow-and-formats.md)
 - [Future integration work](TODO.md)
 - [Releasing Bernardyn to PyPI](releasing.md)
-- [Native HDF5 schema, version 1](../bernardyn/schemas/graph-package-v1.md)
+- [Native HDF5 schema, version 2](../bernardyn/schemas/graph-package-v2.md)
+- [Native HDF5 schema, version 1](../bernardyn/schemas/graph-package-v1.md) (legacy)
 
 The native Bernardyn file suffix is `.bernardyn.h5`. It is intentionally not
 an Igor `.h5xp` file.

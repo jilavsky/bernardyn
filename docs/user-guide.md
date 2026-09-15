@@ -48,11 +48,15 @@ the source graph. All transfers can be undone or redone.
 
 Use **Add pyIrena results…** to select a saved **Unified Fit** or **Size
 Distribution** result from an HDF5 file. Bernardyn offers only results that
-the installed pyIrena reader reports as available. The R1 choice adds the
-stored measured I(Q) and total fit as a paired overlay: symbols for measured
-data and a matching-colour line for the fit. Select a graph using the General
-I(Q) view first. Modeling results, residuals, and radius distributions are not
-part of this import yet.
+the installed pyIrena reader reports as available. Choose **Data + fit** to
+add the stored measured I(Q) and total fit as a paired overlay: symbols for
+measured data and a matching-colour line for the fit. Select a graph using the
+General I(Q) view first. Choose **Residuals** to create a separate graph with
+Q on a logarithmic X axis and normalised residual on a linear Y axis. For a
+Size Distribution result, **Distribution** creates a separate linear graph of
+the stored volume-fraction density against radius. Bernardyn uses the stored
+radius centres as a curve; it does not invent bar widths. Modeling and other
+distribution variants remain outside this import.
 
 Use **Graph → New 2D graph** or Ctrl/Cmd+Shift+N to create a 2-D graph quickly.
 

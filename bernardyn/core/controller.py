@@ -6,8 +6,11 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
+import numpy as np
+
 from bernardyn.core.models import (
     Dataset,
+    GenericCurve,
     GraphDocument,
     PlotSeries,
     SeriesStyle,
@@ -102,8 +105,12 @@ class ApplicationController:
         self.workspace.active_graph_id = self.workspace.graphs[-1].id
         self.workspace.dirty = True
 
-    def _default_parameters(self, dataset: Dataset, transform_id: str) -> dict[str, float]:
+    def _default_parameters(self, dataset: Dataset | GenericCurve, transform_id: str) -> dict[str, float]:
         """Resolve only parameters carried by this dataset's own metadata."""
+        if isinstance(dataset, GenericCurve):
+            if transform_id != "raw":
+                raise ValueError("generic curves support only the raw view")
+            return {}
         transform = self.transforms.get(transform_id)
         values: dict[str, float] = {}
         metadata = dict(dataset.metadata)
@@ -129,7 +136,7 @@ class ApplicationController:
 
     def add_dataset(
         self,
-        dataset: Dataset,
+        dataset: Dataset | GenericCurve,
         *,
         graph_id: str | None = None,
         transform_parameters: Mapping[str, float] | None = None,
@@ -141,7 +148,7 @@ class ApplicationController:
 
     def add_datasets(
         self,
-        datasets_to_add: Iterable[Dataset],
+        datasets_to_add: Iterable[Dataset | GenericCurve],
         *,
         graph_id: str | None = None,
         transform_parameters: Iterable[Mapping[str, float] | None] | None = None,
@@ -162,7 +169,7 @@ class ApplicationController:
 
     def validate_add_datasets(
         self,
-        datasets_to_add: Iterable[Dataset],
+        datasets_to_add: Iterable[Dataset | GenericCurve],
         *,
         graph_id: str | None = None,
         transform_parameters: Iterable[Mapping[str, float] | None] | None = None,
@@ -178,7 +185,7 @@ class ApplicationController:
 
     def _prepare_add_datasets(
         self,
-        datasets_to_add: Iterable[Dataset],
+        datasets_to_add: Iterable[Dataset | GenericCurve],
         *,
         graph_id: str | None,
         transform_parameters: Iterable[Mapping[str, float] | None] | None,
@@ -360,19 +367,60 @@ class ApplicationController:
         return resolved
 
     def _resolve_graph(
-        self, graph: GraphDocument, datasets: Mapping[str, Dataset]
+        self, graph: GraphDocument, datasets: Mapping[str, Dataset | GenericCurve]
     ) -> dict[str, PlotSeries]:
         resolved: dict[str, PlotSeries] = {}
         for view in graph.series:
             dataset = datasets[view.dataset_id]
-            resolved[view.id] = resolve_series(
-                dataset,
-                view,
-                self.transforms,
-                x_log=graph.x_axis.log,
-                y_log=graph.y_axis.log,
-            )
+            if isinstance(dataset, GenericCurve):
+                resolved[view.id] = self._resolve_generic_curve(
+                    dataset, view, x_log=graph.x_axis.log, y_log=graph.y_axis.log
+                )
+            else:
+                resolved[view.id] = resolve_series(
+                    dataset,
+                    view,
+                    self.transforms,
+                    x_log=graph.x_axis.log,
+                    y_log=graph.y_axis.log,
+                )
         return resolved
+
+    @staticmethod
+    def _resolve_generic_curve(
+        curve: GenericCurve, view: SeriesView, *, x_log: bool, y_log: bool
+    ) -> PlotSeries:
+        if view.transform_id != "raw":
+            raise ValueError("generic curves support only the raw view")
+        mask = np.isfinite(curve.x) & np.isfinite(curve.y)
+        low, high = view.q_range
+        if low is not None:
+            mask &= curve.x >= low
+        if high is not None:
+            mask &= curve.x <= high
+        if x_log:
+            mask &= curve.x > 0
+        if y_log:
+            mask &= curve.y > 0
+        excluded = int(len(curve.x) - np.count_nonzero(mask))
+        warnings = () if not excluded else (f"{excluded} of {len(curve.x)} points were outside the valid plot domain",)
+        return PlotSeries(
+            series_id=view.id,
+            dataset_id=curve.id,
+            x=curve.x[mask],
+            y=curve.y[mask] * view.multiplier + view.offset,
+            dx=None if curve.dx is None else np.abs(curve.dx[mask]),
+            dy=None if curve.dy is None else np.abs(curve.dy[mask] * view.multiplier),
+            source_indices=np.flatnonzero(mask),
+            label=view.legend_label or curve.label,
+            x_label=curve.x_label,
+            y_label=curve.y_label,
+            x_unit=curve.x_unit,
+            y_unit=curve.y_unit,
+            transform_id="raw",
+            transform_version="1.0",
+            warnings=warnings,
+        )
 
     def _clear_recompute_warnings(self, graph_id: str) -> None:
         self._graph_warnings[graph_id] = [
@@ -408,6 +456,10 @@ class ApplicationController:
         parameters: Mapping[str, float] | None = None,
     ) -> None:
         graph = self.workspace.graph(graph_id)
+        if transform_id != "raw" and any(
+            isinstance(self.workspace.datasets[item.dataset_id], GenericCurve) for item in graph.series
+        ):
+            raise ValueError("graphs containing generic curves support only the raw view")
         transform = self.transforms.get(transform_id)
         series = tuple(
             replace(
@@ -485,12 +537,18 @@ class ApplicationController:
                     continue
                 if archived is None:
                     dataset = self.workspace.datasets[view.dataset_id]
-                    self.snapshots.setdefault(graph.id, {})[view.id] = resolve_series(
-                        dataset,
-                        view,
-                        self.transforms,
-                        x_log=graph.x_axis.log,
-                        y_log=graph.y_axis.log,
+                    self.snapshots.setdefault(graph.id, {})[view.id] = (
+                        self._resolve_generic_curve(
+                            dataset, view, x_log=graph.x_axis.log, y_log=graph.y_axis.log
+                        )
+                        if isinstance(dataset, GenericCurve)
+                        else resolve_series(
+                            dataset,
+                            view,
+                            self.transforms,
+                            x_log=graph.x_axis.log,
+                            y_log=graph.y_axis.log,
+                        )
                     )
                     graph_warnings.append(
                         f"Missing or corrupt snapshot for {dataset.label!r} was recomputed from embedded data"

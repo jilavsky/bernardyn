@@ -85,9 +85,9 @@ an architectural target, not the current package number. Result plotting, a
 public headless facade, and MCP remain planned.
 
 The normative current file format is
-[graph-package-v1.md](../bernardyn/schemas/graph-package-v1.md); current extension
-interfaces are in [EXTENDING.md](../bernardyn/EXTENDING.md). This document proposes
-future contracts and does not change those specifications.
+[graph-package-v2.md](../bernardyn/schemas/graph-package-v2.md); version 1 packages
+remain readable as scattering curves. Current extension interfaces are in
+[EXTENDING.md](../bernardyn/EXTENDING.md).
 
 ## 3. R0 — stabilize the existing editing workflow
 

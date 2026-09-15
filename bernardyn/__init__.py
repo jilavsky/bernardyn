@@ -2,8 +2,10 @@
 
 from bernardyn.core.models import (
     Annotation,
+    CurveRole,
     Dataset,
     DatasetKind,
+    GenericCurve,
     GraphDocument,
     PlotSeries,
     SeriesView,
@@ -12,8 +14,10 @@ from bernardyn.core.models import (
 
 __all__ = [
     "Annotation",
+    "CurveRole",
     "Dataset",
     "DatasetKind",
+    "GenericCurve",
     "GraphDocument",
     "PlotSeries",
     "SeriesView",

@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 from bernardyn.core.controller import ApplicationController
-from bernardyn.core.models import Annotation, AnnotationKind, Dataset
+from bernardyn.core.models import Annotation, AnnotationKind, CurveRole, Dataset, GenericCurve
 from bernardyn.io.container import (
     FORMAT_MAGIC,
     PackageValidationError,
@@ -77,6 +77,53 @@ def test_workspace_save_retains_unreferenced_catalog_data(tmp_path):
         tmp_path / "graph-only-catalog", graph_ids=[controller.workspace.graphs[0].id]
     )
     assert retained.id not in load_package(graph_path).workspace.datasets
+
+
+def test_generic_curve_uses_v2_arrays_and_reopens_without_its_source(tmp_path):
+    controller = ApplicationController()
+    curve = GenericCurve(
+        x=[1, 2, 3],
+        y=[-1, 0, 1],
+        label="residuals",
+        role=CurveRole.RESIDUAL,
+        x_semantic="scattering_q",
+        y_semantic="normalised_residual",
+        x_label="q",
+        y_label="Normalised residual",
+        x_unit="1/angstrom",
+        y_unit="dimensionless",
+    )
+    graph = controller.workspace.graphs[0]
+    controller.update_graph(
+        replace(graph, x_axis=replace(graph.x_axis, log=False), y_axis=replace(graph.y_axis, log=False))
+    )
+    controller.add_dataset(curve)
+    path = controller.save(tmp_path / "generic")
+    with h5py.File(path, "r") as handle:
+        assert handle.attrs["schema_version"] == 2
+        data = handle[f"datasets/{curve.id}/data"]
+        assert set(data) == {"x", "y"}
+    restored = load_package(path)
+    restored_curve = restored.workspace.datasets[curve.id]
+    assert isinstance(restored_curve, GenericCurve)
+    np.testing.assert_allclose(restored_curve.x, curve.x)
+    np.testing.assert_allclose(restored_curve.y, curve.y)
+    assert dataset_checksum(restored.workspace.datasets[curve.id]) == dataset_checksum(curve)
+
+
+def test_schema_v1_package_without_type_marker_still_opens_as_scattering(tmp_path):
+    controller = make_controller()
+    path = controller.save(tmp_path / "legacy")
+    dataset = next(iter(controller.workspace.datasets.values()))
+    with h5py.File(path, "r+") as handle:
+        handle.attrs["schema_version"] = 1
+        group = handle[f"datasets/{dataset.id}"]
+        metadata = json.loads(group["metadata"][()].decode("utf-8"))
+        metadata.pop("canonical_type")
+        del group["metadata"]
+        group.create_dataset("metadata", data=json.dumps(metadata), dtype=h5py.string_dtype("utf-8"))
+    loaded = load_package(path)
+    assert isinstance(loaded.workspace.datasets[dataset.id], Dataset)
 
 
 def test_graph_export_does_not_mark_unsaved_workspace_clean(tmp_path):

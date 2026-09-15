@@ -45,7 +45,7 @@ from PySide6.QtWidgets import (
 )
 
 from bernardyn.core.controller import PALETTE, ApplicationController
-from bernardyn.core.models import GraphDocument
+from bernardyn.core.models import AxisSpec, GraphDocument
 from bernardyn.gui.dialogs import (
     DataFileSelectorDialog,
     GraphSelectionDialog,
@@ -57,7 +57,12 @@ from bernardyn.gui.graph_page import GraphPage, OutputPreviewDialog, PreviewPage
 from bernardyn.gui.inspector import InspectorWidget
 from bernardyn.io.container import load_package
 from bernardyn.io.igor import export_datasets_to_h5xp
-from bernardyn.io.results import discover_results, load_result_bundle
+from bernardyn.io.results import (
+    available_curve_kinds,
+    discover_results,
+    load_result_bundle,
+    load_result_curve,
+)
 from bernardyn.renderers import builtin_renderers
 from bernardyn.state import UserState
 from bernardyn.template.graph_templates import apply_template, load_template, save_template
@@ -90,6 +95,10 @@ def _metadata_number(value, key: str) -> float | None:
         if found is not None:
             return found
     return None
+
+
+def _axis_label(label: str, unit: str) -> str:
+    return f"{label} [{unit}]" if unit else label
 
 
 class WorkerSignals(QObject):
@@ -855,20 +864,13 @@ class MainWindow(QMainWindow):
         graph = self._current_graph()
         if graph is None:
             return
-        if graph.view_transform_id != "raw":
-            QMessageBox.information(
-                self,
-                "pyIrena results",
-                "Result data + fit uses the General I(Q) view. Create or select an I(Q) graph first.",
-            )
-            return
         paths, _ = QFileDialog.getOpenFileNames(
             self,
             "Add saved pyIrena results",
             str(self.user_state.get("last_data_folder", "")),
             "HDF5 / NeXus files (*.h5 *.hdf5 *.hdf *.nxs)",
         )
-        bundles = []
+        selected_results = []
         for value in paths:
             try:
                 descriptors = discover_results(value)
@@ -890,24 +892,58 @@ class MainWindow(QMainWindow):
                     if not accepted:
                         continue
                     descriptor = next(item for item in descriptors if item.title == title)
-                bundles.append(load_result_bundle(descriptor))
+                choices = [("Data + fit", "iq")]
+                choices.extend(
+                    ("Residuals", "residuals") if kind == "residuals" else ("Distribution", kind)
+                    for kind in available_curve_kinds(descriptor)
+                )
+                choice, accepted = QInputDialog.getItem(
+                    self,
+                    "Choose result data",
+                    f"Import from {descriptor.title}:",
+                    [label for label, _ in choices],
+                    0,
+                    False,
+                )
+                if not accepted:
+                    continue
+                kind = next(kind for label, kind in choices if label == choice)
+                selected_results.append(
+                    (kind, load_result_bundle(descriptor) if kind == "iq" else load_result_curve(descriptor, kind))
+                )
             except Exception as exc:
                 QMessageBox.warning(self, "pyIrena results", f"{Path(value).name}: {exc}")
-        if not bundles:
+        if not selected_results:
             return
-        datasets = []
-        styles = []
-        for bundle_index, bundle in enumerate(bundles):
-            color = PALETTE[(len(graph.series) + 2 * bundle_index) % len(PALETTE)]
-            datasets.extend(record.to_dataset() for record in bundle.records)
-            styles.extend(replace(style, color=color) for style in bundle.styles)
         try:
-            self.controller.validate_add_datasets(
-                datasets, graph_id=graph.id, series_styles=styles
-            )
-            self.undo_stack.push(
-                DatasetImportCommand(self, datasets, graph.id, series_styles=styles)
-            )
+            if any(kind == "iq" for kind, _ in selected_results) and graph.view_transform_id != "raw":
+                raise ValueError("Data + fit uses the General I(Q) view. Create or select an I(Q) graph first.")
+
+            def action() -> None:
+                iq_bundles = [bundle for kind, bundle in selected_results if kind == "iq"]
+                if iq_bundles:
+                    datasets = []
+                    styles = []
+                    for bundle_index, bundle in enumerate(iq_bundles):
+                        color = PALETTE[(len(graph.series) + 2 * bundle_index) % len(PALETTE)]
+                        datasets.extend(record.to_dataset() for record in bundle.records)
+                        styles.extend(replace(style, color=color) for style in bundle.styles)
+                    self.controller.add_datasets(datasets, graph_id=graph.id, series_styles=styles)
+                for kind, bundle in selected_results:
+                    if kind == "iq":
+                        continue
+                    target = self.controller.new_graph(title=bundle.graph_title)
+                    target = replace(
+                        target,
+                        x_axis=AxisSpec(label=_axis_label(bundle.curve.x_label, bundle.curve.x_unit), log=bundle.x_log),
+                        y_axis=AxisSpec(label=_axis_label(bundle.curve.y_label, bundle.curve.y_unit), log=bundle.y_log),
+                    )
+                    self.controller.update_graph(target)
+                    self.controller.add_datasets(
+                        (bundle.curve,), graph_id=target.id, series_styles=(bundle.style,)
+                    )
+
+            self.undo_stack.push(WorkspaceEditCommand(self, "Import pyIrena results", action))
             self.user_state.set("last_data_folder", str(Path(paths[0]).parent))
             self.user_state.save()
         except Exception as exc:
@@ -1131,7 +1167,7 @@ class MainWindow(QMainWindow):
                 return
             for index, series in enumerate(graph.series, start=1):
                 dataset = self.controller.workspace.datasets[series.dataset_id]
-                item = QListWidgetItem(f"{index}. {dataset.label}  ({len(dataset.q):,} points)")
+                item = QListWidgetItem(f"{index}. {dataset.label}  ({dataset.point_count:,} points)")
                 item.setData(Qt.ItemDataRole.UserRole, series.id)
                 item.setToolTip("Drag to change plot order. Select and remove to hide this data from the graph.")
                 self.dataset_list.addItem(item)

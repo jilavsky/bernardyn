@@ -21,7 +21,7 @@ packages.
   writer. H5XP export is data interoperability, not Bernardyn graph persistence.
 
 The native schema is documented in
-[`bernardyn/schemas/graph-package-v1.md`](bernardyn/schemas/graph-package-v1.md).
+[`bernardyn/schemas/graph-package-v2.md`](bernardyn/schemas/graph-package-v2.md).
 User-facing workflow and file-format documentation is in
 [`docs/`](docs/README.md).
 
