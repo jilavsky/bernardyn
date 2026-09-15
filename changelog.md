@@ -4,6 +4,27 @@ This file records user-visible changes in Bernardyn. Update it, together with
 the relevant user documentation, whenever a feature is added or an existing
 behavior changes.
 
+## Unreleased
+
+### Fixed
+
+- Graphs now retain their selected scientific view when data are added later;
+  parameterized views obtain values independently for each imported dataset.
+- Failed graph transformations and imports validate resolved data before
+  changing the in-memory document, snapshots, warnings, or undo history.
+- Asynchronous file imports are bound to their original workspace and graph,
+  preserve selection order, and arrive as one undoable batch. Stale completions
+  are discarded rather than redirected into a new workspace.
+- Legend renames immediately update rendered and displayed-data export labels
+  without recalculating archived numerical snapshots.
+- Dataset removal, reordering, graph creation, and graph closing now participate
+  in undo/redo with their associated plot snapshots.
+- Graph templates retain boxed axes and background scope while preserving each
+  target dataset's own transform parameters.
+- Image export verifies the write before reporting success and preserves an
+  existing artifact if the replacement fails.
+- CSV and ITX displayed-data exports now omit hidden series by default.
+
 ## 0.0.1b4 — 2026-09-09
 
 ### Added

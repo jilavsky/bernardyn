@@ -5,6 +5,8 @@ from __future__ import annotations
 import csv
 import logging
 import math
+import os
+import tempfile
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
@@ -805,13 +807,20 @@ class Plot2DWidget(pg.PlotWidget):
 
     def save_image(self, path: str | Path, width: int | None = None) -> Path:
         destination = Path(path)
+        if not destination.parent.is_dir():
+            raise FileNotFoundError(f"output directory does not exist: {destination.parent}")
+        handle = tempfile.NamedTemporaryFile(
+            prefix=f".{destination.name}.", suffix=".tmp", dir=destination.parent, delete=False
+        )
+        temporary = Path(handle.name)
+        handle.close()
         if destination.suffix.lower() == ".svg":
             size = QSize(
                 self._graph.width_px if self._graph else 1600,
                 self._graph.height_px if self._graph else 1000,
             )
             generator = QSvgGenerator()
-            generator.setFileName(str(destination))
+            generator.setFileName(str(temporary))
             generator.setSize(size)
             generator.setViewBox(QRect(0, 0, size.width(), size.height()))
             generator.setResolution(self._graph.dpi if self._graph else 300)
@@ -826,12 +835,21 @@ class Plot2DWidget(pg.PlotWidget):
                     )
             finally:
                 painter.end()
-            return destination
-        image = self.capture_output_image(width)
-        dpi = self._graph.dpi if self._graph else 300
-        image.setDotsPerMeterX(round(dpi / 0.0254))
-        image.setDotsPerMeterY(round(dpi / 0.0254))
-        image.save(str(destination))
+        else:
+            image = self.capture_output_image(width)
+            dpi = self._graph.dpi if self._graph else 300
+            image.setDotsPerMeterX(round(dpi / 0.0254))
+            image.setDotsPerMeterY(round(dpi / 0.0254))
+            if not image.save(str(temporary), destination.suffix.lstrip(".").upper()):
+                temporary.unlink(missing_ok=True)
+                raise OSError(f"could not write image: {destination}")
+        try:
+            if not temporary.is_file() or temporary.stat().st_size == 0:
+                raise OSError(f"could not write image: {destination}")
+            os.replace(temporary, destination)
+        except Exception:
+            temporary.unlink(missing_ok=True)
+            raise
         return destination
 
     def copy_to_clipboard(self) -> None:

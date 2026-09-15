@@ -48,9 +48,11 @@ class ApplicationController:
         self._graph_warnings: dict[str, list[str]] = {}
         self.package_path: Path | None = None
         self.warnings: list[str] = []
+        self.workspace_generation = 0
         self.new_graph()
 
     def new_workspace(self, title: str = "Untitled workspace") -> None:
+        self.workspace_generation += 1
         self.workspace = Workspace(title=title)
         self.snapshots.clear()
         self.previews.clear()
@@ -99,17 +101,109 @@ class ApplicationController:
         self.workspace.active_graph_id = self.workspace.graphs[-1].id
         self.workspace.dirty = True
 
-    def add_dataset(self, dataset: Dataset, *, graph_id: str | None = None) -> SeriesView:
-        self.workspace.add_dataset(dataset)
-        graph = self.workspace.graph(graph_id or self.workspace.active_graph_id or "")
-        series = SeriesView(
-            dataset_id=dataset.id,
-            legend_label=dataset.label,
-            style=SeriesStyle(color=PALETTE[len(graph.series) % len(PALETTE)]),
+    def _default_parameters(self, dataset: Dataset, transform_id: str) -> dict[str, float]:
+        """Resolve only parameters carried by this dataset's own metadata."""
+        transform = self.transforms.get(transform_id)
+        values: dict[str, float] = {}
+        metadata = dict(dataset.metadata)
+        for parameter in transform.parameters:
+            value = self._metadata_number(metadata, parameter.id)
+            if value is not None:
+                values[parameter.id] = value
+        return values
+
+    @staticmethod
+    def _metadata_number(value: Mapping[str, Any], key: str) -> float | None:
+        for name, item in value.items():
+            if str(name).lower() == key.lower():
+                try:
+                    return float(item)
+                except (TypeError, ValueError):
+                    pass
+            if isinstance(item, Mapping):
+                found = ApplicationController._metadata_number(item, key)
+                if found is not None:
+                    return found
+        return None
+
+    def add_dataset(
+        self,
+        dataset: Dataset,
+        *,
+        graph_id: str | None = None,
+        transform_parameters: Mapping[str, float] | None = None,
+    ) -> SeriesView:
+        """Atomically add a dataset and its resolved view to a graph."""
+        return self.add_datasets(
+            (dataset,), graph_id=graph_id, transform_parameters=(transform_parameters,)
+        )[0]
+
+    def add_datasets(
+        self,
+        datasets_to_add: Iterable[Dataset],
+        *,
+        graph_id: str | None = None,
+        transform_parameters: Iterable[Mapping[str, float] | None] | None = None,
+    ) -> tuple[SeriesView, ...]:
+        """Add an ordered import batch as one all-or-nothing graph change."""
+        graph, additions, views, candidate, datasets, snapshots = self._prepare_add_datasets(
+            datasets_to_add, graph_id=graph_id, transform_parameters=transform_parameters
         )
-        self.workspace.replace_graph(graph.replace_series((*graph.series, series)))
-        self.recompute_graph(graph.id)
-        return series
+        self.workspace.datasets.update({dataset.id: dataset for dataset in additions})
+        self.workspace.replace_graph(candidate)
+        self.snapshots[graph.id] = snapshots
+        self._clear_recompute_warnings(graph.id)
+        return tuple(views)
+
+    def validate_add_datasets(
+        self,
+        datasets_to_add: Iterable[Dataset],
+        *,
+        graph_id: str | None = None,
+        transform_parameters: Iterable[Mapping[str, float] | None] | None = None,
+    ) -> None:
+        """Resolve an import batch without mutating document or catalog state."""
+        self._prepare_add_datasets(
+            datasets_to_add, graph_id=graph_id, transform_parameters=transform_parameters
+        )
+
+    def _prepare_add_datasets(
+        self,
+        datasets_to_add: Iterable[Dataset],
+        *,
+        graph_id: str | None,
+        transform_parameters: Iterable[Mapping[str, float] | None] | None,
+    ):
+        graph = self.workspace.graph(graph_id or self.workspace.active_graph_id or "")
+        additions = tuple(datasets_to_add)
+        given_parameters = tuple(transform_parameters or ())
+        if given_parameters and len(given_parameters) != len(additions):
+            raise ValueError("transform parameter rows must match imported datasets")
+        views: list[SeriesView] = []
+        for index, dataset in enumerate(additions):
+            supplied = given_parameters[index] if given_parameters else None
+            parameters = (
+                dict(supplied)
+                if supplied is not None
+                else self._default_parameters(dataset, graph.view_transform_id)
+            )
+            views.append(
+                SeriesView(
+                    dataset_id=dataset.id,
+                    legend_label=dataset.label,
+                    transform_id=graph.view_transform_id,
+                    transform_parameters=parameters,
+                    style=SeriesStyle(
+                        color=PALETTE[(len(graph.series) + index) % len(PALETTE)]
+                    ),
+                )
+            )
+        candidate = graph.replace_series((*graph.series, *views))
+        # Resolve before mutating the catalog or graph.  In particular, a
+        # parameterized transform must not leave a half-imported dataset.
+        datasets = {**self.workspace.datasets, **{dataset.id: dataset for dataset in additions}}
+        snapshots = self._resolve_graph(candidate, datasets)
+        return graph, additions, views, candidate, datasets, snapshots
 
     def load_location(
         self,
@@ -127,19 +221,39 @@ class ApplicationController:
         return dataset
 
     def update_graph(self, graph: GraphDocument, *, recompute: bool = False) -> None:
+        snapshots = self.validate_graph_update(graph, recompute=recompute)
+        # All potentially failing work happens above this line.  The document,
+        # resolved data, warnings, and dirty state therefore change together.
+        self.workspace.replace_graph(graph)
+        self.snapshots[graph.id] = snapshots
+        self._clear_recompute_warnings(graph.id)
+
+    def validate_graph_update(
+        self, graph: GraphDocument, *, recompute: bool = False
+    ) -> dict[str, PlotSeries]:
+        """Resolve a proposed graph edit without changing controller state."""
         if graph.id in self.read_only_graphs:
             raise PermissionError("this graph is read-only because its canonical data are invalid")
-        self.workspace.replace_graph(graph)
         if recompute:
-            self.recompute_graph(graph.id)
+            return self._resolve_graph(graph, self.workspace.datasets)
+        return self._presentation_snapshots(graph)
 
     def recompute_graph(self, graph_id: str) -> dict[str, PlotSeries]:
         if graph_id in self.read_only_graphs:
             raise PermissionError("cannot recompute a graph with invalid canonical data")
         graph = self.workspace.graph(graph_id)
+        resolved = self._resolve_graph(graph, self.workspace.datasets)
+        self.snapshots[graph_id] = resolved
+        self._clear_recompute_warnings(graph_id)
+        self.workspace.dirty = True
+        return resolved
+
+    def _resolve_graph(
+        self, graph: GraphDocument, datasets: Mapping[str, Dataset]
+    ) -> dict[str, PlotSeries]:
         resolved: dict[str, PlotSeries] = {}
         for view in graph.series:
-            dataset = self.workspace.datasets[view.dataset_id]
+            dataset = datasets[view.dataset_id]
             resolved[view.id] = resolve_series(
                 dataset,
                 view,
@@ -147,14 +261,34 @@ class ApplicationController:
                 x_log=graph.x_axis.log,
                 y_log=graph.y_axis.log,
             )
-        self.snapshots[graph_id] = resolved
+        return resolved
+
+    def _clear_recompute_warnings(self, graph_id: str) -> None:
         self._graph_warnings[graph_id] = [
             warning
             for warning in self._graph_warnings.get(graph_id, [])
             if "current version" not in warning and "was recomputed" not in warning
         ]
-        self.workspace.dirty = True
-        return resolved
+    def _presentation_snapshots(self, graph: GraphDocument) -> dict[str, PlotSeries]:
+        """Update labels without recalculating potentially archived arrays."""
+        existing = self.snapshots.get(graph.id, {})
+        if (
+            set(existing) == {view.id for view in graph.series}
+            and all(
+                existing[view.id].label
+                == (view.legend_label or self.workspace.datasets[view.dataset_id].label)
+                for view in graph.series
+            )
+        ):
+            return existing
+        return {
+            view.id: replace(
+                snapshot,
+                label=view.legend_label or self.workspace.datasets[view.dataset_id].label,
+            )
+            for view in graph.series
+            if (snapshot := existing.get(view.id)) is not None
+        }
 
     def set_transform(
         self,
@@ -174,6 +308,7 @@ class ApplicationController:
         )
         graph = replace(
             graph,
+            view_transform_id=transform_id,
             series=series,
             x_axis=replace(
                 graph.x_axis,
@@ -207,6 +342,7 @@ class ApplicationController:
 
     def open_package(self, path: str | Path) -> LoadedPackage:
         loaded = load_package(path)
+        self.workspace_generation += 1
         self.workspace = loaded.workspace
         self.snapshots = loaded.snapshots
         self.previews = loaded.previews

@@ -67,6 +67,18 @@ def test_workspace_deduplicates_shared_canonical_data(tmp_path):
         assert len(handle["datasets"]) == 2
 
 
+def test_workspace_save_retains_unreferenced_catalog_data(tmp_path):
+    controller = make_controller()
+    retained = Dataset(q=[1, 2], intensity=[9, 8], label="catalog only")
+    controller.workspace.add_dataset(retained)
+    path = controller.save(tmp_path / "workspace-catalog")
+    assert retained.id in load_package(path).workspace.datasets
+    graph_path = controller.save(
+        tmp_path / "graph-only-catalog", graph_ids=[controller.workspace.graphs[0].id]
+    )
+    assert retained.id not in load_package(graph_path).workspace.datasets
+
+
 def test_graph_export_does_not_mark_unsaved_workspace_clean(tmp_path):
     controller = make_controller()
     graph = controller.workspace.graphs[0]

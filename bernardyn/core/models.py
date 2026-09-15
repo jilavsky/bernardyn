@@ -261,6 +261,10 @@ class GraphDocument:
     id: str = field(default_factory=new_id)
     title: str = "Scattering plot"
     renderer_id: str = "plot2d"
+    # This is graph-level intent, rather than an inference from whichever
+    # series happened to be added first.  Series retain their own resolved
+    # parameters because values such as I0 and Rg are sample-specific.
+    view_transform_id: str = "raw"
     series: tuple[SeriesView, ...] = ()
     x_axis: AxisSpec = field(default_factory=lambda: AxisSpec(label="q [Å⁻¹]", log=True))
     y_axis: AxisSpec = field(default_factory=lambda: AxisSpec(label="Intensity [cm⁻¹]", log=True))
@@ -334,10 +338,16 @@ class GraphDocument:
             x_axis["color"] = tuple(x_axis["color"])
         if "color" in y_axis:
             y_axis["color"] = tuple(y_axis["color"])
+        inherited_view = (
+            series[0].transform_id
+            if series and all(item.transform_id == series[0].transform_id for item in series)
+            else "raw"
+        )
         return cls(
             id=str(value["id"]),
             title=str(value.get("title", "Scattering plot")),
             renderer_id=str(value.get("renderer_id", "plot2d")),
+            view_transform_id=str(value.get("view_transform_id", inherited_view)),
             series=series,
             x_axis=AxisSpec(**x_axis),
             y_axis=AxisSpec(**y_axis),

@@ -254,6 +254,10 @@ def save_package(
     referenced_ids = {
         series.dataset_id for graph in chosen_graphs for series in graph.series
     }
+    # A workspace is also a reusable canonical-data catalog. A single-graph
+    # export remains self-contained and includes only its referenced curves.
+    if graph_ids is None:
+        referenced_ids = set(workspace.datasets)
     for graph in chosen_graphs:
         missing = [series.id for series in graph.series if series.id not in snapshots.get(graph.id, {})]
         if missing:

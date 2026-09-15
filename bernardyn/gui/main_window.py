@@ -91,19 +91,26 @@ def _metadata_number(value, key: str) -> float | None:
 
 
 class WorkerSignals(QObject):
-    loaded = Signal(object, str)
+    loaded = Signal(object, object)
     failed = Signal(str)
     finished = Signal(object)
 
 
 class SourceLoadWorker(QRunnable):
-    def __init__(self, controller, location, graph_id, q_unit, error_fraction) -> None:
+    def __init__(
+        self, controller, location, graph_id, q_unit, error_fraction,
+        workspace_id, workspace_generation, batch_id, ordinal,
+    ) -> None:
         super().__init__()
         self.controller = controller
         self.location = location
         self.graph_id = graph_id
         self.q_unit = q_unit
         self.error_fraction = error_fraction
+        self.workspace_id = workspace_id
+        self.workspace_generation = workspace_generation
+        self.batch_id = batch_id
+        self.ordinal = ordinal
         self.signals = WorkerSignals()
         self.cancelled = False
 
@@ -117,7 +124,7 @@ class SourceLoadWorker(QRunnable):
                 error_fraction=self.error_fraction,
             )
             if not self.cancelled:
-                self.signals.loaded.emit(record, self.graph_id)
+                self.signals.loaded.emit(record, self)
         except Exception as exc:
             self.signals.failed.emit(f"{self.location.display_name}: {exc}")
         finally:
@@ -137,6 +144,64 @@ class GraphEditCommand(QUndoCommand):
 
     def undo(self) -> None:
         self.window._commit_graph(self.before, self.recompute)
+
+
+class DatasetImportCommand(QUndoCommand):
+    """One undoable import preserves both graph views and the dataset catalog."""
+
+    def __init__(self, window, datasets, graph_id: str, transform_parameters=None) -> None:
+        super().__init__("Import datasets")
+        self.window = window
+        self.datasets = tuple(datasets)
+        self.graph_id = graph_id
+        self.transform_parameters = transform_parameters
+        self.before = None
+        self.after = None
+
+    def redo(self) -> None:
+        if self.after is None:
+            self.before = self.window._controller_state()
+            self.window.controller.add_datasets(
+                self.datasets,
+                graph_id=self.graph_id,
+                transform_parameters=self.transform_parameters,
+            )
+            self.after = self.window._controller_state()
+        else:
+            self.window._restore_controller_state(self.after)
+        self.window._render_graph(self.graph_id)
+        self.window._refresh_dataset_list()
+        self.window._sync_inspector()
+
+    def undo(self) -> None:
+        self.window._restore_controller_state(self.before)
+        self.window._render_graph(self.graph_id)
+        self.window._refresh_dataset_list()
+        self.window._sync_inspector()
+
+
+class WorkspaceEditCommand(QUndoCommand):
+    """Undoable graph-tab lifecycle operation with snapshot restoration."""
+
+    def __init__(self, window, text: str, action) -> None:
+        super().__init__(text)
+        self.window = window
+        self.action = action
+        self.before = None
+        self.after = None
+
+    def redo(self) -> None:
+        if self.after is None:
+            self.before = self.window._controller_state()
+            self.action()
+            self.after = self.window._controller_state()
+        else:
+            self.window._restore_controller_state(self.after)
+        self.window._rebuild_tabs()
+
+    def undo(self) -> None:
+        self.window._restore_controller_state(self.before)
+        self.window._rebuild_tabs()
 
 
 class DatasetListWidget(QListWidget):
@@ -199,6 +264,8 @@ class MainWindow(QMainWindow):
         self.renderers = builtin_renderers()
         self.thread_pool = QThreadPool.globalInstance()
         self._workers: set[SourceLoadWorker] = set()
+        self._load_batches: dict[int, dict] = {}
+        self._next_load_batch_id = 0
         self._output_previews: list[OutputPreviewDialog] = []
         self._pending_graph_renders: set[str] = set()
         self._refreshing_dataset_list = False
@@ -240,12 +307,15 @@ class MainWindow(QMainWindow):
         open_button.clicked.connect(self._open_data)
         open_folder_button = QPushButton("Open folder…", data_widget)
         open_folder_button.clicked.connect(self._open_folder)
+        add_catalog_button = QPushButton("Add from workspace…", data_widget)
+        add_catalog_button.clicked.connect(self._add_from_workspace)
         remove_button = QPushButton("Remove selected from graph", data_widget)
         remove_button.clicked.connect(self._remove_datasets)
         cancel_button = QPushButton("Cancel loading", data_widget)
         cancel_button.clicked.connect(self._cancel_loading)
         layout.addWidget(open_button)
         layout.addWidget(open_folder_button)
+        layout.addWidget(add_catalog_button)
         layout.addWidget(self.dataset_list, 1)
         layout.addWidget(remove_button)
         layout.addWidget(cancel_button)
@@ -382,6 +452,7 @@ class MainWindow(QMainWindow):
         if not self._confirm_discard():
             return
         self.controller.new_workspace()
+        self._pending_graph_renders.clear()
         self.undo_stack.clear()
         self._rebuild_tabs()
 
@@ -442,22 +513,20 @@ class MainWindow(QMainWindow):
         self.controller.workspace.dirty = True
 
     def _new_graph(self, renderer_id: str) -> None:
-        graph = self.controller.new_graph(renderer_id)
-        page = GraphPage(graph, self, renderers=self.renderers)
-        self.tabs.addTab(page, graph.title)
-        self.tabs.setCurrentWidget(page)
-        self._render_graph(graph.id)
+        self.undo_stack.push(
+            WorkspaceEditCommand(self, "New graph", lambda: self.controller.new_graph(renderer_id))
+        )
 
     def _close_tab(self, index: int) -> None:
         page = self.tabs.widget(index)
         if not isinstance(page, GraphPage):
             self.tabs.removeTab(index)
             return
-        self.controller.close_graph(page.graph_id)
-        self.tabs.removeTab(index)
-        page.deleteLater()
-        if self.tabs.count() == 0:
-            self._rebuild_tabs()
+        self.undo_stack.push(
+            WorkspaceEditCommand(
+                self, "Close graph", lambda: self.controller.close_graph(page.graph_id)
+            )
+        )
 
     def _active_tab_changed(self, index: int) -> None:
         page = self.tabs.widget(index)
@@ -524,6 +593,40 @@ class MainWindow(QMainWindow):
                 self.tabs.setTabText(index, graph.title)
                 return
 
+    def _controller_state(self):
+        """Capture immutable graph/data state for dataset-import undo."""
+        return (
+            replace(
+                self.controller.workspace,
+                datasets=dict(self.controller.workspace.datasets),
+                graphs=list(self.controller.workspace.graphs),
+            ),
+            {graph_id: dict(values) for graph_id, values in self.controller.snapshots.items()},
+            {graph_id: list(values) for graph_id, values in self.controller._graph_warnings.items()},
+            dict(self.controller.previews),
+            {graph_id: dict(values) for graph_id, values in self.controller.renderer_data.items()},
+            set(self.controller.read_only_graphs),
+            set(self.controller.preview_only_graphs),
+        )
+
+    def _restore_controller_state(self, state) -> None:
+        (
+            workspace,
+            snapshots,
+            graph_warnings,
+            previews,
+            renderer_data,
+            read_only_graphs,
+            preview_only_graphs,
+        ) = state
+        self.controller.workspace = workspace
+        self.controller.snapshots = snapshots
+        self.controller._graph_warnings = graph_warnings
+        self.controller.previews = previews
+        self.controller.renderer_data = renderer_data
+        self.controller.read_only_graphs = read_only_graphs
+        self.controller.preview_only_graphs = preview_only_graphs
+
     def _autoscale_current_graph(self) -> None:
         """Refit an already-auto graph after the user has zoomed it manually."""
         graph = self._current_graph()
@@ -555,6 +658,12 @@ class MainWindow(QMainWindow):
     def _queue_graph_change(self, graph: GraphDocument, recompute: bool, text: str) -> None:
         try:
             before = self.controller.workspace.graph(graph.id)
+            # Controller/API callers can update a graph while the inspector is
+            # open.  Presentation controls must not turn that stale, empty
+            # inspector copy into an accidental series deletion.
+            if before.series and not graph.series:
+                graph = replace(graph, series=before.series)
+            self.controller.validate_graph_update(graph, recompute=recompute)
             self.undo_stack.push(GraphEditCommand(self, before, graph, recompute, text))
         except Exception as exc:
             QMessageBox.warning(self, "Graph change", str(exc))
@@ -599,11 +708,17 @@ class MainWindow(QMainWindow):
         )
         after = replace(
             graph,
+            view_transform_id=transform_id,
             series=series,
             x_axis=replace(graph.x_axis, label=transform.default_x_label, log=transform.default_x_log, auto_range=True),
             y_axis=replace(graph.y_axis, label=transform.default_y_label, log=transform.default_y_log, auto_range=True),
         )
-        self.undo_stack.push(GraphEditCommand(self, before, after, True, f"Set {transform.name} view"))
+        try:
+            self.controller.validate_graph_update(after, recompute=True)
+            self.undo_stack.push(GraphEditCommand(self, before, after, True, f"Set {transform.name} view"))
+        except Exception as exc:
+            QMessageBox.warning(self, "Graph change", str(exc))
+            self._sync_inspector()
 
     def _open_data(self) -> None:
         paths, _ = QFileDialog.getOpenFileNames(
@@ -637,6 +752,31 @@ class MainWindow(QMainWindow):
         if not selected:
             return
         self._open_file_selector(Path(selected))
+
+    def _add_from_workspace(self) -> None:
+        graph = self._current_graph()
+        if graph is None:
+            return
+        present = {view.dataset_id for view in graph.series}
+        choices = [
+            (f"{dataset.label} ({dataset.id[:8]})", dataset)
+            for dataset in self.controller.workspace.datasets.values()
+            if dataset.id not in present
+        ]
+        if not choices:
+            self.statusBar().showMessage("All loaded datasets are already in this graph.", 3000)
+            return
+        label, accepted = QInputDialog.getItem(
+            self, "Add from workspace", "Loaded dataset:", [item[0] for item in choices], 0, False
+        )
+        if not accepted:
+            return
+        dataset = next(dataset for item, dataset in choices if item == label)
+        try:
+            self.controller.validate_add_datasets((dataset,), graph_id=graph.id)
+            self.undo_stack.push(DatasetImportCommand(self, (dataset,), graph.id))
+        except Exception as exc:
+            QMessageBox.warning(self, "Add from workspace", str(exc))
 
     def _dropped_data_paths(self, dropped: list[Path]) -> None:
         """Open dropped files/folders through the normal profile-aware importer."""
@@ -740,10 +880,26 @@ class MainWindow(QMainWindow):
         q_unit: str,
         error_fraction: float,
     ) -> None:
-        for location in locations:
+        locations = list(locations)
+        if not locations:
+            return
+        self._next_load_batch_id += 1
+        batch_id = self._next_load_batch_id
+        batch = {
+            "workspace_id": self.controller.workspace.id,
+            "workspace_generation": self.controller.workspace_generation,
+            "graph_id": graph_id,
+            "workers": set(),
+            "finished": set(),
+            "records": {},
+        }
+        self._load_batches[batch_id] = batch
+        for ordinal, location in enumerate(locations):
             worker = SourceLoadWorker(
-                self.controller, location, graph_id, q_unit, error_fraction
+                self.controller, location, graph_id, q_unit, error_fraction,
+                batch["workspace_id"], batch["workspace_generation"], batch_id, ordinal,
             )
+            batch["workers"].add(worker)
             worker.signals.loaded.connect(self._source_loaded)
             worker.signals.failed.connect(
                 lambda message: QMessageBox.warning(self, "Load error", message)
@@ -751,22 +907,72 @@ class MainWindow(QMainWindow):
             worker.signals.finished.connect(self._worker_finished)
             self._workers.add(worker)
             self.thread_pool.start(worker)
-        if locations:
-            self.statusBar().showMessage("Loading data…")
+        self.statusBar().showMessage("Loading data…")
 
-    def _source_loaded(self, record, graph_id: str) -> None:
-        try:
-            if not any(graph.id == graph_id for graph in self.controller.workspace.graphs):
-                graph_id = self.controller.workspace.active_graph_id
-            dataset = record.to_dataset()
-            self.controller.add_dataset(dataset, graph_id=graph_id)
-            self._pending_graph_renders.add(graph_id)
-            self.statusBar().showMessage(f"Loaded {dataset.label}", 5000)
-        except Exception as exc:
-            QMessageBox.warning(self, "Load error", str(exc))
+    def _source_loaded(self, record, worker: SourceLoadWorker) -> None:
+        batch = self._load_batches.get(worker.batch_id)
+        if batch is None or worker.cancelled:
+            return
+        # Defer mutations until every selected source completes.  This keeps
+        # selection order and makes the batch a single undoable operation.
+        batch["records"][worker.ordinal] = record
 
     def _worker_finished(self, worker) -> None:
         self._workers.discard(worker)
+        batch = self._load_batches.get(worker.batch_id)
+        if batch is not None:
+            batch["finished"].add(worker)
+            if batch["finished"] == batch["workers"]:
+                self._load_batches.pop(worker.batch_id, None)
+                current = self.controller.workspace
+                graph_id = batch["graph_id"]
+                target_is_current = (
+                    not worker.cancelled
+                    and current.id == batch["workspace_id"]
+                    and self.controller.workspace_generation == batch["workspace_generation"]
+                    and any(graph.id == graph_id for graph in current.graphs)
+                )
+                if target_is_current and batch["records"]:
+                    datasets = [
+                        batch["records"][ordinal].to_dataset()
+                        for ordinal in sorted(batch["records"])
+                    ]
+                    try:
+                        transform = self.controller.transforms.get(
+                            current.graph(graph_id).view_transform_id
+                        )
+                        parameter_rows = []
+                        needs_prompt = False
+                        for dataset in datasets:
+                            initial = {
+                                parameter.id: value
+                                for parameter in transform.parameters
+                                if (value := _metadata_number(dict(dataset.metadata), parameter.id))
+                                is not None
+                            }
+                            needs_prompt |= any(
+                                parameter.required and parameter.id not in initial
+                                for parameter in transform.parameters
+                            )
+                            parameter_rows.append((dataset.id, dataset.label, initial))
+                        parameters = None
+                        if needs_prompt:
+                            dialog = SeriesTransformParameterDialog(transform, parameter_rows, self)
+                            if dialog.exec() != dialog.DialogCode.Accepted:
+                                self.statusBar().showMessage("Data import cancelled", 3000)
+                                return
+                            values = dialog.values()
+                            parameters = [values[dataset.id] for dataset in datasets]
+                        self.controller.validate_add_datasets(
+                            datasets, graph_id=graph_id, transform_parameters=parameters
+                        )
+                        self.undo_stack.push(
+                            DatasetImportCommand(self, datasets, graph_id, parameters)
+                        )
+                        self._pending_graph_renders.add(graph_id)
+                        self.statusBar().showMessage(f"Loaded {len(datasets)} dataset(s)", 5000)
+                    except Exception as exc:
+                        QMessageBox.warning(self, "Load error", str(exc))
         if not self._workers:
             for graph_id in self._pending_graph_renders:
                 self._render_graph(graph_id)
@@ -805,10 +1011,9 @@ class MainWindow(QMainWindow):
         if graph is None or not series_ids:
             return
         retained = tuple(series for series in graph.series if series.id not in series_ids)
-        self.controller.update_graph(replace(graph, series=retained), recompute=True)
-        self._refresh_dataset_list()
-        self._render_graph(graph.id)
-        self._sync_inspector()
+        self.undo_stack.push(
+            GraphEditCommand(self, graph, replace(graph, series=retained), True, "Remove datasets")
+        )
 
     def _dataset_list_reordered(self) -> None:
         if self._refreshing_dataset_list:
@@ -827,9 +1032,9 @@ class MainWindow(QMainWindow):
         )
         if reordered == graph.series:
             return
-        self.controller.update_graph(graph.replace_series(reordered), recompute=False)
-        self._render_graph(graph.id)
-        self._sync_inspector()
+        self.undo_stack.push(
+            GraphEditCommand(self, graph, graph.replace_series(reordered), False, "Reorder datasets")
+        )
 
     def _open_package(self) -> None:
         previous = self.user_state.get(LAST_WORKSPACE_PATH_KEY, "")

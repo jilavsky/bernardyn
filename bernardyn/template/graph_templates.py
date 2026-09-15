@@ -18,10 +18,7 @@ TEMPLATE_VERSION = 1
 def template_document(graph: GraphDocument, name: str) -> dict[str, Any]:
     document = graph.to_dict()
     styles = [json_value(asdict(series.style)) for series in graph.series]
-    transform_id = graph.series[0].transform_id if graph.series else "raw"
-    transform_parameters = (
-        json_value(graph.series[0].transform_parameters) if graph.series else {}
-    )
+    transform_id = graph.view_transform_id
     document["series"] = []
     return {
         "format": TEMPLATE_FORMAT,
@@ -30,7 +27,6 @@ def template_document(graph: GraphDocument, name: str) -> dict[str, Any]:
         "graph": document,
         "series_styles": styles,
         "transform_id": transform_id,
-        "transform_parameters": transform_parameters,
     }
 
 
@@ -84,7 +80,6 @@ def apply_template(graph: GraphDocument, document: dict[str, Any]) -> GraphDocum
         for value in document.get("series_styles", [])
     ]
     transform_id = str(document.get("transform_id", "raw"))
-    parameters = dict(document.get("transform_parameters", {}))
     series: list[SeriesView] = []
     for index, existing in enumerate(graph.series):
         style = styles[index % len(styles)] if styles else existing.style
@@ -93,20 +88,25 @@ def apply_template(graph: GraphDocument, document: dict[str, Any]) -> GraphDocum
                 existing,
                 style=style,
                 transform_id=transform_id,
-                transform_parameters=parameters,
+                # A graph template is presentation intent, not a transfer of
+                # one sample's I0/Rg (or future fit parameters) to another.
+                transform_parameters=dict(existing.transform_parameters),
             )
         )
     return replace(
         graph,
         title=template.title,
         renderer_id=template.renderer_id,
+        view_transform_id=transform_id,
         series=tuple(series),
         x_axis=template.x_axis,
         y_axis=template.y_axis,
         typography=template.typography,
         legend=template.legend,
+        box_axes=template.box_axes,
         annotations=template.annotations,
         background=template.background,
+        background_scope=template.background_scope,
         width_px=template.width_px,
         height_px=template.height_px,
         width_in=template.width_in,

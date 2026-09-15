@@ -35,6 +35,9 @@ The left dock, **Datasets in active graph**, controls the order in which curves
 are drawn. Drag rows within this list to change drawing order, or select rows
 and use **Remove selected from graph** to hide them from that graph. Removing a
 row does not delete the canonical dataset from the workspace.
+Use **Add from workspace…** to place another loaded catalog dataset in the
+active graph without reading its source file again. These changes, along with
+removal and reordering, can be undone and redone.
 
 The inspector's **Datasets** tab provides per-series controls, visibility
 checkboxes, and the legend controls for the active graph.
@@ -135,6 +138,8 @@ and **Print…** buttons.
 
 Use the export actions for images (PNG/JPEG/SVG), displayed data (CSV/Igor
 ITX), or canonical datasets (Igor H5XP). These exports serve different
-purposes and do not replace a Bernardyn workspace package.
+purposes and do not replace a Bernardyn workspace package. CSV and ITX export
+the visible curves by default; hide a curve to omit it from a displayed-data
+export.
 
 For format details, see [Data flow and file formats](data-flow-and-formats.md).

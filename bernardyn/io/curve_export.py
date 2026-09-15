@@ -14,12 +14,16 @@ def export_displayed_csv(
     path: str | Path,
     graph: GraphDocument,
     snapshots: Mapping[str, PlotSeries],
+    *,
+    include_hidden: bool = False,
 ) -> Path:
     destination = Path(path)
     with destination.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
         writer.writerow(["series", "x", "y", "dx", "dy", "source_index"])
         for view in graph.series:
+            if not include_hidden and not view.visible:
+                continue
             snapshot = snapshots.get(view.id)
             if snapshot is None:
                 continue
@@ -56,6 +60,8 @@ def export_displayed_itx(
     path: str | Path,
     graph: GraphDocument,
     snapshots: Mapping[str, PlotSeries],
+    *,
+    include_hidden: bool = False,
 ) -> Path:
     """Write resolved x/y/error arrays as an Igor Text (ITX) data file."""
     destination = Path(path)
@@ -64,6 +70,8 @@ def export_displayed_itx(
         handle.write("IGOR\n")
         handle.write('#pragma TextEncoding = "UTF-8"\n')
         for view in graph.series:
+            if not include_hidden and not view.visible:
+                continue
             snapshot = snapshots.get(view.id)
             if snapshot is None:
                 continue
