@@ -6,6 +6,8 @@ behavior changes.
 
 ## Unreleased
 
+## 0.0.1b5 — 2026-09-16
+
 ### Added
 
 - **bernardyn-mcp** exposes five grouped local-MCP tools for data discovery,
