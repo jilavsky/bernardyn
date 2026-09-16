@@ -8,6 +8,14 @@ behavior changes.
 
 ### Added
 
+- **bernardyn-mcp** exposes five grouped local-MCP tools for data discovery,
+  recipe-based package/preview creation, package inspection, and 2-D export.
+  It confines agent output to an authorised root or a temporary cache and does
+  not expose source mutation, fitting, raw HDF5 writing, or code execution.
+- A typed public Python recipe facade and **bernardyn-plot** CLI now create
+  validated raw I(Q), Porod, Kratky, data+fit, residual, and volume-
+  distribution graph packages. Optional PNG/JPEG/SVG output is rendered
+  offscreen through the same 2-D renderer used by the desktop application.
 - **Add pyIrena results…** now also imports public-reader residuals and Size
   Distribution volume distributions as typed generic curves on separate graph
   tabs. Generic curves preserve their axis semantics, units, provenance, and

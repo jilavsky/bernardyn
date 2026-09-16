@@ -1,5 +1,18 @@
 """Bernardyn scientific plotting workbench."""
 
+__version__ = "0.0.1b4"
+
+from bernardyn.api import (
+    PlotRequest,
+    PlotResult,
+    PlotService,
+    Presentation,
+    ResultInput,
+    ScatteringInput,
+    create_plot,
+    inspect_data,
+    list_recipes,
+)
 from bernardyn.core.models import (
     Annotation,
     CurveRole,
@@ -22,6 +35,13 @@ __all__ = [
     "PlotSeries",
     "SeriesView",
     "Workspace",
+    "PlotRequest",
+    "PlotResult",
+    "PlotService",
+    "Presentation",
+    "ResultInput",
+    "ScatteringInput",
+    "create_plot",
+    "inspect_data",
+    "list_recipes",
 ]
-
-__version__ = "0.0.1b4"

@@ -41,6 +41,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+mcp = ["mcp>=1.0.0,<2.0"]
 dev = ["pytest>=7", "pytest-cov", "pytest-qt>=4.2", "ruff", "build", "twine"]
 
 [project.urls]
@@ -53,6 +54,8 @@ bernardyn = "bernardyn.app:main"
 
 [project.scripts]
 bernardyn-doctor = "bernardyn.diagnostics:main"
+bernardyn-plot = "bernardyn.cli:main"
+bernardyn-mcp = "bernardyn.mcp.server:main"
 
 [tool.setuptools.packages.find]
 include = ["bernardyn*"]

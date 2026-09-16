@@ -7,6 +7,8 @@
 - [Releasing Bernardyn to PyPI](releasing.md)
 - [Native HDF5 schema, version 2](../bernardyn/schemas/graph-package-v2.md)
 - [Native HDF5 schema, version 1](../bernardyn/schemas/graph-package-v1.md) (legacy)
+- [Headless Python and CLI recipes](headless-recipes.md)
+- [Local MCP server for agents](mcp.md)
 
 The native Bernardyn file suffix is `.bernardyn.h5`. It is intentionally not
 an Igor `.h5xp` file.

@@ -21,4 +21,4 @@ dependencies:
   - pip:
       # Both repositories are expected to be sibling directories.
       - -e ../pyirena[qtplot]
-      - -e .[dev]
+      - -e .[dev,mcp]
