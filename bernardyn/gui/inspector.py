@@ -379,7 +379,10 @@ class InspectorWidget(QScrollArea):
         legend_form.addRow("Symbol size:", self.legend_symbol_size)
         legend_form.addRow("Font size:", self.legend_font_size)
         legend_form.addRow("Color:", QLabel("Same as axes", legend_group))
-        details_layout.addWidget(legend_group)
+        # Keep Legend a direct child of the Datasets group. Besides reflecting
+        # the inspector's conceptual hierarchy, it keeps the controls visible
+        # even when the splitter gives most height to a long series list.
+        layout.addWidget(legend_group)
         form = QFormLayout()
         self.series_label = QLineEdit(group)
         self.series_label.editingFinished.connect(self._edit_series_label)

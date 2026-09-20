@@ -6,7 +6,6 @@ from typing import Mapping
 
 from bernardyn.core.models import Dataset, GenericCurve
 
-
 # The stable ids, rather than visible labels, are kept in Qt item data.  This
 # makes a saved result's scientific role available in both places that list
 # graph data without making either widget own result-import knowledge.
@@ -14,10 +13,12 @@ DATASET_FILTERS = (
     ("All data", "all"),
     ("SAS data", "sas"),
     ("Unified Fit results", "unified_fit_measured"),
-    ("Unified Fit model", "unified_fit_model"),
+    # Filter ids match the persisted ``bernardyn_result.role`` values. The
+    # user-facing term remains "model", while Unified Fit stores it as "fit".
+    ("Unified Fit model", "unified_fit_fit"),
     ("Unified Fit residuals", "unified_fit_residuals"),
     ("Size Distribution results", "size_distribution_measured"),
-    ("Size Distribution model", "size_distribution_model"),
+    ("Size Distribution model", "size_distribution_fit"),
     ("Size Distribution residuals", "size_distribution_residuals"),
     ("Size Distribution volume distribution", "size_distribution_volume_distribution"),
 )
