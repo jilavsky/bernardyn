@@ -6,6 +6,7 @@ become the source of truth.
 
 from __future__ import annotations
 
+import math
 from dataclasses import asdict, dataclass, field, replace
 from enum import Enum
 from typing import Any, Iterable, Mapping
@@ -97,6 +98,7 @@ class AnnotationKind(str, Enum):
     HLINE = "horizontal_line"
     VLINE = "vertical_line"
     BOX = "box"
+    POWER_LAW = "power_law"
 
 
 @dataclass(frozen=True)
@@ -326,6 +328,10 @@ class Annotation:
     line_width: float = 1.5
     font_size: int = 11
     z_order: int = 10
+    # A positive P represents the conventional SAXS slope I = B * q^-P.
+    # It is used only by POWER_LAW annotations; the line's amplitude is
+    # derived from ``position`` so that a guide can be repositioned directly.
+    slope: float | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "id", _valid_id(self.id))
@@ -335,6 +341,13 @@ class Annotation:
         object.__setattr__(self, "kind", AnnotationKind(self.kind))
         if self.kind in (AnnotationKind.ARROW, AnnotationKind.BOX) and self.end is None:
             raise ValueError(f"{self.kind.value} annotations require an end point")
+        if self.kind is AnnotationKind.POWER_LAW:
+            # Direct construction is also used by importers and older
+            # plugins, so retain a conventional P=4 default at that boundary.
+            if self.slope is None:
+                object.__setattr__(self, "slope", 4.0)
+            if not math.isfinite(self.slope):
+                raise ValueError("power-law annotations require a finite exponent")
 
 
 @dataclass(frozen=True)

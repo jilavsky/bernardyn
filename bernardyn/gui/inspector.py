@@ -22,9 +22,11 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMenu,
+    QMessageBox,
     QPushButton,
     QScrollArea,
     QSpinBox,
+    QSplitter,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -32,6 +34,7 @@ from PySide6.QtWidgets import (
 
 from bernardyn.core.models import Dataset, GraphDocument, PlotSeries, SeriesView
 from bernardyn.core.transforms import TransformRegistry
+from bernardyn.gui.dataset_filters import DATASET_FILTERS, matches_dataset_filter
 from bernardyn.gui.dialogs import AnnotationDialog
 
 
@@ -41,6 +44,7 @@ class InspectorWidget(QScrollArea):
     resetRequested = Signal()
     outputPreviewRequested = Signal()
     autoscaleRequested = Signal()
+    displayCanvasRequested = Signal(int, int)
 
     def __init__(self, transforms: TransformRegistry, parent=None) -> None:
         super().__init__(parent)
@@ -175,6 +179,11 @@ class InspectorWidget(QScrollArea):
             control.setRange(100, 16384)
             control.setValue(value)
             control.editingFinished.connect(self._edit_dimensions)
+        self.set_display_canvas = QPushButton("Set", group)
+        self.set_display_canvas.setToolTip(
+            "Resize the application so the displayed 2-D graph canvas matches these pixels"
+        )
+        self.set_display_canvas.clicked.connect(self._set_display_canvas_size)
         self.width_in = self._double(0.1, 200, 6.5)
         self.height_in = self._double(0.1, 200, 4.5)
         self.dpi = QSpinBox(group)
@@ -219,7 +228,16 @@ class InspectorWidget(QScrollArea):
         form.addRow("Font family:", self.font_family)
         form.addRow("Font sizes:", self._paired_row("Title", self.title_font_size, "Axis", self.font_size, group))
         form.addRow("", self._paired_row("Ticks", self.tick_font_size, "", None, group))
-        form.addRow("Canvas (px):", self._paired_row("Width", self.canvas_width, "Height", self.canvas_height, group))
+        canvas_row = QWidget(group)
+        canvas_layout = QHBoxLayout(canvas_row)
+        canvas_layout.setContentsMargins(0, 0, 0, 0)
+        canvas_layout.setSpacing(5)
+        canvas_layout.addWidget(QLabel("Width:", canvas_row))
+        canvas_layout.addWidget(self.canvas_width, 1)
+        canvas_layout.addWidget(QLabel("Height:", canvas_row))
+        canvas_layout.addWidget(self.canvas_height, 1)
+        canvas_layout.addWidget(self.set_display_canvas)
+        form.addRow("Canvas (px):", canvas_row)
         form.addRow("Output (in):", self._paired_row("Width", self.width_in, "Height", self.height_in, group))
         form.addRow("Output DPI:", self.dpi)
         form.addRow("Background:", background_row)
@@ -273,14 +291,35 @@ class InspectorWidget(QScrollArea):
     def _build_series_group(self) -> QGroupBox:
         group = QGroupBox("Datasets in graph", self)
         layout = QVBoxLayout(group)
-        self.series_list = QListWidget(group)
-        self.series_list.setMaximumHeight(240)
+        filter_row = QHBoxLayout()
+        filter_row.addWidget(QLabel("Show:", group))
+        self.series_filter = QComboBox(group)
+        for label, filter_id in DATASET_FILTERS:
+            self.series_filter.addItem(label, filter_id)
+        self.series_filter.setToolTip("Filter the datasets listed here without changing the graph.")
+        self.series_filter.currentIndexChanged.connect(self._refilter_series_list)
+        filter_row.addWidget(self.series_filter, 1)
+        layout.addLayout(filter_row)
+
+        # The list is deliberately in a splitter: a long graph can make its
+        # list taller by dragging the handle down, without losing the series
+        # controls below it.
+        self.series_splitter = QSplitter(Qt.Orientation.Vertical, group)
+        self.series_list = QListWidget(self.series_splitter)
+        self.series_list.setMinimumHeight(100)
         self.series_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.series_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.series_list.customContextMenuRequested.connect(self._show_series_context_menu)
         self.series_list.currentItemChanged.connect(self._series_selected)
         self.series_list.itemChanged.connect(self._series_visibility)
-        layout.addWidget(self.series_list)
+        self.series_details = QWidget(self.series_splitter)
+        details_layout = QVBoxLayout(self.series_details)
+        details_layout.setContentsMargins(0, 0, 0, 0)
+        self.series_splitter.addWidget(self.series_list)
+        self.series_splitter.addWidget(self.series_details)
+        self.series_splitter.setStretchFactor(0, 1)
+        self.series_splitter.setStretchFactor(1, 1)
+        layout.addWidget(self.series_splitter, 1)
         row = QHBoxLayout()
         for text, callback in (
             ("Up", lambda: self._move_series(-1)),
@@ -290,7 +329,7 @@ class InspectorWidget(QScrollArea):
             button = QPushButton(text, group)
             button.clicked.connect(callback)
             row.addWidget(button)
-        layout.addLayout(row)
+        details_layout.addLayout(row)
         legend_group = QGroupBox("Legend", group)
         legend_form = QFormLayout(legend_group)
         self.legend = QCheckBox("Show legend", legend_group)
@@ -340,7 +379,7 @@ class InspectorWidget(QScrollArea):
         legend_form.addRow("Symbol size:", self.legend_symbol_size)
         legend_form.addRow("Font size:", self.legend_font_size)
         legend_form.addRow("Color:", QLabel("Same as axes", legend_group))
-        layout.addWidget(legend_group)
+        details_layout.addWidget(legend_group)
         form = QFormLayout()
         self.series_label = QLineEdit(group)
         self.series_label.editingFinished.connect(self._edit_series_label)
@@ -374,9 +413,9 @@ class InspectorWidget(QScrollArea):
         self.opacity = self._double(0, 1, 1)
         self.opacity.setSingleStep(0.1)
         self.opacity.editingFinished.connect(self._edit_style)
-        self.show_y_error_bars = QCheckBox("Y", group)
+        self.show_y_error_bars = QCheckBox(group)
         self.show_y_error_bars.setToolTip("Show intensity uncertainty bars")
-        self.show_x_error_bars = QCheckBox("X", group)
+        self.show_x_error_bars = QCheckBox(group)
         self.show_x_error_bars.setToolTip("Show Q-resolution bars")
         self.error_caps = QCheckBox("Caps", group)
         self.error_caps.setToolTip("Draw end caps on enabled error bars")
@@ -418,14 +457,14 @@ class InspectorWidget(QScrollArea):
         form.addRow("Line:", self._paired_row("Style", self.line_style, "Width", self.line_width, group))
         form.addRow("Symbol:", self._paired_row("Type", self.symbol, "Size", self.symbol_size, group))
         form.addRow("Opacity:", self.opacity)
-        form.addRow("Errors:", self._paired_row("Show Y", self.show_y_error_bars, "Show X", self.show_x_error_bars, group))
+        form.addRow("Show errors:", self._paired_row("Y", self.show_y_error_bars, "X", self.show_x_error_bars, group))
         form.addRow("", self._paired_row("Caps", self.error_caps, "Size", self.error_cap_size, group))
         form.addRow("", self._paired_row("Width", self.error_width, "Color", self.error_color, group))
         form.addRow("Multiplier:", self.multiplier)
         form.addRow("Offset:", self.offset)
         form.addRow("Q minimum:", self.q_min)
         form.addRow("Q maximum:", self.q_max)
-        layout.addLayout(form)
+        details_layout.addLayout(form)
         self.series_controls = [
             self.series_label, self.color, self.line_style, self.line_width, self.symbol,
             self.symbol_size, self.opacity, self.show_y_error_bars, self.show_x_error_bars,
@@ -465,6 +504,7 @@ class InspectorWidget(QScrollArea):
         row = QHBoxLayout()
         for text, callback in (
             ("Add", self._add_annotation),
+            ("Power-law slope…", self._add_power_law),
             ("Edit", self._edit_annotation),
             ("Delete", self._delete_annotation),
         ):
@@ -582,6 +622,12 @@ class InspectorWidget(QScrollArea):
         self.background_scope.setToolTip(
             "Plot-area backgrounds are available for 2-D graphs; 3-D graphs use one canvas."
         )
+        self.set_display_canvas.setEnabled(graph.renderer_id == "plot2d")
+        self.set_display_canvas.setToolTip(
+            "Resize the application so the displayed 2-D graph canvas matches these pixels"
+            if graph.renderer_id == "plot2d"
+            else "Exact displayed-pixel sizing is available for 2-D graphs only"
+        )
         config = graph.renderer_config
         self.opengl_group.setVisible(graph.renderer_id.startswith("opengl"))
         self.tabs.setTabVisible(self._three_d_tab_index, graph.renderer_id.startswith("opengl"))
@@ -599,10 +645,27 @@ class InspectorWidget(QScrollArea):
         self.camera_distance.setValue(float(camera.get("distance", 40.0)))
         self.camera_elevation.setValue(float(camera.get("elevation", 25.0)))
         self.camera_azimuth.setValue(float(camera.get("azimuth", -45.0)))
-        selected_id = self.current_series_id()
+        self._populate_series_list(self.current_series_id())
+        self.annotations.clear()
+        for annotation in graph.annotations:
+            label = annotation.text or self._annotation_label(annotation)
+            item = QListWidgetItem(label)
+            item.setData(Qt.ItemDataRole.UserRole, annotation.id)
+            self.annotations.addItem(item)
+        self._sync_series_controls()
+        self._syncing = False
+
+    def _populate_series_list(self, selected_id: str | None) -> None:
+        """Rebuild the visible subset while retaining the selected series."""
         self.series_list.clear()
-        for series in graph.series:
-            label = series.legend_label or datasets[series.dataset_id].label
+        if self._graph is None:
+            return
+        filter_id = self.series_filter.currentData()
+        for series in self._graph.series:
+            dataset = self._datasets[series.dataset_id]
+            if not matches_dataset_filter(dataset, filter_id):
+                continue
+            label = series.legend_label or dataset.label
             item = QListWidgetItem(label)
             item.setData(Qt.ItemDataRole.UserRole, series.id)
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
@@ -612,14 +675,17 @@ class InspectorWidget(QScrollArea):
                 self.series_list.setCurrentItem(item)
         if self.series_list.currentItem() is None and self.series_list.count():
             self.series_list.setCurrentRow(0)
-        self.annotations.clear()
-        for annotation in graph.annotations:
-            label = annotation.text or annotation.kind.value.replace("_", " ")
-            item = QListWidgetItem(label)
-            item.setData(Qt.ItemDataRole.UserRole, annotation.id)
-            self.annotations.addItem(item)
+
+    def _refilter_series_list(self) -> None:
+        if self._graph is None:
+            return
+        selected_id = self.current_series_id()
+        self._syncing = True
+        try:
+            self._populate_series_list(selected_id)
+        finally:
+            self._syncing = False
         self._sync_series_controls()
-        self._syncing = False
 
     def current_series_id(self) -> str | None:
         item = self.series_list.currentItem()
@@ -820,6 +886,13 @@ class InspectorWidget(QScrollArea):
         )
         self._graph = graph
         self.graphChanged.emit(graph, False, "Change canvas dimensions")
+
+    def _set_display_canvas_size(self) -> None:
+        """Apply the requested output dimensions to the interactive 2-D canvas."""
+        if self._syncing or self._graph is None:
+            return
+        self._edit_dimensions()
+        self.displayCanvasRequested.emit(self.canvas_width.value(), self.canvas_height.value())
 
     def _choose_background(self) -> None:
         if self._graph is None:
@@ -1073,6 +1146,27 @@ class InspectorWidget(QScrollArea):
             return
         self._upsert_annotation(dialog.value(), "Add annotation")
 
+    def _add_power_law(self) -> None:
+        """Add a conventional one-decade I = B q^-P reference guide."""
+        if self._graph is None:
+            return
+        if not (self._graph.x_axis.log and self._graph.y_axis.log):
+            QMessageBox.information(
+                self,
+                "Power-law slope",
+                "Power-law slope guides require logarithmic X and Y axes.",
+            )
+            return
+        position, _ = self._annotation_defaults()
+        dialog = AnnotationDialog(default_position=position, parent=self)
+        dialog.kind.setCurrentIndex(dialog.kind.findData("power_law"))
+        dialog.previewRequested.connect(
+            lambda replacement: self._preview_annotation(dialog, replacement)
+        )
+        if dialog.exec() != dialog.DialogCode.Accepted:
+            return
+        self._upsert_annotation(dialog.value(), "Add power-law slope")
+
     def _preview_annotation(self, dialog: AnnotationDialog, replacement) -> None:
         # The explicit button is a commit, rather than an ephemeral overlay:
         # it lets the user continue adjusting a visible annotation and keeps
@@ -1142,6 +1236,12 @@ class InspectorWidget(QScrollArea):
             return None
         annotation_id = item.data(Qt.ItemDataRole.UserRole)
         return next(value for value in self._graph.annotations if value.id == annotation_id)
+
+    @staticmethod
+    def _annotation_label(annotation) -> str:
+        if annotation.kind.value == "power_law":
+            return f"Slope −{annotation.slope:g}" if annotation.slope is not None else "Power-law slope"
+        return annotation.kind.value.replace("_", " ")
 
     def _edit_annotation(self) -> None:
         annotation = self._selected_annotation()

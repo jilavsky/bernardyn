@@ -535,9 +535,14 @@ class AnnotationDialog(QDialog):
         self._update_color_button()
         self.line_width = self._spin(annotation.line_width if annotation else 1.5)
         self.line_width.setRange(0.1, 50)
+        self.slope = self._spin(annotation.slope if annotation and annotation.slope is not None else 4.0)
+        self.slope.setRange(-1000, 1000)
+        self.slope.setDecimals(4)
+        self.slope_label = QLabel("Power exponent P:", self)
         self.font_size = QSpinBox(self)
         self.font_size.setRange(6, 144)
         self.font_size.setValue(annotation.font_size if annotation else 11)
+        self.font_size_label = QLabel("Font size:", self)
         self.z_order = QSpinBox(self)
         self.z_order.setRange(-10_000, 10_000)
         self.z_order.setValue(annotation.z_order if annotation else 10)
@@ -552,7 +557,8 @@ class AnnotationDialog(QDialog):
         form.addRow("End Y (arrow/box):", self.end_y)
         form.addRow("Color:", self.color)
         form.addRow("Line width:", self.line_width)
-        form.addRow("Font size:", self.font_size)
+        form.addRow(self.slope_label, self.slope)
+        form.addRow(self.font_size_label, self.font_size)
         form.addRow("Z order:", self.z_order)
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
@@ -575,6 +581,19 @@ class AnnotationDialog(QDialog):
         layout.addWidget(scroll, 1)
         layout.addWidget(buttons)
         self.resize(460, 420)
+        self.kind.currentIndexChanged.connect(self._update_kind_controls)
+        self._update_kind_controls()
+
+    def _update_kind_controls(self) -> None:
+        power_law = self.kind.currentData() == AnnotationKind.POWER_LAW.value
+        self.slope_label.setVisible(power_law)
+        self.slope.setVisible(power_law)
+        self.font_size_label.setText("Slope label font size:" if power_law else "Font size:")
+        # Power-law labels are normally read from across a publication-sized
+        # plot, so give new guides a more useful starting size. Editing an
+        # existing annotation always preserves its chosen size.
+        if power_law and self.annotation is None and self.font_size.value() == 11:
+            self.font_size.setValue(14)
 
     def _spin(self, value: float) -> QDoubleSpinBox:
         spin = QDoubleSpinBox(self)
@@ -602,6 +621,7 @@ class AnnotationDialog(QDialog):
             "line_width": self.line_width.value(),
             "font_size": self.font_size.value(),
             "z_order": self.z_order.value(),
+            "slope": self.slope.value() if kind is AnnotationKind.POWER_LAW else None,
         }
         if self.annotation is not None:
             options["id"] = self.annotation.id

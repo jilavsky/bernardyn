@@ -15,8 +15,8 @@ Use one of the following ways to add data to the active graph:
 
 - **File → Open data…** for one or more files.
 - **File → Open folder…** to browse supported files in a folder.
-- Drag files or folders from the system file browser onto **Datasets in active
-  graph** at the left, even when that list is empty.
+- Drag files or folders from the system file browser onto the left **Data
+  browser** list, even when that list is empty.
 
 The selector recognises HDF5/NXcanSAS (`.h5`, `.hdf5`, `.hdf`, `.nxs`) and
 two-to-four-column text data (`.dat`, `.txt`, `.csv`). For HDF5 files, choose
@@ -31,10 +31,14 @@ uses the filename.
 
 ## Choose what is displayed
 
-The left dock, **Datasets in active graph**, controls the order in which curves
-are drawn. Drag rows within this list to change drawing order, or select rows
-and use **Remove selected from graph** to hide them from that graph. Removing a
-row does not delete the canonical dataset from the workspace.
+The left **Data browser — active graph** controls the order in which curves are
+drawn. Its **Show** selector can narrow the list to ordinary SAS data, a saved
+Unified Fit's measured data/model/residuals, or a saved Size Distribution's
+data/model/residuals/volume distribution. Filtering only changes the list; it
+does not hide or remove a curve from the graph. Drag rows within the unfiltered
+list to change drawing order, or select rows and use **Remove selected from
+graph** to hide them from that graph. Removing a row does not delete the
+canonical dataset from the workspace.
 Use **Add from workspace…** to place another loaded catalog dataset in the
 active graph without reading its source file again. These changes, along with
 removal and reordering, can be undone and redone.
@@ -60,8 +64,14 @@ distribution variants remain outside this import.
 
 Use **Graph → New 2D graph** or Ctrl/Cmd+Shift+N to create a 2-D graph quickly.
 
-The inspector's **Datasets** tab provides per-series controls, visibility
-checkboxes, and the legend controls for the active graph.
+The inspector's **Datasets** tab provides the same **Show** selector,
+per-series controls, visibility checkboxes, and the legend controls for the
+active graph. Drag the divider below its dataset list to make that list taller.
+
+Both primary panels may be floated while working, but open docked at the next
+launch so they cannot be stranded outside a changed display arrangement. Use
+**View → Open Data Browser**, **View → Open Graph Inspector**, or **View →
+Reset panel layout** to recover a closed or misplaced panel immediately.
 
 - Click a row to edit its style, legend label, visible Q range, multiplier,
   and offset.
@@ -73,8 +83,8 @@ checkboxes, and the legend controls for the active graph.
 - Use the **Legend** group to show, position, frame, and arrange the legend.
   Its text uses the Graph tab's font family, its color matches the axes, and
   its marker size can be made independent of the plotted markers.
-- In the per-dataset **Errors** controls, choose intensity uncertainty (**Show
-  Y**) and Q resolution (**Show X**) independently. Enable **Caps** to draw
+- In the per-dataset **Show errors** controls, choose intensity uncertainty
+  (**Y**) and Q resolution (**X**) independently. Enable **Caps** to draw
   conventional end caps on the selected error bars; **Size** controls their
   length as a percentage of the relevant axis span (0.5% by default).
 
@@ -103,6 +113,9 @@ Use the **Graph** tab in the right-side inspector for graph-wide settings.
 - Choose whether the background colour applies to the whole canvas or only to
   the interior plot area. The latter leaves a white frame around the axes and
   is available for 2-D graphs.
+- **Canvas (px) → Set** resizes the application so the displayed 2-D canvas
+  matches the requested pixel width and height. The display badge confirms the
+  actual on-screen size; later window resizing remains available.
 - **Reset graph to defaults…** restores graph-wide settings, axes, legend,
   annotations, background, and output settings while keeping the loaded curves
   and their styles. The action can be undone.
@@ -123,6 +136,12 @@ When editing an annotation, change its coordinates or appearance and press
 positioning by repeated adjustment. **OK** saves the final values and closes
 the dialog. Each press of **Update graph** is an intentional graph update.
 
+For log-log SAXS graphs, **Power-law slope…** adds a one-decade guide with
+`I = B q^-P`. Enter the positive power exponent `P` (the default is 4 for a
+Porod guide); Bernardyn chooses `B` to place the guide at the selected centre.
+The guide is labelled, can be dragged to a new position, and remains editable
+or deletable in the annotation list.
+
 ## Save and export
 
 Use **File → Save workspace package as…** for an editable archive of all graph
@@ -134,6 +153,18 @@ Bernardyn remembers the last successfully opened or saved **workspace** package
 and reopens it at the next application launch. Saving a single graph does not
 replace that remembered workspace. If the remembered file was moved, deleted,
 or cannot be read, Bernardyn starts with a new empty workspace instead.
+
+The **File → Recent workspaces** menu keeps the ten most recently opened or
+saved workspace packages. Choose an entry to open it in a separate Bernardyn
+window, or to bring its existing window to the front. **File → New window**
+opens a blank workspace, and **Open workspace in new window…** opens a chosen
+package alongside the current one.
+
+Several different workspace packages can be edited at once. Bernardyn locks a
+package for the lifetime of its editing window, including across separate app
+processes, so the same package cannot be silently edited and saved from two
+places. If a package is already open, switch to that window or use **Save As**
+to create a distinct editable copy.
 
 **Copy graph image** (Edit menu or Cmd/Ctrl+C) places a raster graph image on
 the system clipboard for pasting into other applications. **File → Print

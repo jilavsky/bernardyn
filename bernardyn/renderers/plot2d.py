@@ -16,10 +16,10 @@ import numpy as np
 import pyqtgraph as pg
 import pyqtgraph.exporters
 from pyqtgraph.graphicsItems.LegendItem import ItemSample
-from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QRect, QRectF, QSize, Qt
+from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QRect, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QPainter
 from PySide6.QtSvg import QSvgGenerator
-from PySide6.QtWidgets import QApplication, QGraphicsItem, QGraphicsRectItem
+from PySide6.QtWidgets import QApplication, QGraphicsItem, QGraphicsItemGroup, QGraphicsRectItem
 
 from bernardyn.core.models import Annotation, AnnotationKind, GraphDocument, PlotSeries, SeriesStyle
 
@@ -139,8 +139,34 @@ class LegendSymbolSample(ItemSample):
             options["size"] = previous
 
 
+class DraggablePowerLawGuide(QGraphicsItemGroup):
+    """A finite slope guide that reports its final data-coordinate translation."""
+
+    def __init__(self, moved, parent=None) -> None:
+        super().__init__(parent)
+        self._moved = moved
+        self._initial_position = None
+        self.setHandlesChildEvents(True)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges)
+        self.setCursor(Qt.CursorShape.SizeAllCursor)
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt API
+        self._initial_position = self.pos()
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802 - Qt API
+        super().mouseReleaseEvent(event)
+        if self._initial_position is None or self.pos() == self._initial_position:
+            return
+        position = self.pos()
+        self._moved(position.x(), position.y())
+        self._initial_position = None
+
+
 class Plot2DWidget(pg.PlotWidget):
     renderer_id = "plot2d"
+    powerLawMoved = Signal(str, object)
 
     def __init__(self, parent=None) -> None:
         super().__init__(
@@ -205,11 +231,14 @@ class Plot2DWidget(pg.PlotWidget):
         plot.setTitle(
             graph.title,
             color=_color(graph.x_axis.color).name(),
-            **{
-                "font-size": f"{graph.typography.title_size}pt",
-                "font-family": graph.typography.family,
-            },
+            size=f"{graph.typography.title_size}pt",
+            family=graph.typography.family,
         )
+        # PlotItem's hard-coded 30 px title row clips larger selected title
+        # fonts. Reserve enough height for the requested point size.
+        title_height = max(30, round(graph.typography.title_size * 1.8))
+        plot.titleLabel.setMaximumHeight(title_height)
+        plot.layout.setRowFixedHeight(0, title_height)
         plot.setLabel(
             "bottom",
             graph.x_axis.label,
@@ -594,6 +623,54 @@ class Plot2DWidget(pg.PlotWidget):
             rectangle.setZValue(BOX_ANNOTATION_BASE_Z + annotation.z_order)
             plot.addItem(rectangle, ignoreBounds=True)
             self._annotation_items.append((annotation, rectangle))
+        elif annotation.kind is AnnotationKind.POWER_LAW:
+            if annotation.slope is None:
+                raise ValueError("power-law slope guide has no exponent")
+            q_center, intensity_center = annotation.position
+            if q_center <= 0 or intensity_center <= 0:
+                raise ValueError("power-law slope guide position must be positive")
+            # A one-decade q segment centred geometrically at the annotation
+            # position.  This gives I = B q^-P while B is chosen so the guide
+            # sits at the visible position selected by the user.
+            half_decade = math.sqrt(10)
+            q_low, q_high = q_center / half_decade, q_center * half_decade
+            if graph.x_axis.log and graph.y_axis.log:
+                q_values = np.array([q_low, q_high])
+            else:
+                # The familiar straight guide is for log-log graphs. Still
+                # render the mathematical curve on linear axes so a saved
+                # guide does not disappear if its view is changed.
+                q_values = np.geomspace(q_low, q_high, 64)
+            intensity_values = intensity_center * (q_values / q_center) ** (-annotation.slope)
+            x_values, y_values = self._plot_position_arrays(graph, q_values, intensity_values)
+            x_low, y_low = x_values[0], y_values[0]
+            x_high, y_high = x_values[-1], y_values[-1]
+            curve = pg.PlotCurveItem(
+                x_values,
+                y_values,
+                pen=pg.mkPen(color, width=annotation.line_width),
+            )
+            label = pg.TextItem(
+                annotation.text or f"slope −{annotation.slope:g}",
+                color=color,
+                anchor=(0.5, 1),
+            )
+            label.setFont(QFont(graph.typography.family, annotation.font_size))
+            label.setPos((x_low + x_high) / 2, max(y_low, y_high))
+
+            def moved(offset_x: float, offset_y: float) -> None:
+                center_x, center_y = self._plot_position(graph, annotation.position)
+                moved_x, moved_y = center_x + offset_x, center_y + offset_y
+                position = (
+                    10**moved_x if graph.x_axis.log else moved_x,
+                    10**moved_y if graph.y_axis.log else moved_y,
+                )
+                self.powerLawMoved.emit(annotation.id, position)
+
+            guide = DraggablePowerLawGuide(moved)
+            guide.addToGroup(curve)
+            guide.addToGroup(label)
+            add_overlay(guide)
         else:
             # No branch matched, so nothing was drawn.  Never let that pass
             # quietly: an annotation that is in the document but not on the
@@ -614,6 +691,16 @@ class Plot2DWidget(pg.PlotWidget):
         x = math.log10(x) if graph.x_axis.log and x > 0 else x
         y = math.log10(y) if graph.y_axis.log and y > 0 else y
         return x, y
+
+    @staticmethod
+    def _plot_position_arrays(
+        graph: GraphDocument, x: np.ndarray, y: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Array counterpart to _plot_position for a reference curve."""
+        return (
+            np.log10(x) if graph.x_axis.log else x,
+            np.log10(y) if graph.y_axis.log else y,
+        )
 
     def _review_annotations(self, graph: GraphDocument) -> None:
         """Report annotations the view will not actually show.

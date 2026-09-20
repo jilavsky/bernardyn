@@ -10,6 +10,7 @@ from pathlib import Path
 
 from PySide6.QtCore import (
     QEvent,
+    QLockFile,
     QObject,
     QRunnable,
     QStandardPaths,
@@ -30,9 +31,13 @@ from PySide6.QtGui import (
 from PySide6.QtPrintSupport import QPrintDialog, QPrinter
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QComboBox,
     QDockWidget,
     QFileDialog,
+    QGridLayout,
+    QHBoxLayout,
     QInputDialog,
+    QLabel,
     QListWidget,
     QListWidgetItem,
     QMainWindow,
@@ -46,6 +51,7 @@ from PySide6.QtWidgets import (
 
 from bernardyn.core.controller import PALETTE, ApplicationController
 from bernardyn.core.models import AxisSpec, GraphDocument
+from bernardyn.gui.dataset_filters import DATASET_FILTERS, matches_dataset_filter
 from bernardyn.gui.dialogs import (
     DataFileSelectorDialog,
     GraphSelectionDialog,
@@ -55,7 +61,7 @@ from bernardyn.gui.dialogs import (
 )
 from bernardyn.gui.graph_page import GraphPage, OutputPreviewDialog, PreviewPage
 from bernardyn.gui.inspector import InspectorWidget
-from bernardyn.io.container import load_package
+from bernardyn.io.container import ensure_package_suffix, load_package
 from bernardyn.io.igor import export_datasets_to_h5xp
 from bernardyn.io.results import (
     available_curve_kinds,
@@ -72,6 +78,8 @@ log = logging.getLogger(__name__)
 DOCUMENTATION_DIRECTORY = Path(__file__).resolve().parents[2] / "docs"
 DOCUMENTATION_URL = "https://github.com/jilavsky/Bernardyn/tree/main/docs"
 LAST_WORKSPACE_PATH_KEY = "last_workspace_path"
+RECENT_WORKSPACES_KEY = "recent_workspace_paths"
+RECENT_WORKSPACES_LIMIT = 10
 
 
 def _documentation_url() -> QUrl:
@@ -271,6 +279,9 @@ class DatasetListWidget(QListWidget):
 
 
 class MainWindow(QMainWindow):
+    newWindowRequested = Signal()
+    openWorkspaceRequested = Signal(object)
+
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Bernardyn")
@@ -286,6 +297,8 @@ class MainWindow(QMainWindow):
         self._refreshing_dataset_list = False
         self._startup_restore_pending = True
         self.user_state = UserState()
+        self._workspace_lock: QLockFile | None = None
+        self._locked_workspace_path: Path | None = None
         self.undo_stack = QUndoStack(self)
         self.tabs = QTabWidget(self)
         self.tabs.setTabsClosable(True)
@@ -309,6 +322,7 @@ class MainWindow(QMainWindow):
         self.inspector.resetRequested.connect(self._reset_graph_defaults)
         self.inspector.outputPreviewRequested.connect(self._preview_output)
         self.inspector.autoscaleRequested.connect(self._autoscale_current_graph)
+        self.inspector.displayCanvasRequested.connect(self._set_display_canvas_size)
         self._build_docks()
         self._build_actions()
         self._build_menus()
@@ -316,10 +330,19 @@ class MainWindow(QMainWindow):
         self._rebuild_tabs()
 
     def _build_docks(self) -> None:
-        data_dock = QDockWidget("Datasets in active graph", self)
-        data_dock.setObjectName("datasetsDock")
-        data_widget = QWidget(data_dock)
+        self.datasets_dock = QDockWidget("Data browser — active graph", self)
+        self.datasets_dock.setObjectName("datasetsDock")
+        data_widget = QWidget(self.datasets_dock)
         layout = QVBoxLayout(data_widget)
+        filter_row = QHBoxLayout()
+        filter_row.addWidget(QLabel("Show:", data_widget))
+        self.dataset_filter = QComboBox(data_widget)
+        for label, filter_id in DATASET_FILTERS:
+            self.dataset_filter.addItem(label, filter_id)
+        self.dataset_filter.setToolTip("Filter the data shown in this graph without changing the graph.")
+        self.dataset_filter.currentIndexChanged.connect(self._refresh_dataset_list)
+        filter_row.addWidget(self.dataset_filter, 1)
+        layout.addLayout(filter_row)
         open_button = QPushButton("Open data…", data_widget)
         open_button.clicked.connect(self._open_data)
         open_folder_button = QPushButton("Open folder…", data_widget)
@@ -332,19 +355,23 @@ class MainWindow(QMainWindow):
         remove_button.clicked.connect(self._remove_datasets)
         cancel_button = QPushButton("Cancel loading", data_widget)
         cancel_button.clicked.connect(self._cancel_loading)
-        layout.addWidget(open_button)
-        layout.addWidget(open_folder_button)
-        layout.addWidget(add_catalog_button)
-        layout.addWidget(add_results_button)
+        button_grid = QGridLayout()
+        button_grid.addWidget(open_button, 0, 0)
+        button_grid.addWidget(open_folder_button, 0, 1)
+        button_grid.addWidget(add_catalog_button, 1, 0)
+        button_grid.addWidget(add_results_button, 1, 1)
+        layout.addLayout(button_grid)
         layout.addWidget(self.dataset_list, 1)
-        layout.addWidget(remove_button)
-        layout.addWidget(cancel_button)
-        data_dock.setWidget(data_widget)
-        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, data_dock)
+        action_grid = QGridLayout()
+        action_grid.addWidget(remove_button, 0, 0)
+        action_grid.addWidget(cancel_button, 0, 1)
+        layout.addLayout(action_grid)
+        self.datasets_dock.setWidget(data_widget)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.datasets_dock)
 
-        inspector_dock = QDockWidget("Graph inspector", self)
-        inspector_dock.setObjectName("graphInspectorDock")
-        inspector_widget = QWidget(inspector_dock)
+        self.inspector_dock = QDockWidget("Graph inspector", self)
+        self.inspector_dock.setObjectName("graphInspectorDock")
+        inspector_widget = QWidget(self.inspector_dock)
         inspector_layout = QVBoxLayout(inspector_widget)
         inspector_layout.setContentsMargins(6, 6, 6, 0)
         self.documentation_button = QPushButton("Documentation", inspector_widget)
@@ -361,9 +388,9 @@ class MainWindow(QMainWindow):
             self.documentation_button, 0, Qt.AlignmentFlag.AlignRight
         )
         inspector_layout.addWidget(self.inspector, 1)
-        inspector_dock.setWidget(inspector_widget)
-        inspector_dock.setMinimumWidth(340)
-        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, inspector_dock)
+        self.inspector_dock.setWidget(inspector_widget)
+        self.inspector_dock.setMinimumWidth(340)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.inspector_dock)
 
     def _action(self, text, slot, shortcut=None) -> QAction:
         action = QAction(text, self)
@@ -374,6 +401,7 @@ class MainWindow(QMainWindow):
 
     def _build_actions(self) -> None:
         self.new_workspace_action = self._action("New workspace", self._new_workspace, QKeySequence.StandardKey.New)
+        self.new_window_action = self._action("New window", self.newWindowRequested.emit)
         self.open_data_action = self._action("Open data…", self._open_data, QKeySequence.StandardKey.Open)
         self.open_folder_action = self._action("Open folder…", self._open_folder, "Ctrl+Shift+F")
         self.browse_datasets_action = self._action("Browse data sets…", self._browse_datasets)
@@ -381,6 +409,9 @@ class MainWindow(QMainWindow):
             "Workspace properties…", self._workspace_properties
         )
         self.open_package_action = self._action("Open package…", self._open_package, "Ctrl+Shift+O")
+        self.open_package_new_window_action = self._action(
+            "Open workspace in new window…", self._open_package_in_new_window
+        )
         self.import_graph_action = self._action("Import graph from package…", self._import_graph)
         self.save_action = self._action("Save", self._save, QKeySequence.StandardKey.Save)
         self.save_as_action = self._action("Save workspace package as…", self._save_workspace_as, QKeySequence.StandardKey.SaveAs)
@@ -415,13 +446,26 @@ class MainWindow(QMainWindow):
         self.undo_action.setShortcut(QKeySequence.StandardKey.Undo)
         self.redo_action = self.undo_stack.createRedoAction(self, "Redo")
         self.redo_action.setShortcut(QKeySequence.StandardKey.Redo)
+        self.reopen_data_browser_action = self._action(
+            "Open Data Browser", lambda: self._reopen_dock(self.datasets_dock, Qt.DockWidgetArea.LeftDockWidgetArea)
+        )
+        self.reopen_inspector_action = self._action(
+            "Open Graph Inspector", lambda: self._reopen_dock(self.inspector_dock, Qt.DockWidgetArea.RightDockWidgetArea)
+        )
+        self.reset_panels_action = self._action("Reset panel layout", self._reset_panel_layout)
 
     def _build_menus(self) -> None:
         file_menu = self.menuBar().addMenu("&File")
         for action in (
-            self.new_workspace_action, self.workspace_properties_action,
+            self.new_workspace_action, self.new_window_action, self.workspace_properties_action,
             self.open_data_action, self.open_folder_action, self.browse_datasets_action,
-            self.open_package_action,
+            self.open_package_action, self.open_package_new_window_action,
+        ):
+            file_menu.addAction(action)
+        self.recent_workspaces_menu = file_menu.addMenu("Recent workspaces")
+        self.recent_workspaces_menu.aboutToShow.connect(self._populate_recent_workspaces_menu)
+        file_menu.addSeparator()
+        for action in (
             self.import_graph_action, None, self.save_action, self.save_as_action,
             self.save_graph_action, None, self.export_image_action, self.copy_action,
             self.print_action, self.output_preview_action, self.export_csv_action,
@@ -449,6 +493,23 @@ class MainWindow(QMainWindow):
         template_menu.addActions(
             [self.save_template_action, self.apply_template_action, self.delete_template_action]
         )
+        view_menu = self.menuBar().addMenu("&View")
+        view_menu.addActions(
+            [self.reopen_data_browser_action, self.reopen_inspector_action, self.reset_panels_action]
+        )
+
+    def _reopen_dock(self, dock: QDockWidget, area: Qt.DockWidgetArea) -> None:
+        """Recover a panel that was closed or floated beyond a screen edge."""
+        dock.setFloating(False)
+        self.addDockWidget(area, dock)
+        dock.show()
+        dock.raise_()
+
+    def _reset_panel_layout(self) -> None:
+        """Put the two essential controls back in their safe default places."""
+        self._reopen_dock(self.datasets_dock, Qt.DockWidgetArea.LeftDockWidgetArea)
+        self._reopen_dock(self.inspector_dock, Qt.DockWidgetArea.RightDockWidgetArea)
+
     def _open_documentation(self) -> None:
         documentation_url = _documentation_url()
         if not QDesktopServices.openUrl(documentation_url):
@@ -470,9 +531,84 @@ class MainWindow(QMainWindow):
         except KeyError:
             return None
 
+    @property
+    def workspace_path(self) -> Path | None:
+        """The editable package associated with this window, if it has one."""
+        return self.controller.package_path
+
+    def _try_lock_workspace(self, path: str | Path) -> tuple[QLockFile | None, bool]:
+        """Acquire an edit lock, returning whether this call acquired it."""
+        target = Path(path).expanduser().resolve()
+        if self._locked_workspace_path == target and self._workspace_lock is not None:
+            return self._workspace_lock, False
+        lock = QLockFile(f"{target}.lock")
+        # QLockFile identifies a dead local process and cleans a stale lock;
+        # 30 seconds also covers a crash on filesystems where that check is not
+        # available immediately.
+        lock.setStaleLockTime(30_000)
+        if lock.tryLock(0):
+            return lock, True
+        return None, False
+
+    def _release_workspace_lock(self) -> None:
+        if self._workspace_lock is not None:
+            self._workspace_lock.unlock()
+        self._workspace_lock = None
+        self._locked_workspace_path = None
+
+    def _workspace_locked_message(self, path: Path) -> str:
+        return (
+            f"{path.name} is already open for editing in another Bernardyn window or process.\n\n"
+            "To prevent one save from silently overwriting the other, Bernardyn will not open "
+            "a second editable copy. Open a different workspace or use Save As to make a copy."
+        )
+
+    def open_workspace(
+        self,
+        path: str | Path,
+        *,
+        remember: bool = True,
+        restore_layout: bool = True,
+        show_errors: bool = True,
+    ) -> bool:
+        """Open one package after acquiring its lifetime edit lock."""
+        target = Path(path).expanduser().resolve()
+        lock, acquired = self._try_lock_workspace(target)
+        if lock is None:
+            if show_errors:
+                QMessageBox.warning(self, "Workspace already open", self._workspace_locked_message(target))
+            else:
+                self.statusBar().showMessage(f"Previous workspace is already open: {target.name}", 5000)
+            return False
+        try:
+            loaded = self.controller.open_package(target)
+        except Exception as exc:
+            if acquired:
+                lock.unlock()
+            if show_errors:
+                QMessageBox.critical(self, "Open package", str(exc))
+                return False
+            raise
+        previous_lock = self._workspace_lock
+        previous_path = self._locked_workspace_path
+        self._workspace_lock = lock
+        self._locked_workspace_path = target
+        if previous_lock is not None and previous_lock is not lock and previous_path != target:
+            previous_lock.unlock()
+        self.undo_stack.clear()
+        self._rebuild_tabs()
+        if remember:
+            self._remember_workspace(target)
+        if loaded.warnings:
+            QMessageBox.warning(self, "Package warnings", "\n".join(loaded.warnings))
+        if restore_layout:
+            self._restore_layout()
+        return True
+
     def _new_workspace(self) -> None:
         if not self._confirm_discard():
             return
+        self._release_workspace_lock()
         self.controller.new_workspace()
         self._pending_graph_renders.clear()
         self.undo_stack.clear()
@@ -480,7 +616,54 @@ class MainWindow(QMainWindow):
 
     def _remember_workspace(self, path: str | Path) -> None:
         """Store the last full workspace without putting it in the package."""
-        self.user_state.set(LAST_WORKSPACE_PATH_KEY, str(Path(path).resolve()))
+        resolved = str(Path(path).resolve())
+        existing = self.user_state.get(RECENT_WORKSPACES_KEY, [])
+        paths = existing if isinstance(existing, list) else []
+        recent = [resolved]
+        for item in paths:
+            try:
+                candidate = str(Path(item).expanduser().resolve())
+            except (OSError, TypeError):
+                continue
+            if candidate != resolved and candidate not in recent:
+                recent.append(candidate)
+        self.user_state.set(LAST_WORKSPACE_PATH_KEY, resolved)
+        self.user_state.set(RECENT_WORKSPACES_KEY, recent[:RECENT_WORKSPACES_LIMIT])
+        self.user_state.save()
+
+    def _populate_recent_workspaces_menu(self) -> None:
+        self.recent_workspaces_menu.clear()
+        saved = self.user_state.get(RECENT_WORKSPACES_KEY, [])
+        entries = saved if isinstance(saved, list) else []
+        valid: list[Path] = []
+        for item in entries:
+            try:
+                path = Path(item).expanduser().resolve()
+            except (OSError, TypeError):
+                continue
+            if path.is_file() and path not in valid:
+                valid.append(path)
+        if [str(path) for path in valid] != entries:
+            self.user_state.set(RECENT_WORKSPACES_KEY, [str(path) for path in valid])
+            if self.user_state.get(LAST_WORKSPACE_PATH_KEY) not in {str(path) for path in valid}:
+                self.user_state.set(LAST_WORKSPACE_PATH_KEY, str(valid[0]) if valid else "")
+            self.user_state.save()
+        if not valid:
+            empty = self.recent_workspaces_menu.addAction("No recent workspaces")
+            empty.setEnabled(False)
+            return
+        for path in valid:
+            action = self.recent_workspaces_menu.addAction(f"{path.name} — {path.parent}")
+            action.setToolTip(str(path))
+            action.triggered.connect(
+                lambda _checked=False, selected=path: self.openWorkspaceRequested.emit(selected)
+            )
+        self.recent_workspaces_menu.addSeparator()
+        self.recent_workspaces_menu.addAction("Clear recent workspaces", self._clear_recent_workspaces)
+
+    def _clear_recent_workspaces(self) -> None:
+        self.user_state.set(RECENT_WORKSPACES_KEY, [])
+        self.user_state.set(LAST_WORKSPACE_PATH_KEY, "")
         self.user_state.save()
 
     def restore_last_workspace(self) -> None:
@@ -498,13 +681,8 @@ class MainWindow(QMainWindow):
             self.user_state.save()
             return
         try:
-            loaded = self.controller.open_package(path)
-            self.undo_stack.clear()
-            self._rebuild_tabs()
-            self._restore_layout()
-            if loaded.warnings:
-                log.warning("last workspace opened with warnings: %s", "; ".join(loaded.warnings))
-            self.statusBar().showMessage(f"Reopened {path.name}", 5000)
+            if self.open_workspace(path, remember=True, restore_layout=True, show_errors=False):
+                self.statusBar().showMessage(f"Reopened {path.name}", 5000)
         except Exception:
             # A corrupt or unsupported package should never make every launch
             # fail. Forget it and leave the normal empty workspace available.
@@ -583,6 +761,7 @@ class MainWindow(QMainWindow):
                             f"Unknown renderer {graph.renderer_id!r}; no embedded preview was available"
                         )
                     page = GraphPage(graph, self, renderers=self.renderers)
+                    page.powerLawMoved.connect(self._move_power_law)
                     self.tabs.addTab(page, graph.title)
                     self._render_page(page, graph)
             active = self.controller.workspace.active_graph_id
@@ -614,6 +793,30 @@ class MainWindow(QMainWindow):
                 self._render_page(page, graph)
                 self.tabs.setTabText(index, graph.title)
                 return
+
+    def _set_display_canvas_size(self, width: int, height: int) -> None:
+        page = self.tabs.currentWidget()
+        if not isinstance(page, GraphPage):
+            return
+        page.set_display_canvas_size(width, height)
+        self.statusBar().showMessage(f"Set displayed canvas to {width} × {height} px")
+
+    def _move_power_law(
+        self, graph_id: str, annotation_id: str, position: tuple[float, float]
+    ) -> None:
+        """Persist a finished drag as an undoable annotation edit."""
+        graph = self.controller.workspace.graph(graph_id)
+        annotations = tuple(
+            replace(annotation, position=position)
+            if annotation.id == annotation_id
+            else annotation
+            for annotation in graph.annotations
+        )
+        if annotations == graph.annotations:
+            return
+        self._queue_graph_change(
+            replace(graph, annotations=annotations), False, "Move power-law slope"
+        )
 
     def _controller_state(self):
         """Capture immutable graph/data state for dataset-import undo."""
@@ -1160,6 +1363,8 @@ class MainWindow(QMainWindow):
     def _refresh_dataset_list(self) -> None:
         graph = self._current_graph()
         selected = {item.data(Qt.ItemDataRole.UserRole) for item in self.dataset_list.selectedItems()}
+        filter_id = self.dataset_filter.currentData()
+        self.dataset_list.setDragEnabled(filter_id == "all")
         self._refreshing_dataset_list = True
         try:
             self.dataset_list.clear()
@@ -1167,9 +1372,15 @@ class MainWindow(QMainWindow):
                 return
             for index, series in enumerate(graph.series, start=1):
                 dataset = self.controller.workspace.datasets[series.dataset_id]
+                if not matches_dataset_filter(dataset, filter_id):
+                    continue
                 item = QListWidgetItem(f"{index}. {dataset.label}  ({dataset.point_count:,} points)")
                 item.setData(Qt.ItemDataRole.UserRole, series.id)
-                item.setToolTip("Drag to change plot order. Select and remove to hide this data from the graph.")
+                item.setToolTip(
+                    "Drag to change plot order. Select and remove to hide this data from the graph."
+                    if filter_id == "all"
+                    else "Select to copy, move, or remove this filtered dataset from the graph."
+                )
                 self.dataset_list.addItem(item)
                 if series.id in selected:
                     item.setSelected(True)
@@ -1218,16 +1429,19 @@ class MainWindow(QMainWindow):
         )
         if not path or not self._confirm_discard():
             return
-        try:
-            loaded = self.controller.open_package(path)
-            self.undo_stack.clear()
-            self._rebuild_tabs()
-            self._remember_workspace(path)
-            if loaded.warnings:
-                QMessageBox.warning(self, "Package warnings", "\n".join(loaded.warnings))
-            self._restore_layout()
-        except Exception as exc:
-            QMessageBox.critical(self, "Open package", str(exc))
+        self.open_workspace(path)
+
+    def _open_package_in_new_window(self) -> None:
+        previous = self.user_state.get(LAST_WORKSPACE_PATH_KEY, "")
+        initial_folder = str(Path(previous).expanduser().parent) if previous else ""
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Open Bernardyn package in new window",
+            initial_folder,
+            "Bernardyn (*.bernardyn.h5);;HDF5 (*.h5)",
+        )
+        if path:
+            self.openWorkspaceRequested.emit(Path(path))
 
     def _import_graph(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Import graph", "", "Bernardyn (*.bernardyn.h5);;HDF5 (*.h5)")
@@ -1299,16 +1513,36 @@ class MainWindow(QMainWindow):
         return bool(path) and self._save_to(path, graph_ids=[graph.id])
 
     def _save_to(self, path, graph_ids=None) -> bool:
+        target = ensure_package_suffix(path).resolve()
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            QMessageBox.critical(self, "Save package", str(exc))
+            return False
+        lock, acquired = self._try_lock_workspace(target)
+        if lock is None:
+            QMessageBox.warning(self, "Workspace already open", self._workspace_locked_message(target))
+            return False
         try:
             previews, renderer_data = self._collect_artifacts()
             saved = self.controller.save(
-                path, graph_ids=graph_ids, previews=previews, renderer_data=renderer_data
+                target, graph_ids=graph_ids, previews=previews, renderer_data=renderer_data
             )
             if graph_ids is None:
+                previous_lock = self._workspace_lock
+                previous_path = self._locked_workspace_path
+                self._workspace_lock = lock
+                self._locked_workspace_path = saved
+                if previous_lock is not None and previous_lock is not lock and previous_path != saved:
+                    previous_lock.unlock()
                 self._remember_workspace(saved)
+            elif acquired:
+                lock.unlock()
             self.statusBar().showMessage(f"Saved {saved.name}", 5000)
             return True
         except Exception as exc:
+            if acquired:
+                lock.unlock()
             QMessageBox.critical(self, "Save package", str(exc))
             return False
 
@@ -1500,6 +1734,7 @@ class MainWindow(QMainWindow):
 
     def _restore_layout(self) -> None:
         if not self.controller.workspace.layout_state:
+            self._reset_panel_layout()
             return
         try:
             state = json.loads(self.controller.workspace.layout_state)
@@ -1507,6 +1742,12 @@ class MainWindow(QMainWindow):
             self.restoreGeometry(base64.b64decode(state["geometry"]))
         except Exception:
             log.warning("could not restore saved window layout", exc_info=True)
+        finally:
+            # A floating dock may have been left on a disconnected display, or
+            # hidden with its close button.  Its location is convenience state,
+            # not workspace data, so never let it make the primary controls
+            # disappear on the next launch.
+            self._reset_panel_layout()
 
     def _confirm_discard(self) -> bool:
         if not self.controller.workspace.dirty:
@@ -1527,6 +1768,7 @@ class MainWindow(QMainWindow):
         for worker in self._workers:
             worker.cancelled = True
         if self._confirm_discard():
+            self._release_workspace_lock()
             event.accept()
         else:
             event.ignore()

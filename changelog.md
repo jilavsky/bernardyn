@@ -6,6 +6,33 @@ behavior changes.
 
 ## Unreleased
 
+### Added
+
+- Draggable, labelled one-decade power-law slope guides for log-log SAXS
+  graphs, including editable arbitrary exponents and persistent annotations.
+- **File → Recent workspaces** keeps the last ten full workspace packages and
+  opens them in a new window or activates an existing one. **New window** and
+  **Open workspace in new window…** support parallel experiments, including
+  when a macOS app launcher permits only one Bernardyn process.
+- The left **Data browser** and the Graph Inspector's **Datasets** tab now
+  filter listed curves by ordinary SAS data and saved Unified Fit or Size
+  Distribution result roles. The inspector list has a draggable height divider.
+- The **View** menu now includes **Open Data Browser**, **Open Graph
+  Inspector**, and **Reset panel layout** recovery commands.
+
+### Changed
+
+- Fixed Graph Inspector title font-size rendering; title font size and family
+  now apply to the on-screen plot. **Canvas (px) → Set** sizes the displayed
+  2-D canvas to the requested pixels, and error-bar controls now read
+  **Show errors: Y / X**.
+- Editable packages now hold a cross-process lock for the lifetime of their
+  window. A second editor for the same package is refused to prevent silent
+  last-save-wins data loss; **Save As** creates an independent workspace.
+- Data-browser actions use two columns to keep a floating browser compact.
+- The Data browser and Graph Inspector always reopen as visible, docked panels
+  after a workspace layout is restored; they may still be floated during use.
+
 ## 0.0.1b5 — 2026-09-16
 
 ### Added

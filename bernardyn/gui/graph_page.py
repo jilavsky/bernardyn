@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Mapping
 
 import numpy as np
-from PySide6.QtCore import QByteArray, QRect, Qt, QTimer
+from PySide6.QtCore import QByteArray, QRect, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QImage, QPainter, QPalette, QPixmap
 from PySide6.QtPrintSupport import QPrintDialog, QPrinter
 from PySide6.QtWidgets import (
@@ -188,6 +188,8 @@ class OutputPreviewDialog(QDialog):
 
 
 class GraphPage(QWidget):
+    powerLawMoved = Signal(str, str, object)
+
     def __init__(
         self,
         graph: GraphDocument,
@@ -227,8 +229,42 @@ class GraphPage(QWidget):
             self.renderer = Plot2DWidget(self.canvas)
             self._renderer_id = graph.renderer_id
         self.canvas.set_renderer(self.renderer)
+        if isinstance(self.renderer, Plot2DWidget):
+            self.renderer.powerLawMoved.connect(
+                lambda annotation_id, position: self.powerLawMoved.emit(
+                    self.graph_id, annotation_id, position
+                )
+            )
         self.canvas.set_graph_appearance(
             graph, constrain_aspect=isinstance(self.renderer, Plot2DWidget)
+        )
+
+    def set_display_canvas_size(self, width: int, height: int) -> None:
+        """Resize the window so the current 2-D renderer has exact pixels."""
+        if not isinstance(self.renderer, Plot2DWidget):
+            return
+        target_width = width + self.canvas.RIGHT_STANDOFF_PX
+        current = self.renderer.size()
+        window = self.window()
+        window.resize(
+            max(window.minimumWidth(), window.width() + target_width - current.width()),
+            max(window.minimumHeight(), window.height() + height - current.height()),
+        )
+        # Layout changes from dock widgets are delivered asynchronously. One
+        # follow-up correction makes the renderer match the requested pixels,
+        # without permanently locking the user out of later window resizing.
+        QTimer.singleShot(0, lambda: self._correct_display_canvas_size(width, height))
+
+    def _correct_display_canvas_size(self, width: int, height: int) -> None:
+        if not isinstance(self.renderer, Plot2DWidget):
+            return
+        current = self.renderer.size()
+        if current.width() == width and current.height() == height:
+            return
+        window = self.window()
+        window.resize(
+            max(window.minimumWidth(), window.width() + width - current.width()),
+            max(window.minimumHeight(), window.height() + height - current.height()),
         )
 
     def render(self, graph: GraphDocument, snapshots: Mapping[str, PlotSeries]) -> None:

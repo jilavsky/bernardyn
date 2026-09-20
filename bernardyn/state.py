@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -34,11 +35,17 @@ class UserState:
         self.values[key] = value
 
     def save(self) -> None:
+        temporary: Path | None = None
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            temporary = self.path.with_suffix(".tmp")
-            temporary.write_text(json.dumps(self.values, indent=2, sort_keys=True), encoding="utf-8")
+            descriptor, name = tempfile.mkstemp(
+                prefix=f".{self.path.name}.", suffix=".tmp", dir=self.path.parent, text=True
+            )
+            temporary = Path(name)
+            with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+                json.dump(self.values, stream, indent=2, sort_keys=True)
             os.replace(temporary, self.path)
         except OSError:
             # Preferences must never prevent opening or saving scientific data.
-            return
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)

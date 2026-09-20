@@ -1,3 +1,5 @@
+import base64
+import json
 from dataclasses import replace
 from pathlib import Path
 
@@ -27,7 +29,7 @@ from bernardyn.gui.main_window import DatasetListWidget, MainWindow, _documentat
 from bernardyn.io.file_browser import files_in_folder, make_file_matcher, sort_paths
 from bernardyn.io.sources import ScatteringLocation
 from bernardyn.renderers.opengl import OpenGLPlotWidget, opengl_available
-from bernardyn.renderers.plot2d import Plot2DWidget, PublicationAxisItem
+from bernardyn.renderers.plot2d import DraggablePowerLawGuide, Plot2DWidget, PublicationAxisItem
 from bernardyn.state import UserState
 
 
@@ -105,6 +107,7 @@ def test_last_workspace_is_remembered_on_save_and_restored(qapp, tmp_path, monke
 
     assert window._save_to(package_path)
     assert window.user_state.get("last_workspace_path") == str(package_path.resolve())
+    assert window.user_state.get("recent_workspace_paths") == [str(package_path.resolve())]
     window.controller.workspace.dirty = False
     window.close()
 
@@ -115,6 +118,45 @@ def test_last_workspace_is_remembered_on_save_and_restored(qapp, tmp_path, monke
     assert restored.controller.workspace.title == "Untitled workspace"
     restored.controller.workspace.dirty = False
     restored.close()
+
+
+def test_recent_workspaces_are_deduplicated_and_emit_the_selected_path(qapp, tmp_path):
+    first = tmp_path / "first.bernardyn.h5"
+    second = tmp_path / "second.bernardyn.h5"
+    first.touch()
+    second.touch()
+    window = MainWindow()
+    window.user_state = UserState(tmp_path / "preferences.json")
+    window._remember_workspace(first)
+    window._remember_workspace(second)
+    window._remember_workspace(first)
+    selected = []
+    window.openWorkspaceRequested.connect(selected.append)
+
+    window._populate_recent_workspaces_menu()
+    actions = window.recent_workspaces_menu.actions()
+    assert window.user_state.get("recent_workspace_paths") == [str(first.resolve()), str(second.resolve())]
+    actions[0].trigger()
+    assert selected == [first.resolve()]
+    window.controller.workspace.dirty = False
+    window.close()
+
+
+def test_workspace_lock_prevents_a_second_editor(qapp, tmp_path):
+    package_path = tmp_path / "locked.bernardyn.h5"
+    first = MainWindow()
+    first.user_state = UserState(tmp_path / "first-preferences.json")
+    assert first._save_to(package_path)
+
+    second = MainWindow()
+    second.user_state = UserState(tmp_path / "second-preferences.json")
+    assert not second.open_workspace(package_path, show_errors=False)
+
+    first.controller.workspace.dirty = False
+    first.close()
+    assert second.open_workspace(package_path, show_errors=False)
+    second.controller.workspace.dirty = False
+    second.close()
 
 
 def test_documentation_button_is_present(qapp):
@@ -129,6 +171,67 @@ def test_documentation_button_is_present(qapp):
     window.close()
 
 
+def test_primary_docks_are_recovered_after_layout_restore(qapp):
+    window = MainWindow()
+    window.show()
+    qapp.processEvents()
+    window.datasets_dock.hide()
+    window.inspector_dock.setFloating(True)
+    window.inspector_dock.hide()
+
+    window.controller.workspace.layout_state = json.dumps(
+        {
+            "window_state": base64.b64encode(window.saveState()).decode("ascii"),
+            "geometry": base64.b64encode(window.saveGeometry()).decode("ascii"),
+        }
+    )
+    window._restore_layout()
+    qapp.processEvents()
+
+    assert window.datasets_dock.isVisible()
+    assert window.inspector_dock.isVisible()
+    assert not window.datasets_dock.isFloating()
+    assert not window.inspector_dock.isFloating()
+    assert window.dockWidgetArea(window.datasets_dock) == Qt.DockWidgetArea.LeftDockWidgetArea
+    assert window.dockWidgetArea(window.inspector_dock) == Qt.DockWidgetArea.RightDockWidgetArea
+    window.controller.workspace.dirty = False
+    window.close()
+
+
+def test_dataset_filters_apply_to_the_browser_and_inspector(qapp):
+    window = MainWindow()
+    ordinary = Dataset(q=[1, 2], intensity=[3, 4], label="ordinary")
+    measured = Dataset(
+        q=[1, 2],
+        intensity=[3, 4],
+        label="measured",
+        metadata={"bernardyn_result": {"analysis": "unified_fit", "role": "measured"}},
+    )
+    model = Dataset(
+        q=[1, 2],
+        intensity=[3, 4],
+        label="model",
+        metadata={"bernardyn_result": {"analysis": "unified_fit", "role": "fit"}},
+    )
+    window.controller.add_datasets((ordinary, measured, model))
+    window._rebuild_tabs()
+
+    window.dataset_filter.setCurrentIndex(window.dataset_filter.findData("unified_fit_measured"))
+    assert window.dataset_list.count() == 1
+    assert "measured" in window.dataset_list.item(0).text()
+    window.dataset_filter.setCurrentIndex(window.dataset_filter.findData("unified_fit_fit"))
+    assert window.dataset_list.count() == 1
+    assert "model" in window.dataset_list.item(0).text()
+    assert not window.dataset_list.dragEnabled()
+    window.inspector.series_filter.setCurrentIndex(
+        window.inspector.series_filter.findData("unified_fit_fit")
+    )
+    assert window.inspector.series_list.count() == 1
+    assert window.inspector.series_splitter.count() == 2
+    window.controller.workspace.dirty = False
+    window.close()
+
+
 def test_typography_spin_boxes_update_after_a_rate_limited_arrow_change(qapp):
     window = MainWindow()
     inspector = window.inspector
@@ -138,6 +241,31 @@ def test_typography_spin_boxes_update_after_a_rate_limited_arrow_change(qapp):
     assert inspector._live_update_timer.isActive()
     inspector._flush_live_edit()
     assert window.controller.workspace.graphs[0].typography.title_size == original + 1
+    window.controller.workspace.dirty = False
+    window.close()
+
+
+def test_title_font_size_and_display_canvas_action(qapp):
+    """Title typography must reach QtGraph; Set sends the requested pixels."""
+    window = MainWindow()
+    inspector = window.inspector
+    inspector.title_font_size.setValue(26)
+    inspector._flush_live_edit()
+    page = window.tabs.currentWidget()
+    assert isinstance(page, GraphPage)
+    assert page.renderer.getPlotItem().titleLabel.opts["size"] == "26pt"
+    assert page.renderer.getPlotItem().titleLabel.opts["family"] == "Arial"
+    requested = []
+    inspector.displayCanvasRequested.connect(lambda width, height: requested.append((width, height)))
+    window.show()
+    qapp.processEvents()
+    inspector.canvas_width.setValue(640)
+    inspector.canvas_height.setValue(480)
+    inspector.set_display_canvas.click()
+    for _ in range(5):
+        qapp.processEvents()
+    assert requested == [(640, 480)]
+    assert page.renderer.size().toTuple() == (640, 480)
     window.controller.workspace.dirty = False
     window.close()
 
@@ -792,3 +920,31 @@ def test_every_annotation_kind_reaches_the_canvas(qapp):
         assert graph.annotations[0].kind is kind
         window.controller.workspace.dirty = False
         window.close()
+
+
+def test_power_law_annotation_is_a_one_decade_draggable_reference_guide(qapp):
+    annotation = Annotation(AnnotationKind.POWER_LAW, (0.1, 100), slope=4)
+    widget = Plot2DWidget()
+    widget.render(GraphDocument(annotations=(annotation,)), {})
+    guide = next(
+        item for item in widget.getPlotItem().items if isinstance(item, DraggablePowerLawGuide)
+    )
+    assert guide.flags() & guide.GraphicsItemFlag.ItemIsMovable
+    curve = next(item for item in guide.childItems() if isinstance(item, pg.PlotCurveItem))
+    x, y = curve.getData()
+    np.testing.assert_allclose(x, [-1.5, -0.5])
+    np.testing.assert_allclose(y, [4, 0], atol=1e-12)
+    moved = []
+    widget.powerLawMoved.connect(lambda annotation_id, position: moved.append((annotation_id, position)))
+    guide._moved(1, 1)
+    assert moved == [(annotation.id, pytest.approx((1.0, 1000.0)))]
+    widget.close()
+
+
+def test_power_law_dialog_uses_a_readable_label_font_default(qapp):
+    dialog = AnnotationDialog(default_position=(0.1, 100))
+    dialog.kind.setCurrentIndex(dialog.kind.findData(AnnotationKind.POWER_LAW.value))
+    assert dialog.font_size_label.text() == "Slope label font size:"
+    assert dialog.font_size.value() == 14
+    assert dialog.value().font_size == 14
+    dialog.close()
