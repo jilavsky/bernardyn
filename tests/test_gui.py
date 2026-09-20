@@ -254,7 +254,11 @@ def test_title_font_size_and_display_canvas_action(qapp):
     page = window.tabs.currentWidget()
     assert isinstance(page, GraphPage)
     assert page.renderer.getPlotItem().titleLabel.opts["size"] == "26pt"
-    assert page.renderer.getPlotItem().titleLabel.opts["family"] == "Arial"
+    # QFontComboBox resolves unavailable families differently across platforms
+    # (Windows CI commonly returns "Sans Serif" for the default Arial).
+    assert page.renderer.getPlotItem().titleLabel.opts["family"] == (
+        window.controller.workspace.graphs[0].typography.family
+    )
     requested = []
     inspector.displayCanvasRequested.connect(lambda width, height: requested.append((width, height)))
     window.show()
