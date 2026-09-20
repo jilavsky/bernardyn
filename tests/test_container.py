@@ -10,6 +10,7 @@ from bernardyn.core.controller import ApplicationController
 from bernardyn.core.models import Annotation, AnnotationKind, CurveRole, Dataset, GenericCurve
 from bernardyn.io.container import (
     FORMAT_MAGIC,
+    MIN_READER_VERSION,
     PackageValidationError,
     dataset_checksum,
     import_graphs,
@@ -100,7 +101,8 @@ def test_generic_curve_uses_v2_arrays_and_reopens_without_its_source(tmp_path):
     controller.add_dataset(curve)
     path = controller.save(tmp_path / "generic")
     with h5py.File(path, "r") as handle:
-        assert handle.attrs["schema_version"] == 2
+        assert handle.attrs["schema_version"] == 3
+        assert handle.attrs["minimum_reader_version"] == MIN_READER_VERSION
         data = handle[f"datasets/{curve.id}/data"]
         assert set(data) == {"x", "y"}
     restored = load_package(path)

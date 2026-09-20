@@ -4,7 +4,7 @@ This file records user-visible changes in Bernardyn. Update it, together with
 the relevant user documentation, whenever a feature is added or an existing
 behavior changes.
 
-## Unreleased
+## 0.0.1b6 — 2026-09-20
 
 ### Added
 

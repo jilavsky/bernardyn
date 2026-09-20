@@ -31,8 +31,8 @@ from bernardyn.core.models import (
 )
 
 FORMAT_MAGIC = "BERNARDYN_GRAPH_PACKAGE"
-SCHEMA_VERSION = 2
-MIN_READER_VERSION = "0.0.1b5"
+SCHEMA_VERSION = 3
+MIN_READER_VERSION = "0.0.1b6"
 DEFAULT_SUFFIX = ".bernardyn.h5"
 UTF8 = h5py.string_dtype(encoding="utf-8")
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"

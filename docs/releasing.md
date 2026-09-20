@@ -34,7 +34,7 @@ exact workflow file, `release.yml`.
    If the project already exists under your PyPI account, instead open that
    project’s **Manage → Publishing** page and add the same GitHub publisher.
 4. Merge the release workflow and the desired package version to `main`.
-5. Create and publish the GitHub release/tag `v0.0.1b5` from that exact `main`
+5. Create and publish the GitHub release/tag `v0.0.1b6` from that exact `main`
    commit. Publishing the GitHub Release starts the workflow automatically.
 6. In **Actions**, open “Publish Bernardyn to PyPI”, approve the `pypi`
    environment when GitHub requests it, and wait for the PyPI job to finish.
@@ -45,7 +45,7 @@ exact workflow file, `release.yml`.
    python -m venv bernardyn-test
    source bernardyn-test/bin/activate        # Windows: bernardyn-test\\Scripts\\activate
    python -m pip install --upgrade pip
-   python -m pip install bernardyn==0.0.1b5
+   python -m pip install bernardyn==0.0.1b6
    bernardyn-doctor
    bernardyn
    ```
@@ -63,7 +63,7 @@ exact workflow file, `release.yml`.
    publish it. Approve the protected `pypi` environment.
 
 PyPI does not allow replacing an already uploaded version. If a release needs
-correction, bump the version (for example, `0.0.1b5`) and release that instead.
+correction, bump the version (for example, `0.0.1b6`) and release that instead.
 
 ## Security model
 
