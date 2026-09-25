@@ -58,9 +58,10 @@ measured data and a matching-colour line for the fit. Select a graph using the
 General I(Q) view first. Choose **Residuals** to create a separate graph with
 Q on a logarithmic X axis and normalised residual on a linear Y axis. For a
 Size Distribution result, **Distribution** creates a separate linear graph of
-the stored volume-fraction density against radius. Bernardyn uses the stored
-radius centres as a curve; it does not invent bar widths. Modeling and other
-distribution variants remain outside this import.
+the stored volume-fraction density against radius. Bernardyn also offers the
+stored cumulative volume, number, and surface distributions when available.
+It uses the stored radius centres and values; it does not infer bin widths or
+recalculate cumulative quantities.
 
 Use **Graph → New 2D graph** or Ctrl/Cmd+Shift+N to create a 2-D graph quickly.
 

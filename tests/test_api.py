@@ -98,7 +98,12 @@ def test_public_recipe_records_a_compatible_template(tmp_path):
 
 def test_public_inspection_and_recipe_catalog_are_serializable():
     names = {recipe.id for recipe in list_recipes()}
-    assert {"raw_iq", "porod", "unified_fit_residuals"}.issubset(names)
+    assert {
+        "raw_iq",
+        "porod",
+        "unified_fit_residuals",
+        "size_distribution_cumulative_surface_distribution",
+    }.issubset(names)
     inspected = inspect_data(RESULT)
     assert any(item["analysis"] == "unified_fit" for item in inspected["results"])
 

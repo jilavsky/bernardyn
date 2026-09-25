@@ -351,6 +351,25 @@ def test_folder_selector_uses_pyirena_style_type_filter_and_sort(qapp, tmp_path)
     direct.close()
 
 
+def test_folder_selector_records_the_visible_single_curve_default(qapp, tmp_path):
+    path = tmp_path / "sample.h5"
+    path.touch()
+    locations = [
+        ScatteringLocation(
+            path=path,
+            adapter_id="hdf5",
+            internal_path="/entry/sample/sasdata",
+            display_name="sample.h5: sasdata",
+        )
+    ]
+    dialog = DataFileSelectorDialog(tmp_path, lambda _: locations, paths=[path])
+    dialog.file_list.item(0).setSelected(True)
+    dialog.file_list.setCurrentRow(0)
+    assert dialog.data_list.item(0).checkState() == Qt.CheckState.Checked
+    assert dialog.selected_locations() == locations
+    dialog.close()
+
+
 def test_active_graph_dataset_list_removes_series_and_preserves_catalog(qapp):
     window = MainWindow()
     first = Dataset(q=[1, 2], intensity=[3, 4], label="first")

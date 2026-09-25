@@ -232,8 +232,15 @@ class DataFileSelectorDialog(QDialog):
             self.data_status.setText(self._errors.get(path, "No plottable 1-D data was found."))
             self._syncing = False
             return
-        profile = self._profiles.get(self._profile_key(locations))
+        profile_key = self._profile_key(locations)
+        profile = self._profiles.get(profile_key)
         checked = set(profile if profile is not None else ([0] if len(locations) == 1 else []))
+        # A single discovered curve is presented as the sensible default.  That
+        # default must also be persisted: itemChanged signals are intentionally
+        # ignored while this list is being populated, so otherwise the checkbox
+        # looks checked but selected_locations() sees an empty profile.
+        if profile is None and len(locations) == 1:
+            self._profiles[profile_key] = sorted(checked)
         for index, location in enumerate(locations):
             path_text = location.internal_path or "top-level data"
             unit_note = " — Q unit missing" if location.metadata.get("q_unit_missing") else ""

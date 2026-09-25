@@ -82,6 +82,10 @@ paths and point-count diagnostics.
   curves with a linear Y axis.
 - `size_distribution_volume_distribution` uses the stored radius centres and
   volume-fraction density; it does not infer histogram widths.
+- `size_distribution_cumulative_volume_distribution`,
+  `size_distribution_cumulative_number_distribution`, and
+  `size_distribution_cumulative_surface_distribution` use their stored
+  cumulative arrays without recalculating them.
 
 Recipes preserve the same canonical datasets, transformations, graph package
 format, and result semantics as the GUI. Pixel-identical images are not

@@ -21,6 +21,9 @@ DATASET_FILTERS = (
     ("Size Distribution model", "size_distribution_fit"),
     ("Size Distribution residuals", "size_distribution_residuals"),
     ("Size Distribution volume distribution", "size_distribution_volume_distribution"),
+    ("Size Distribution cumulative volume", "size_distribution_cumulative_volume_distribution"),
+    ("Size Distribution cumulative number", "size_distribution_cumulative_number_distribution"),
+    ("Size Distribution cumulative surface", "size_distribution_cumulative_surface_distribution"),
 )
 
 

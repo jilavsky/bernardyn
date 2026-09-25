@@ -1,9 +1,9 @@
 """Public-pyIrena result discovery for saved fitting workflows.
 
-This module intentionally consumes only ``pyirena.io.results.load_result``.
-It does not reproduce HDF5 paths or import Data Explorer's GUI helpers.  The
-Measured/model I(Q) records stay scattering curves.  Residuals and P(r)
-distributions are represented as explicitly typed generic curves.
+This module uses pyIrena's result readers rather than reproducing HDF5 paths
+or importing Data Explorer's GUI helpers.  The measured/model I(Q) records
+stay scattering curves. Residuals and P(r) distributions are represented as
+explicitly typed generic curves.
 """
 
 from __future__ import annotations
@@ -73,6 +73,29 @@ def _reader():
     return load_result
 
 
+def _result(descriptor: ResultDescriptor) -> Mapping[str, Any]:
+    """Load one result and supplement Sizes' stored cumulative curves.
+
+    ``load_result`` is pyIrena's stable, high-level result interface. Its
+    schema predates cumulative size distributions, so those optional stored
+    arrays are obtained from pyIrena's Sizes reader without duplicating an
+    HDF5 layout here.
+    """
+    result = dict(_reader()(descriptor.path, descriptor.analysis))
+    if descriptor.analysis != "size_distribution":
+        return result
+    try:
+        from pyirena.io.nxcansas_sizes import load_sizes_results
+
+        sizes = load_sizes_results(descriptor.path)
+    except (ImportError, KeyError, OSError, ValueError):
+        return result
+    for key in ("cumul_vol_dist", "cumul_num_dist", "cumul_surf_dist"):
+        if result.get(key) is None:
+            result[key] = sizes.get(key)
+    return result
+
+
 def discover_results(path: str | Path) -> list[ResultDescriptor]:
     """Report only result packages pyIrena says are actually available."""
     source = Path(path).expanduser().resolve()
@@ -101,8 +124,7 @@ def _array(result: Mapping[str, Any], key: str, *, length: int | None = None) ->
 
 def load_result_bundle(descriptor: ResultDescriptor) -> ResultBundle:
     """Load the explicitly selected measured/model I(Q) result pair."""
-    load_result = _reader()
-    result = load_result(descriptor.path, descriptor.analysis)
+    result = _result(descriptor)
     if not result.get("found"):
         raise ValueError(f"{descriptor.title} is no longer available in {descriptor.path.name}")
     q = _array(result, "Q")
@@ -181,7 +203,7 @@ def _result_context(descriptor: ResultDescriptor, result: Mapping[str, Any]) -> 
 
 def available_curve_kinds(descriptor: ResultDescriptor) -> tuple[str, ...]:
     """Return generic curve views that have complete public-reader arrays."""
-    result = _reader()(descriptor.path, descriptor.analysis)
+    result = _result(descriptor)
     if not result.get("found"):
         return ()
     available: list[str] = []
@@ -193,12 +215,20 @@ def available_curve_kinds(descriptor: ResultDescriptor) -> tuple[str, ...]:
         and result.get("distribution") is not None
     ):
         available.append("volume_distribution")
+    if descriptor.analysis == "size_distribution" and result.get("r_grid") is not None:
+        for kind, key in (
+            ("cumulative_volume_distribution", "cumul_vol_dist"),
+            ("cumulative_number_distribution", "cumul_num_dist"),
+            ("cumulative_surface_distribution", "cumul_surf_dist"),
+        ):
+            if result.get(key) is not None:
+                available.append(kind)
     return tuple(available)
 
 
 def load_result_curve(descriptor: ResultDescriptor, kind: str) -> ResultCurveBundle:
     """Load a supported non-I(Q) curve without assigning scattering semantics."""
-    result = _reader()(descriptor.path, descriptor.analysis)
+    result = _result(descriptor)
     if not result.get("found"):
         raise ValueError(f"{descriptor.title} is no longer available in {descriptor.path.name}")
     fingerprint, result_metadata, provenance = _result_context(descriptor, result)
@@ -257,6 +287,55 @@ def load_result_curve(descriptor: ResultDescriptor, kind: str) -> ResultCurveBun
                 line_style="solid", symbol="o", show_error_bars=error is not None
             ),
             graph_title=f"{descriptor.title} volume distribution",
+            x_log=False,
+            y_log=False,
+        )
+    cumulative = {
+        "cumulative_volume_distribution": (
+            "cumul_vol_dist",
+            "Cumulative volume distribution",
+            "cumulative_volume_fraction",
+            "Cumulative volume fraction",
+            "volume_fraction",
+        ),
+        "cumulative_number_distribution": (
+            "cumul_num_dist",
+            "Cumulative number distribution",
+            "cumulative_number_fraction",
+            "Cumulative number fraction",
+            "dimensionless",
+        ),
+        "cumulative_surface_distribution": (
+            "cumul_surf_dist",
+            "Cumulative surface distribution",
+            "cumulative_specific_surface",
+            "Cumulative specific surface",
+            "1/angstrom",
+        ),
+    }
+    if kind in cumulative and descriptor.analysis == "size_distribution":
+        key, title, semantic, y_label, y_unit = cumulative[kind]
+        radii = _array(result, "r_grid")
+        curve = GenericCurve(
+            x=radii,
+            y=_array(result, key, length=len(radii)),
+            label=f"{stem} — {descriptor.title} {title.lower()}",
+            role=CurveRole.DISTRIBUTION,
+            x_semantic="particle_radius",
+            y_semantic=semantic,
+            x_label="Radius",
+            y_label=y_label,
+            x_unit="angstrom",
+            y_unit=y_unit,
+            metadata={"bernardyn_result": {**result_metadata, "role": kind}},
+            provenance=provenance,
+            source_fingerprint=fingerprint,
+        )
+        return ResultCurveBundle(
+            descriptor=descriptor,
+            curve=curve,
+            style=SeriesStyle(line_style="solid", symbol="o"),
+            graph_title=f"{descriptor.title} {title.lower()}",
             x_log=False,
             y_log=False,
         )

@@ -151,6 +151,27 @@ RECIPES = (
         result_analysis="size_distribution",
         result_kind="volume_distribution",
     ),
+    RecipeDescriptor(
+        "size_distribution_cumulative_volume_distribution",
+        "Size Distribution cumulative volume distribution",
+        "Saved cumulative volume distribution.",
+        result_analysis="size_distribution",
+        result_kind="cumulative_volume_distribution",
+    ),
+    RecipeDescriptor(
+        "size_distribution_cumulative_number_distribution",
+        "Size Distribution cumulative number distribution",
+        "Saved cumulative number distribution.",
+        result_analysis="size_distribution",
+        result_kind="cumulative_number_distribution",
+    ),
+    RecipeDescriptor(
+        "size_distribution_cumulative_surface_distribution",
+        "Size Distribution cumulative surface distribution",
+        "Saved cumulative surface distribution.",
+        result_analysis="size_distribution",
+        result_kind="cumulative_surface_distribution",
+    ),
 )
 
 

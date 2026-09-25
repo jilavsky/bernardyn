@@ -60,10 +60,21 @@ def test_real_pyirena_result_fixture_exposes_r2_generic_curves_and_round_trips(t
     descriptors = {item.analysis: item for item in discover_results(source)}
     unified = load_result_curve(descriptors["unified_fit"], "residuals")
     sized = load_result_curve(descriptors["size_distribution"], "volume_distribution")
+    cumulative = {
+        kind: load_result_curve(descriptors["size_distribution"], kind)
+        for kind in (
+            "cumulative_volume_distribution",
+            "cumulative_number_distribution",
+            "cumulative_surface_distribution",
+        )
+    }
     assert available_curve_kinds(descriptors["unified_fit"]) == ("residuals",)
     assert available_curve_kinds(descriptors["size_distribution"]) == (
         "residuals",
         "volume_distribution",
+        "cumulative_volume_distribution",
+        "cumulative_number_distribution",
+        "cumulative_surface_distribution",
     )
     assert unified.curve.role.value == "residual"
     assert unified.curve.y_semantic == "normalised_residual"
@@ -74,6 +85,21 @@ def test_real_pyirena_result_fixture_exposes_r2_generic_curves_and_round_trips(t
     assert sized.curve.y_semantic == "volume_fraction_density_per_radius"
     assert sized.curve.point_count == 201
     assert sized.curve.dy is None
+    assert {
+        kind: bundle.curve.y_semantic for kind, bundle in cumulative.items()
+    } == {
+        "cumulative_volume_distribution": "cumulative_volume_fraction",
+        "cumulative_number_distribution": "cumulative_number_fraction",
+        "cumulative_surface_distribution": "cumulative_specific_surface",
+    }
+    assert [bundle.curve.y_unit for bundle in cumulative.values()] == [
+        "volume_fraction",
+        "dimensionless",
+        "1/angstrom",
+    ]
+    for bundle in cumulative.values():
+        assert bundle.curve.point_count == 201
+        assert np.all(np.diff(bundle.curve.y) >= 0)
 
     controller = ApplicationController()
     graph = controller.workspace.graphs[0]

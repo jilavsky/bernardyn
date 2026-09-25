@@ -1095,9 +1095,16 @@ class MainWindow(QMainWindow):
                     if not accepted:
                         continue
                     descriptor = next(item for item in descriptors if item.title == title)
+                curve_labels = {
+                    "residuals": "Residuals",
+                    "volume_distribution": "Distribution",
+                    "cumulative_volume_distribution": "Cumulative volume distribution",
+                    "cumulative_number_distribution": "Cumulative number distribution",
+                    "cumulative_surface_distribution": "Cumulative surface distribution",
+                }
                 choices = [("Data + fit", "iq")]
                 choices.extend(
-                    ("Residuals", "residuals") if kind == "residuals" else ("Distribution", kind)
+                    (curve_labels.get(kind, kind), kind)
                     for kind in available_curve_kinds(descriptor)
                 )
                 choice, accepted = QInputDialog.getItem(
