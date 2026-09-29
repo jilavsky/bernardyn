@@ -463,6 +463,37 @@ def test_2d_auto_range_includes_new_data_outside_previous_view(qapp):
     window.close()
 
 
+def test_initial_layout_refreshes_width_dependent_peak_downsampling(qapp):
+    """A graph first drawn in a narrow new tab must not keep duplicate-x bins."""
+    controller = ApplicationController()
+    controller.add_dataset(
+        Dataset(
+            q=np.geomspace(1e-4, 1, 1_000),
+            intensity=np.geomspace(1e5, 1, 1_000),
+        )
+    )
+    graph = controller.workspace.graphs[0]
+    snapshot = next(iter(controller.snapshots[graph.id].values()))
+    widget = Plot2DWidget()
+    widget.resize(80, 400)
+    widget.show()
+    widget.render(graph, controller.snapshots[graph.id])
+    qapp.processEvents()
+
+    # A fresh GraphPage is initially this narrow until its tab has been laid
+    # out. Peak downsampling represents each bin with a repeated x position.
+    # After the final canvas width is known, all source points fit and the
+    # display cache must be rebuilt without those artificial pairs.
+    widget.resize(1_400, 400)
+    qapp.processEvents()
+    item = next(iter(widget._curve_items.values()))
+    displayed_x, _ = item.getData()
+    assert displayed_x is not None
+    assert len(displayed_x) == len(snapshot.x)
+    assert np.all(np.diff(displayed_x) > 0)
+    widget.close()
+
+
 def test_publication_axis_uses_direct_numbers_before_scientific_notation(qapp):
     axis = PublicationAxisItem("bottom")
     assert axis.tickStrings([0.0001, 0.1, 1000, 10000], 1.0, 0.0001) == [

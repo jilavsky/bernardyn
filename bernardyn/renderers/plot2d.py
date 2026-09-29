@@ -16,7 +16,17 @@ import numpy as np
 import pyqtgraph as pg
 import pyqtgraph.exporters
 from pyqtgraph.graphicsItems.LegendItem import ItemSample
-from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QRect, QRectF, QSize, Qt, Signal
+from PySide6.QtCore import (
+    QBuffer,
+    QByteArray,
+    QIODevice,
+    QRect,
+    QRectF,
+    QSize,
+    QTimer,
+    Qt,
+    Signal,
+)
 from PySide6.QtGui import QColor, QFont, QPainter
 from PySide6.QtSvg import QSvgGenerator
 from PySide6.QtWidgets import QApplication, QGraphicsItem, QGraphicsItemGroup, QGraphicsRectItem
@@ -186,6 +196,14 @@ class Plot2DWidget(pg.PlotWidget):
         self._legend = None
         self._curve_items: dict[str, pg.PlotDataItem] = {}
         self._error_items: dict[str, list[pg.ErrorBarItem]] = {}
+        # PyQtGraph chooses automatic downsampling from the ViewBox width. A
+        # new graph can be rendered while its tab still has a temporary small
+        # geometry; its ``peak`` reducer then represents each bin by a
+        # min/max pair at the same x coordinate. Refresh it after Qt has laid
+        # out the tab, so the first visible frame uses the real canvas width.
+        self._view_dependent_refresh = QTimer(self)
+        self._view_dependent_refresh.setSingleShot(True)
+        self._view_dependent_refresh.timeout.connect(self._refresh_view_dependent_data)
         # Problems met during the last render.  Curves, annotations and axis
         # ranges are drawn independently, so a failure in one must be
         # reported rather than silently truncating the rest of the plot.
@@ -342,6 +360,25 @@ class Plot2DWidget(pg.PlotWidget):
             self._review_annotations(graph)
         except Exception:  # pragma: no cover - diagnostics must never break a plot
             log.exception("Could not review annotation placement")
+        self._schedule_view_dependent_refresh()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt API
+        super().resizeEvent(event)
+        self._schedule_view_dependent_refresh()
+
+    def _schedule_view_dependent_refresh(self) -> None:
+        """Recalculate clipping/downsampling after the widget settles in its tab."""
+        if getattr(self, "_curve_items", None):
+            self._view_dependent_refresh.start()
+
+    def _refresh_view_dependent_data(self) -> None:
+        """Invalidate PyQtGraph's display-only, width-dependent curve cache."""
+        for item in tuple(self._curve_items.values()):
+            # ``viewRangeChanged`` is the public PlotDataItem hook used by
+            # ViewBox changes.  It clears the cached clipped/downsampled
+            # display array while leaving Bernardyn's canonical snapshot
+            # untouched.
+            item.viewRangeChanged(changed=[True, False])
 
     @staticmethod
     def _range_signature(graph: GraphDocument) -> tuple:

@@ -28,7 +28,7 @@ requirements:
     - pyside6
     - pyqtgraph >=0.13
     - pyopengl >=3.1.7
-    - pyirena >=1.1.0,<2
+    - pyirena >=1.0.1,<2
     - six >=1.16
 
 test:
