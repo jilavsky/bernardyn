@@ -648,7 +648,12 @@ class InspectorWidget(QScrollArea):
         self.camera_distance.setValue(float(camera.get("distance", 40.0)))
         self.camera_elevation.setValue(float(camera.get("elevation", 25.0)))
         self.camera_azimuth.setValue(float(camera.get("azimuth", -45.0)))
+        # Updating a graph recreates its list items.  Keep the viewport where
+        # the user left it so repeatedly checking or unchecking datasets near
+        # the bottom of a long list does not jump back to the beginning.
+        series_list_scroll_position = self.series_list.verticalScrollBar().value()
         self._populate_series_list(self.current_series_id())
+        self.series_list.verticalScrollBar().setValue(series_list_scroll_position)
         self.annotations.clear()
         for annotation in graph.annotations:
             label = annotation.text or self._annotation_label(annotation)

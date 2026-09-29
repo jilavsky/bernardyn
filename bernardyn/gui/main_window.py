@@ -326,6 +326,10 @@ class MainWindow(QMainWindow):
         self._build_docks()
         self._build_actions()
         self._build_menus()
+        self.workspace_indicator = QLabel(self)
+        self.workspace_indicator.setObjectName("workspaceIndicator")
+        self.statusBar().addPermanentWidget(self.workspace_indicator)
+        self._update_workspace_indicator()
         self.statusBar().showMessage("Ready")
         self._rebuild_tabs()
 
@@ -536,6 +540,16 @@ class MainWindow(QMainWindow):
         """The editable package associated with this window, if it has one."""
         return self.controller.package_path
 
+    def _update_workspace_indicator(self) -> None:
+        """Show the editable workspace in the persistent status-bar area."""
+        if (path := self.workspace_path) is not None:
+            self.workspace_indicator.setText(f"Workspace: {path.name}")
+            self.workspace_indicator.setToolTip(f"Current workspace:\n{path}")
+            return
+        title = self.controller.workspace.title.strip() or "Untitled workspace"
+        self.workspace_indicator.setText(f"Workspace: {title} (unsaved)")
+        self.workspace_indicator.setToolTip("Current workspace has not been saved yet.")
+
     def _try_lock_workspace(self, path: str | Path) -> tuple[QLockFile | None, bool]:
         """Acquire an edit lock, returning whether this call acquired it."""
         target = Path(path).expanduser().resolve()
@@ -597,6 +611,7 @@ class MainWindow(QMainWindow):
             previous_lock.unlock()
         self.undo_stack.clear()
         self._rebuild_tabs()
+        self._update_workspace_indicator()
         if remember:
             self._remember_workspace(target)
         if loaded.warnings:
@@ -613,6 +628,7 @@ class MainWindow(QMainWindow):
         self._pending_graph_renders.clear()
         self.undo_stack.clear()
         self._rebuild_tabs()
+        self._update_workspace_indicator()
 
     def _remember_workspace(self, path: str | Path) -> None:
         """Store the last full workspace without putting it in the package."""
@@ -711,6 +727,7 @@ class MainWindow(QMainWindow):
         self.controller.workspace.title = title
         self.controller.workspace.description = description
         self.controller.workspace.dirty = True
+        self._update_workspace_indicator()
 
     def _new_graph(self, renderer_id: str) -> None:
         self.undo_stack.push(
@@ -1543,6 +1560,7 @@ class MainWindow(QMainWindow):
                 if previous_lock is not None and previous_lock is not lock and previous_path != saved:
                     previous_lock.unlock()
                 self._remember_workspace(saved)
+                self._update_workspace_indicator()
             elif acquired:
                 lock.unlock()
             self.statusBar().showMessage(f"Saved {saved.name}", 5000)

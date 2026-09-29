@@ -38,6 +38,7 @@ def test_main_window_starts_with_independent_graph_model(qapp):
     assert window.tabs.count() == 1
     assert len(window.controller.workspace.graphs) == 1
     assert window.inspector._graph.id == window.controller.workspace.graphs[0].id
+    assert window.workspace_indicator.text() == "Workspace: Untitled workspace (unsaved)"
     window.controller.workspace.dirty = False
     window.close()
 
@@ -108,6 +109,8 @@ def test_last_workspace_is_remembered_on_save_and_restored(qapp, tmp_path, monke
     assert window._save_to(package_path)
     assert window.user_state.get("last_workspace_path") == str(package_path.resolve())
     assert window.user_state.get("recent_workspace_paths") == [str(package_path.resolve())]
+    assert window.workspace_indicator.text() == "Workspace: saved-workspace.bernardyn.h5"
+    assert str(package_path.resolve()) in window.workspace_indicator.toolTip()
     window.controller.workspace.dirty = False
     window.close()
 
@@ -116,6 +119,7 @@ def test_last_workspace_is_remembered_on_save_and_restored(qapp, tmp_path, monke
     restored.restore_last_workspace()
     assert restored.controller.package_path == package_path.resolve()
     assert restored.controller.workspace.title == "Untitled workspace"
+    assert restored.workspace_indicator.text() == "Workspace: saved-workspace.bernardyn.h5"
     restored.controller.workspace.dirty = False
     restored.close()
 
@@ -711,6 +715,30 @@ def test_dataset_inspector_bulk_visibility_uses_extended_selection(qapp):
         Qt.CheckState.Checked,
         Qt.CheckState.Unchecked,
     ]
+    window.controller.workspace.dirty = False
+    window.close()
+
+
+def test_dataset_visibility_toggle_preserves_inspector_list_scroll_position(qapp):
+    window = MainWindow()
+    for index in range(40):
+        window.controller.add_dataset(Dataset(q=[1, 2], intensity=[3, 4], label=f"curve {index}"))
+    window.resize(1200, 800)
+    window.show()
+    window._sync_inspector()
+    qapp.processEvents()
+
+    series_list = window.inspector.series_list
+    item = series_list.item(32)
+    series_list.scrollToItem(item, QAbstractItemView.ScrollHint.PositionAtCenter)
+    qapp.processEvents()
+    scroll_position = series_list.verticalScrollBar().value()
+    assert scroll_position > 0
+
+    item.setCheckState(Qt.CheckState.Unchecked)
+
+    assert series_list.verticalScrollBar().value() == scroll_position
+    assert series_list.item(32).checkState() == Qt.CheckState.Unchecked
     window.controller.workspace.dirty = False
     window.close()
 
