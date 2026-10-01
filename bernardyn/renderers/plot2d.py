@@ -23,8 +23,8 @@ from PySide6.QtCore import (
     QRect,
     QRectF,
     QSize,
-    QTimer,
     Qt,
+    QTimer,
     Signal,
 )
 from PySide6.QtGui import QColor, QFont, QPainter
