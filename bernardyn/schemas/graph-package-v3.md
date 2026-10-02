@@ -1,6 +1,6 @@
 # Bernardyn graph package schema, version 3
 
-Status: implemented by Bernardyn 0.0.1b6. Native suffix: `.bernardyn.h5`.
+Status: implemented by Bernardyn 0.0.1b7. Native suffix: `.bernardyn.h5`.
 
 Version 3 retains every version-2 rule for datasets, graph documents,
 snapshots, previews, checksums, and atomic writes. It adds persisted
