@@ -21,9 +21,25 @@ DATASET_FILTERS = (
     ("Size Distribution model", "size_distribution_fit"),
     ("Size Distribution residuals", "size_distribution_residuals"),
     ("Size Distribution volume distribution", "size_distribution_volume_distribution"),
+    ("Size Distribution number distribution", "size_distribution_number_distribution"),
+    ("Size Distribution surface distribution", "size_distribution_surface_distribution"),
     ("Size Distribution cumulative volume", "size_distribution_cumulative_volume_distribution"),
     ("Size Distribution cumulative number", "size_distribution_cumulative_number_distribution"),
     ("Size Distribution cumulative surface", "size_distribution_cumulative_surface_distribution"),
+    ("Modeling total fit", "modeling_fit"),
+    ("Modeling populations", "modeling_populations"),
+    ("Simple Fits results", "simple_fits_measured"),
+    ("Simple Fits model", "simple_fits_fit"),
+    ("Simple Fits residuals", "simple_fits_residuals"),
+    ("WAXS Peak Fit results", "waxs_peakfit_measured"),
+    ("WAXS Peak Fit model", "waxs_peakfit_fit"),
+    ("WAXS Peak Fit background", "waxs_peakfit_background"),
+    ("WAXS Peak Fit peaks", "waxs_peakfit_peaks"),
+    ("WAXS Peak Fit residuals", "waxs_peakfit_residuals"),
+    ("Carbon fitting results", "carbon_fit_measured"),
+    ("Carbon fitting model", "carbon_fit_fit"),
+    ("Carbon fitting components", "carbon_fit_components"),
+    ("Carbon fitting residuals", "carbon_fit_residuals"),
 )
 
 
@@ -35,8 +51,19 @@ def result_category(dataset: Dataset | GenericCurve) -> str | None:
         return None
     analysis = result.get("analysis")
     role = result.get("role")
-    if analysis not in {"unified_fit", "size_distribution"} or not isinstance(role, str):
+    if analysis not in {
+        "unified_fit", "size_distribution", "modeling", "simple_fits",
+        "waxs_peakfit", "carbon_fit",
+    } or not isinstance(role, str):
         return None
+    if analysis == "modeling" and role.startswith("population_"):
+        return "modeling_populations"
+    if analysis == "waxs_peakfit" and role.startswith("peak_"):
+        return "waxs_peakfit_peaks"
+    if analysis == "carbon_fit" and role in {"grain_porod", "micropores", "diffraction"}:
+        return "carbon_fit_components"
+    if role == "residual":
+        role = "residuals"
     return f"{analysis}_{role}"
 
 

@@ -66,10 +66,15 @@ def test_hdf5_source_discovers_multiple_groups_and_loads_units(tmp_path):
 def test_hdf5_source_prefers_sasdata_over_auxiliary_curves(tmp_path):
     path = tmp_path / "auxiliary_and_sasdata.h5"
     with h5py.File(path, "w") as handle:
-        for name in ("entry/Blank_data", "entry/QRS_data", "entry/sample/sasdata", "entry/sample_SMR/sasdata"):
+        for name in (
+            "entry/Blank_data", "entry/QRS_data", "entry/metadata_saxs",
+            "entry/instrument_waxs", "entry/sample/sasdata", "entry/sample_SMR/sasdata",
+        ):
             group = handle.create_group(name)
             group.create_dataset("Q", data=[0.1, 0.2])
             group.create_dataset("I", data=[10.0, 5.0])
+            if name.endswith("/sasdata"):
+                group.attrs["Q_indices"] = [0]
     locations = HDF5SourceAdapter().discover(path)
     assert [location.internal_path for location in locations] == [
         "/entry/sample/sasdata",

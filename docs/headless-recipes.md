@@ -76,12 +76,15 @@ paths and point-count diagnostics.
   `dimensionless_kratky`, modified Porod, `zimm`, and `debye_bueche` accept
   one or more scattering inputs. `dimensionless_kratky` requires explicit
   `I0` and `Rg` in each `series_parameters` row (or matching source metadata).
-- `unified_fit_data_fit` and `size_distribution_data_fit` use saved measured
-  data and fit records.
-- `unified_fit_residuals` and `size_distribution_residuals` use typed residual
-  curves with a linear Y axis.
-- `size_distribution_volume_distribution` uses the stored radius centres and
-  volume-fraction density; it does not infer histogram widths.
+- `<tool>_data_fit` recipes for `unified_fit`, `size_distribution`, `modeling`,
+  `simple_fits`, `waxs_peakfit`, and `carbon_fit` use the saved I(Q) curves.
+  Modeling includes its total and population models; WAXS includes background
+  and individual peaks; Carbon fitting includes its component curves.
+- `<tool>_residuals` recipes for every listed tool except Modeling use typed
+  residual curves with a linear Y axis. WAXS uses a linear Q axis too.
+- `size_distribution_volume_distribution`, `size_distribution_number_distribution`,
+  and `size_distribution_surface_distribution` use stored radius centres and
+  densities; they do not infer histogram widths.
 - `size_distribution_cumulative_volume_distribution`,
   `size_distribution_cumulative_number_distribution`, and
   `size_distribution_cumulative_surface_distribution` use their stored

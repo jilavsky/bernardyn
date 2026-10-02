@@ -1115,11 +1115,13 @@ class MainWindow(QMainWindow):
                 curve_labels = {
                     "residuals": "Residuals",
                     "volume_distribution": "Distribution",
+                    "number_distribution": "Number distribution",
+                    "surface_distribution": "Surface distribution",
                     "cumulative_volume_distribution": "Cumulative volume distribution",
                     "cumulative_number_distribution": "Cumulative number distribution",
                     "cumulative_surface_distribution": "Cumulative surface distribution",
                 }
-                choices = [("Data + fit", "iq")]
+                choices = [("I(Q) curves", "iq")]
                 choices.extend(
                     (curve_labels.get(kind, kind), kind)
                     for kind in available_curve_kinds(descriptor)
@@ -1152,9 +1154,21 @@ class MainWindow(QMainWindow):
                     datasets = []
                     styles = []
                     for bundle_index, bundle in enumerate(iq_bundles):
-                        color = PALETTE[(len(graph.series) + 2 * bundle_index) % len(PALETTE)]
+                        base = len(graph.series) + 2 * bundle_index
+                        has_measured = bundle.records[0].metadata["bernardyn_result"]["role"] == "measured"
                         datasets.extend(record.to_dataset() for record in bundle.records)
-                        styles.extend(replace(style, color=color) for style in bundle.styles)
+                        styles.extend(
+                            replace(style, color=PALETTE[(base + max(0, index - int(has_measured))) % len(PALETTE)])
+                            for index, style in enumerate(bundle.styles)
+                        )
+                    if not graph.series and all(
+                        bundle.descriptor.analysis == "waxs_peakfit" for bundle in iq_bundles
+                    ):
+                        self.controller.update_graph(replace(
+                            graph,
+                            x_axis=replace(graph.x_axis, log=False),
+                            y_axis=replace(graph.y_axis, log=False),
+                        ))
                     self.controller.add_datasets(datasets, graph_id=graph.id, series_styles=styles)
                 for kind, bundle in selected_results:
                     if kind == "iq":

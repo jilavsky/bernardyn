@@ -32,9 +32,9 @@ uses the filename.
 ## Choose what is displayed
 
 The left **Data browser — active graph** controls the order in which curves are
-drawn. Its **Show** selector can narrow the list to ordinary SAS data, a saved
-Unified Fit's measured data/model/residuals, or a saved Size Distribution's
-data/model/residuals/volume distribution. Filtering only changes the list; it
+drawn. Its **Show** selector can narrow the list to ordinary SAS data or the
+measured, fit, component, residual, and distribution roles of saved pyIrena
+results. Filtering only changes the list; it
 does not hide or remove a curve from the graph. Drag rows within the unfiltered
 list to change drawing order, or select rows and use **Remove selected from
 graph** to hide them from that graph. Removing a row does not delete the
@@ -50,18 +50,21 @@ workspace. Each target graph applies its own selected view, so moving a curve
 to an I(Q) graph restores I(Q) rather than retaining a transform intended for
 the source graph. All transfers can be undone or redone.
 
-Use **Add pyIrena results…** to select a saved **Unified Fit** or **Size
-Distribution** result from an HDF5 file. Bernardyn offers only results that
-the installed pyIrena reader reports as available. Choose **Data + fit** to
-add the stored measured I(Q) and total fit as a paired overlay: symbols for
-measured data and a matching-colour line for the fit. Select a graph using the
-General I(Q) view first. Choose **Residuals** to create a separate graph with
-Q on a logarithmic X axis and normalised residual on a linear Y axis. For a
-Size Distribution result, **Distribution** creates a separate linear graph of
-the stored volume-fraction density against radius. Bernardyn also offers the
-stored cumulative volume, number, and surface distributions when available.
-It uses the stored radius centres and values; it does not infer bin widths or
-recalculate cumulative quantities.
+Use **Add pyIrena results…** to select saved **Unified Fit**, **Size
+Distribution**, **Modeling**, **Simple Fits**, **WAXS Peak Fit**, or **Carbon
+fitting** results from an HDF5 file. Bernardyn uses pyIrena's HDF5 schema to
+find saved results and its result readers to load them. Choose **I(Q) curves**
+to add the available measured data, total fit, and components to a graph using
+the General I(Q) view. Modeling stores a total model and population curves,
+but no measured data. WAXS includes its background and individual peaks;
+Carbon fitting includes its grain Porod, micropore, and diffraction components.
+WAXS curves use linear axes when added to an empty graph.
+
+Choose **Residuals** to create a separate graph with normalised residual on a
+linear Y axis. WAXS residuals also use a linear Q axis. Size Distribution
+offers separate linear graphs for volume, number, surface, and cumulative
+distributions. Bernardyn uses the stored radius centres and values; it does
+not infer bin widths or recalculate distributions.
 
 Use **Graph → New 2D graph** or Ctrl/Cmd+Shift+N to create a 2-D graph quickly.
 

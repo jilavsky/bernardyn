@@ -74,6 +74,30 @@ def test_pyirena_distribution_import_creates_a_typed_linear_graph(qapp, monkeypa
     window.close()
 
 
+def test_pyirena_waxs_import_uses_linear_axes_and_includes_peaks(qapp, monkeypatch):
+    fixture = Path(__file__).parents[1] / "testData" / "pyirena_1_2_WAXS_Al_7075.h5"
+    window = MainWindow()
+    monkeypatch.setattr(
+        main_window.QFileDialog,
+        "getOpenFileNames",
+        lambda *args: ([str(fixture)], ""),
+    )
+    monkeypatch.setattr(
+        main_window.QInputDialog,
+        "getItem",
+        lambda *args: ("I(Q) curves", True),
+    )
+    window._add_pyirena_results()
+    graph = window.controller.workspace.graphs[0]
+    assert not graph.x_axis.log and not graph.y_axis.log
+    assert len(graph.series) == 10
+    assert len({series.style.color for series in graph.series}) > 2
+    window.undo_stack.undo()
+    assert not window.controller.workspace.graphs[0].series
+    window.controller.workspace.dirty = False
+    window.close()
+
+
 def test_2d_canvas_previews_output_aspect_with_canvas_coloured_right_standoff(qapp):
     graph = GraphDocument(
         width_px=800,

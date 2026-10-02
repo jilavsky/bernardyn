@@ -60,6 +60,21 @@ def diagnose() -> dict[str, Any]:
         checks["pyirena_shared_api"] = False
         checks["pyirena_api_error"] = str(exc)
     try:
+        from pyirena.io.schema import TOOL_REGISTRY
+
+        expected = {
+            "unified_fit", "size_distribution", "modeling", "simple_fits",
+            "waxs_peakfit", "carbon_fit",
+        }
+        checks["pyirena_plot_results"] = expected.issubset(TOOL_REGISTRY)
+        if not checks["pyirena_plot_results"]:
+            checks["pyirena_plot_results_error"] = (
+                f"missing HDF5 schemas: {', '.join(sorted(expected - TOOL_REGISTRY.keys()))}"
+            )
+    except Exception as exc:
+        checks["pyirena_plot_results"] = False
+        checks["pyirena_plot_results_error"] = str(exc)
+    try:
         from bernardyn.renderers.opengl import opengl_available
 
         checks["opengl_available"], checks["opengl_message"] = opengl_available()
@@ -71,6 +86,7 @@ def diagnose() -> dict[str, Any]:
         checks["hdf5_round_trip"],
         checks["pyirena"] is not None,
         checks["pyirena_shared_api"],
+        checks["pyirena_plot_results"],
         checks["pyside6"] is not None,
         checks["pyqtgraph"] is not None,
     )
@@ -92,6 +108,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"HDF5 round-trip: {'ok' if result['hdf5_round_trip'] else 'failed'}")
         print(f"PyIrena: {result['pyirena'] or 'missing'}")
         print(f"PyIrena shared API: {'ok' if result['pyirena_shared_api'] else 'missing'}")
+        print(f"PyIrena plottable results: {'ok' if result['pyirena_plot_results'] else 'missing'}")
+        if not result["pyirena_plot_results"]:
+            print(f"  {result.get('pyirena_plot_results_error', 'required result schema is missing')}")
         if not result["pyirena_shared_api"]:
             print(f"  {result.get('pyirena_api_error', 'no import detail available')}")
             if "No module named 'six'" in result.get("pyirena_api_error", ""):

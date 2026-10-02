@@ -12,7 +12,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Mapping
 
-from bernardyn.core.controller import ApplicationController
+from bernardyn.core.controller import PALETTE, ApplicationController
 from bernardyn.core.models import AxisSpec, Dataset, GenericCurve, GraphDocument, PlotSeries
 from bernardyn.io.container import ensure_package_suffix
 from bernardyn.io.results import (
@@ -152,6 +152,16 @@ RECIPES = (
         result_kind="volume_distribution",
     ),
     RecipeDescriptor(
+        "size_distribution_number_distribution", "Size Distribution number distribution",
+        "Saved number distribution.", result_analysis="size_distribution",
+        result_kind="number_distribution",
+    ),
+    RecipeDescriptor(
+        "size_distribution_surface_distribution", "Size Distribution surface distribution",
+        "Saved surface distribution.", result_analysis="size_distribution",
+        result_kind="surface_distribution",
+    ),
+    RecipeDescriptor(
         "size_distribution_cumulative_volume_distribution",
         "Size Distribution cumulative volume distribution",
         "Saved cumulative volume distribution.",
@@ -171,6 +181,34 @@ RECIPES = (
         "Saved cumulative surface distribution.",
         result_analysis="size_distribution",
         result_kind="cumulative_surface_distribution",
+    ),
+    RecipeDescriptor(
+        "modeling_data_fit", "Modeling curves", "Saved total and population model I(Q).",
+        result_analysis="modeling", result_kind="data_fit",
+    ),
+    RecipeDescriptor(
+        "simple_fits_data_fit", "Simple Fits data + fit", "Saved Simple Fits I(Q) curves.",
+        result_analysis="simple_fits", result_kind="data_fit",
+    ),
+    RecipeDescriptor(
+        "simple_fits_residuals", "Simple Fits residuals", "Saved Simple Fits residuals.",
+        result_analysis="simple_fits", result_kind="residuals",
+    ),
+    RecipeDescriptor(
+        "waxs_peakfit_data_fit", "WAXS Peak Fit curves", "Saved data, fit, background and peaks.",
+        result_analysis="waxs_peakfit", result_kind="data_fit",
+    ),
+    RecipeDescriptor(
+        "waxs_peakfit_residuals", "WAXS Peak Fit residuals", "Saved WAXS residuals.",
+        result_analysis="waxs_peakfit", result_kind="residuals",
+    ),
+    RecipeDescriptor(
+        "carbon_fit_data_fit", "Carbon fitting curves", "Saved data, fit and component I(Q).",
+        result_analysis="carbon_fit", result_kind="data_fit",
+    ),
+    RecipeDescriptor(
+        "carbon_fit_residuals", "Carbon fitting residuals", "Saved Carbon fitting residuals.",
+        result_analysis="carbon_fit", result_kind="residuals",
     ),
 )
 
@@ -343,13 +381,23 @@ class PlotService:
         descriptor = _result_descriptor(request.result)
         if recipe.result_kind == "data_fit":
             bundle: ResultBundle = load_result_bundle(descriptor)
+            has_measured = bundle.records[0].metadata["bernardyn_result"]["role"] == "measured"
+            styles = tuple(
+                replace(style, color=PALETTE[max(0, index - int(has_measured)) % len(PALETTE)])
+                for index, style in enumerate(bundle.styles)
+            )
             controller.update_graph(
-                replace(graph, title=f"{bundle.descriptor.title} data + fit")
+                replace(
+                    graph,
+                    title=f"{bundle.descriptor.title} curves",
+                    x_axis=replace(graph.x_axis, log=descriptor.analysis != "waxs_peakfit"),
+                    y_axis=replace(graph.y_axis, log=descriptor.analysis != "waxs_peakfit"),
+                )
             )
             controller.add_datasets(
                 tuple(record.to_dataset() for record in bundle.records),
                 graph_id=graph.id,
-                series_styles=bundle.styles,
+                series_styles=styles,
             )
             return controller.workspace.graph(graph.id)
         bundle = load_result_curve(descriptor, recipe.result_kind or "")

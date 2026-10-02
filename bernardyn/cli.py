@@ -70,12 +70,11 @@ def main(argv: list[str] | None = None) -> int:
 
 def _request_from_args(args: argparse.Namespace) -> PlotRequest:
     parameters = _parameters(args.parameter)
-    result_recipe = args.recipe.startswith(("unified_fit_", "size_distribution_"))
-    if result_recipe:
+    recipe = next(item for item in list_recipes() if item.id == args.recipe)
+    if recipe.result_analysis is not None:
         if len(args.input) != 1:
             raise ValueError("saved-result recipes require exactly one --input file")
-        analysis = "unified_fit" if args.recipe.startswith("unified_fit_") else "size_distribution"
-        result = ResultInput(args.input[0], analysis)
+        result = ResultInput(args.input[0], recipe.result_analysis)
         inputs = ()
         parameter_rows = ()
     else:

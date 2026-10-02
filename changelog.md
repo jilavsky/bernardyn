@@ -4,6 +4,21 @@ This file records user-visible changes in Bernardyn. Update it, together with
 the relevant user documentation, whenever a feature is added or an existing
 behavior changes.
 
+## Unreleased
+
+### Added
+
+- Saved pyIrena 1.2.0b2+ results for Modeling, Simple Fits, WAXS Peak Fit,
+  and Carbon fitting can be imported in the GUI and plotted through the Python
+  API, CLI, and MCP recipes. Modeling population curves, WAXS peaks and
+  background, and Carbon fit components are included.
+- Size Distribution imports now include stored number and surface distributions.
+
+### Changed
+
+- Saved-result discovery follows pyIrena's HDF5 schema; the minimum supported
+  pyIrena version is 1.2.0b2.
+
 ## 0.0.1b6 — 2026-09-20
 
 ### Added

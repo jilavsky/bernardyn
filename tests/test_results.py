@@ -2,10 +2,13 @@ from dataclasses import replace
 from pathlib import Path
 from shutil import copy2
 
+import h5py
 import numpy as np
+import pytest
 
 from bernardyn.core.controller import ApplicationController
 from bernardyn.core.models import AxisSpec, GenericCurve
+from bernardyn.gui.dataset_filters import matches_dataset_filter
 from bernardyn.io.results import (
     available_curve_kinds,
     discover_results,
@@ -14,6 +17,14 @@ from bernardyn.io.results import (
 )
 
 FIXTURE = Path(__file__).parents[1] / "testData" / "Al_Mg_Si__40C_0min_0498.h5"
+RESULT_FIXTURES = Path(__file__).parents[1] / "testData"
+
+
+def test_discovery_skips_result_groups_without_plot_arrays(tmp_path):
+    source = tmp_path / "empty-results.h5"
+    with h5py.File(source, "w") as handle:
+        handle.create_group("entry/carbon_fit_results")
+    assert discover_results(source) == []
 
 
 def test_real_pyirena_result_fixture_exposes_r1_iq_bundles(tmp_path):
@@ -23,9 +34,10 @@ def test_real_pyirena_result_fixture_exposes_r1_iq_bundles(tmp_path):
     assert [(item.analysis, item.title) for item in descriptors] == [
         ("unified_fit", "Unified Fit"),
         ("size_distribution", "Size Distribution"),
+        ("modeling", "Modeling"),
     ]
     saved = []
-    for descriptor in descriptors:
+    for descriptor in descriptors[:2]:
         bundle = load_result_bundle(descriptor)
         measured, fitted = bundle.records
         assert len(measured.q) == len(fitted.q) > 0
@@ -72,6 +84,8 @@ def test_real_pyirena_result_fixture_exposes_r2_generic_curves_and_round_trips(t
     assert available_curve_kinds(descriptors["size_distribution"]) == (
         "residuals",
         "volume_distribution",
+        "number_distribution",
+        "surface_distribution",
         "cumulative_volume_distribution",
         "cumulative_number_distribution",
         "cumulative_surface_distribution",
@@ -122,3 +136,37 @@ def test_real_pyirena_result_fixture_exposes_r2_generic_curves_and_round_trips(t
     assert restored_curve.x_semantic == unified.curve.x_semantic
     np.testing.assert_allclose(restored_curve.x, unified.curve.x)
     np.testing.assert_allclose(restored_curve.y, unified.curve.y)
+
+
+@pytest.mark.parametrize(
+    ("analysis", "filename", "roles"),
+    [
+        ("modeling", "Modeling_PP15.h5", ("fit", "population_1", "population_2")),
+        ("simple_fits", "SimpleFits_Porod.h5", ("measured", "fit")),
+        ("waxs_peakfit", "WAXS_Al_7075.h5", ("measured", "fit", "background")),
+        ("carbon_fit", "Carbon_CE_1400.h5", ("measured", "fit", "grain_porod", "micropores", "diffraction")),
+    ],
+)
+def test_pyirena_1_2_saved_results_are_plottable_and_portable(tmp_path, analysis, filename, roles):
+    source = RESULT_FIXTURES / f"pyirena_1_2_{filename}"
+    descriptors = discover_results(source)
+    descriptor = next(item for item in descriptors if item.analysis == analysis)
+    bundle = load_result_bundle(descriptor)
+    assert tuple(record.metadata["bernardyn_result"]["role"] for record in bundle.records[:len(roles)]) == roles
+    assert len(bundle.records) == len(bundle.styles)
+    controller = ApplicationController()
+    controller.add_datasets(tuple(record.to_dataset() for record in bundle.records), series_styles=bundle.styles)
+    graph = controller.workspace.graphs[0]
+    assert len(graph.series) == len(bundle.records)
+    saved = controller.save(tmp_path / analysis)
+    restored = ApplicationController()
+    restored.open_package(saved)
+    assert len(restored.workspace.graphs[0].series) == len(bundle.records)
+    for record, series in zip(bundle.records, restored.workspace.graphs[0].series):
+        dataset = restored.workspace.datasets[series.dataset_id]
+        np.testing.assert_allclose(dataset.q, record.q)
+        np.testing.assert_allclose(dataset.intensity, record.intensity)
+    if analysis != "modeling":
+        residual = load_result_curve(descriptor, "residuals")
+        assert residual.curve.point_count > 0
+        assert matches_dataset_filter(residual.curve, f"{analysis}_residuals")

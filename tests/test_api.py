@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from bernardyn.api import (
     PlotRequest,
@@ -18,6 +19,7 @@ from bernardyn.template.graph_templates import save_template
 
 DATA = Path(__file__).parents[1] / "testData" / "Rh1_0085.h5"
 RESULT = Path(__file__).parents[1] / "testData" / "Al_Mg_Si__40C_0min_0498.h5"
+RESULT_FIXTURES = Path(__file__).parents[1] / "testData"
 
 
 def test_public_recipe_creates_portable_porod_package_and_offscreen_png(qapp, tmp_path):
@@ -106,6 +108,48 @@ def test_public_inspection_and_recipe_catalog_are_serializable():
     }.issubset(names)
     inspected = inspect_data(RESULT)
     assert any(item["analysis"] == "unified_fit" for item in inspected["results"])
+
+
+@pytest.mark.parametrize(
+    ("analysis", "filename"),
+    [
+        ("modeling", "Modeling_PP15.h5"),
+        ("simple_fits", "SimpleFits_Porod.h5"),
+        ("waxs_peakfit", "WAXS_Al_7075.h5"),
+        ("carbon_fit", "Carbon_CE_1400.h5"),
+    ],
+)
+def test_new_result_recipes_discover_and_create_packages(tmp_path, analysis, filename):
+    source = RESULT_FIXTURES / f"pyirena_1_2_{filename}"
+    assert any(item["analysis"] == analysis for item in inspect_data(source)["results"])
+    result = create_plot(PlotRequest(
+        recipe_id=f"{analysis}_data_fit",
+        result=ResultInput(source, analysis),
+        package_path=tmp_path / analysis,
+    ))
+    assert result.package_path.is_file()
+    assert result.diagnostics.plotted_points > 0
+    assert result.graph.x_axis.log is (analysis != "waxs_peakfit")
+    assert result.graph.y_axis.log is (analysis != "waxs_peakfit")
+    if analysis != "modeling":
+        residual = create_plot(PlotRequest(
+            recipe_id=f"{analysis}_residuals",
+            result=ResultInput(source, analysis),
+            package_path=tmp_path / f"{analysis}-residuals",
+        ))
+        assert residual.package_path.is_file()
+        assert not residual.graph.y_axis.log
+        assert residual.graph.x_axis.log is (analysis != "waxs_peakfit")
+
+
+def test_cli_routes_carbon_result_recipe_by_catalog(tmp_path, capsys):
+    source = RESULT_FIXTURES / "pyirena_1_2_Carbon_CE_1400.h5"
+    assert cli_main([
+        "create", "--recipe", "carbon_fit_residuals", "--input", str(source),
+        "--package", str(tmp_path / "carbon-residuals"),
+    ]) == 0
+    assert (tmp_path / "carbon-residuals.bernardyn.h5").is_file()
+    assert "graph_id" in capsys.readouterr().out
 
 
 def test_cli_result_recipe_writes_a_package(tmp_path, capsys):
