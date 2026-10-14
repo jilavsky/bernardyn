@@ -4,6 +4,13 @@ This file records user-visible changes in Bernardyn. Update it, together with
 the relevant user documentation, whenever a feature is added or an existing
 behavior changes.
 
+## Unreleased
+
+### Added
+
+- The `bernardyn` launcher accepts `--version`, `-version`, `--v`, and `-V`.
+  The desktop app shows its version in the status bar and in **About Bernardyn**.
+
 ## 0.0.1b7 — 2026-10-02
 
 ### Added

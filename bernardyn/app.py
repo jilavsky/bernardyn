@@ -10,6 +10,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QApplication
 
+from bernardyn import __version__
 from bernardyn.gui.main_window import MainWindow
 
 
@@ -57,7 +58,11 @@ class WorkspaceWindowManager:
         return window
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    args = sys.argv[1:] if argv is None else argv
+    if len(args) == 1 and args[0] in {"--version", "-version", "--v", "-V"}:
+        print(f"Bernardyn {__version__}")
+        return 0
     # BERNARDYN_LOG_LEVEL=DEBUG turns on the per-annotation placement trace
     # and the renderer's coordinate diagnostics.
     level = os.environ.get("BERNARDYN_LOG_LEVEL", "INFO").upper()
@@ -65,8 +70,9 @@ def main() -> int:
         level=getattr(logging, level, logging.INFO),
         format="%(levelname)s %(name)s: %(message)s",
     )
-    app = QApplication.instance() or QApplication(sys.argv)
+    app = QApplication.instance() or QApplication([sys.argv[0], *args])
     app.setApplicationName("Bernardyn")
+    app.setApplicationVersion(__version__)
     app.setOrganizationName("Bernardyn")
     windows = WorkspaceWindowManager()
     window = windows.new_window()

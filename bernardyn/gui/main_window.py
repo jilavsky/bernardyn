@@ -49,6 +49,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from bernardyn import __version__
 from bernardyn.core.controller import PALETTE, ApplicationController
 from bernardyn.core.models import AxisSpec, GraphDocument
 from bernardyn.gui.dataset_filters import DATASET_FILTERS, matches_dataset_filter
@@ -326,6 +327,9 @@ class MainWindow(QMainWindow):
         self._build_docks()
         self._build_actions()
         self._build_menus()
+        self.version_indicator = QLabel(f"Bernardyn {__version__}", self)
+        self.version_indicator.setObjectName("versionIndicator")
+        self.statusBar().addPermanentWidget(self.version_indicator)
         self.workspace_indicator = QLabel(self)
         self.workspace_indicator.setObjectName("workspaceIndicator")
         self.statusBar().addPermanentWidget(self.workspace_indicator)
@@ -457,6 +461,8 @@ class MainWindow(QMainWindow):
             "Open Graph Inspector", lambda: self._reopen_dock(self.inspector_dock, Qt.DockWidgetArea.RightDockWidgetArea)
         )
         self.reset_panels_action = self._action("Reset panel layout", self._reset_panel_layout)
+        self.about_action = self._action("About Bernardyn", self._show_about)
+        self.about_action.setMenuRole(QAction.MenuRole.AboutRole)
 
     def _build_menus(self) -> None:
         file_menu = self.menuBar().addMenu("&File")
@@ -501,6 +507,11 @@ class MainWindow(QMainWindow):
         view_menu.addActions(
             [self.reopen_data_browser_action, self.reopen_inspector_action, self.reset_panels_action]
         )
+        help_menu = self.menuBar().addMenu("&Help")
+        help_menu.addAction(self.about_action)
+
+    def _show_about(self) -> None:
+        QMessageBox.about(self, "About Bernardyn", f"Bernardyn {__version__}")
 
     def _reopen_dock(self, dock: QDockWidget, area: Qt.DockWidgetArea) -> None:
         """Recover a panel that was closed or floated beyond a screen edge."""

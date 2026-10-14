@@ -7,9 +7,11 @@ import numpy as np
 import pyqtgraph as pg
 import pytest
 from PySide6.QtCore import QMimeData, QPointF, Qt, QUrl
-from PySide6.QtGui import QDropEvent, QImage
+from PySide6.QtGui import QAction, QDropEvent, QImage
 from PySide6.QtWidgets import QAbstractItemView, QDockWidget
 
+from bernardyn import __version__
+from bernardyn import app as bernardyn_app
 from bernardyn.core.controller import ApplicationController
 from bernardyn.core.models import (
     Annotation,
@@ -39,6 +41,28 @@ def test_main_window_starts_with_independent_graph_model(qapp):
     assert len(window.controller.workspace.graphs) == 1
     assert window.inspector._graph.id == window.controller.workspace.graphs[0].id
     assert window.workspace_indicator.text() == "Workspace: Untitled workspace (unsaved)"
+    window.controller.workspace.dirty = False
+    window.close()
+
+
+@pytest.mark.parametrize("flag", ["--version", "-version", "--v", "-V"])
+def test_version_flag_exits_before_starting_gui(flag, monkeypatch, capsys):
+    def fail_if_gui_starts(*args, **kwargs):
+        raise AssertionError("version flag must not create a QApplication")
+
+    monkeypatch.setattr(bernardyn_app, "QApplication", fail_if_gui_starts)
+    assert bernardyn_app.main([flag]) == 0
+    assert capsys.readouterr().out == f"Bernardyn {__version__}\n"
+
+
+def test_gui_shows_version_and_about_action(qapp, monkeypatch):
+    window = MainWindow()
+    assert window.version_indicator.text() == f"Bernardyn {__version__}"
+    assert window.about_action.menuRole() == QAction.MenuRole.AboutRole
+    shown = []
+    monkeypatch.setattr(main_window.QMessageBox, "about", lambda *args: shown.append(args))
+    window.about_action.trigger()
+    assert shown == [(window, "About Bernardyn", f"Bernardyn {__version__}")]
     window.controller.workspace.dirty = False
     window.close()
 

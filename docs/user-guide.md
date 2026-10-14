@@ -9,6 +9,11 @@ Use the red **Documentation** button above the right-side **Graph Inspector**
 to open this local documentation folder. In a PyPI installation, it opens the
 GitHub documentation instead.
 
+To find your installed version, choose **About Bernardyn** in the app menu on
+macOS or the **Help** menu on Windows/Linux, or read the status bar. From a
+terminal, run `bernardyn --version` (`-version`, `--v`, and `-V` also work).
+On Windows, use `python -m bernardyn --version` to print it in the terminal.
+
 ## Import data
 
 Use one of the following ways to add data to the active graph:

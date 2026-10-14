@@ -44,6 +44,12 @@ bernardyn-doctor
 bernardyn
 ```
 
+To check the installed version, run `bernardyn --version` (also accepts
+`-version`, `--v`, or `-V`), or use **About Bernardyn** in the app menu on macOS
+or the **Help** menu on Windows/Linux. The version also appears in the status
+bar. On Windows, where the `bernardyn` GUI launcher has no console, use
+`python -m bernardyn --version` to print the version in a terminal.
+
 The environment file installs both repositories in editable mode. If an older
 `bernardyn` environment already exists with Python 3.14, remove and recreate it:
 
