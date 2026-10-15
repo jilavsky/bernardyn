@@ -74,6 +74,26 @@ def test_new_2d_graph_has_a_portable_shortcut(qapp):
     window.close()
 
 
+def _accept_results(monkeypatch, analysis, kinds):
+    """Replace the batch result dialog with one that accepts a fixed choice."""
+    from PySide6.QtWidgets import QDialog
+
+    class AcceptingDialog:
+        DialogCode = QDialog.DialogCode
+
+        def __init__(self, survey, *, iq_allowed, parent=None):
+            self.survey = survey
+            self.iq_allowed = iq_allowed
+
+        def exec(self):
+            return QDialog.DialogCode.Accepted
+
+        def selection(self):
+            return analysis, kinds
+
+    monkeypatch.setattr(main_window, "ResultImportDialog", AcceptingDialog)
+
+
 def test_pyirena_distribution_import_creates_a_typed_linear_graph(qapp, monkeypatch):
     fixture = Path(__file__).parents[1] / "testData" / "Al_Mg_Si__40C_0min_0498.h5"
     window = MainWindow()
@@ -82,8 +102,7 @@ def test_pyirena_distribution_import_creates_a_typed_linear_graph(qapp, monkeypa
         "getOpenFileNames",
         lambda *args: ([str(fixture)], ""),
     )
-    choices = iter((("Size Distribution", True), ("Distribution", True)))
-    monkeypatch.setattr(main_window.QInputDialog, "getItem", lambda *args: next(choices))
+    _accept_results(monkeypatch, "size_distribution", ("volume_distribution",))
     window._add_pyirena_results()
     assert len(window.controller.workspace.graphs) == 2
     graph = window.controller.workspace.graphs[-1]
@@ -106,11 +125,7 @@ def test_pyirena_waxs_import_uses_linear_axes_and_includes_peaks(qapp, monkeypat
         "getOpenFileNames",
         lambda *args: ([str(fixture)], ""),
     )
-    monkeypatch.setattr(
-        main_window.QInputDialog,
-        "getItem",
-        lambda *args: ("I(Q) curves", True),
-    )
+    _accept_results(monkeypatch, "waxs_peakfit", ("iq",))
     window._add_pyirena_results()
     graph = window.controller.workspace.graphs[0]
     assert not graph.x_axis.log and not graph.y_axis.log
@@ -1145,3 +1160,63 @@ def test_reset_graph_defaults_keeps_the_scientific_view(qapp, monkeypatch):
     assert graph.view_transform_id == "kratky"
     assert (graph.x_axis.label, graph.y_axis.label) == ("q [Å⁻¹]", "Intensity·q² [cm⁻¹·Å⁻²]")
     assert not graph.y_axis.log
+
+
+def test_batch_result_import_groups_each_kind_into_one_graph(qapp, monkeypatch, tmp_path):
+    from shutil import copy2
+
+    source = Path(__file__).parents[1] / "testData"
+    files = [
+        copy2(source / "Al_Mg_Si__40C_0min_0498.h5", tmp_path / "first.h5"),
+        copy2(source / "Al_Mg_Si__40C_0min_0498.h5", tmp_path / "second.h5"),
+        copy2(source / "pyirena_1_2_SimpleFits_Porod.h5", tmp_path / "other.h5"),
+    ]
+    window = MainWindow()
+    monkeypatch.setattr(
+        main_window.QFileDialog, "getOpenFileNames", lambda *args: ([str(item) for item in files], "")
+    )
+    _accept_results(monkeypatch, "unified_fit", ("iq", "residuals"))
+    skipped = []
+    monkeypatch.setattr(main_window.QMessageBox, "information", lambda *args: skipped.append(args[2]))
+    count = window.undo_stack.count()
+
+    window._add_pyirena_results()
+
+    iq_graph, residual_graph = window.controller.workspace.graphs
+    assert len(iq_graph.series) == 4  # data + fit for each of two files
+    assert len(residual_graph.series) == 2
+    assert residual_graph.title == "Unified Fit residuals"
+    # One colour per file on both graphs; the fit is drawn as a line.
+    assert len({series.style.color for series in iq_graph.series}) == 2
+    assert {series.style.color for series in residual_graph.series} == {
+        series.style.color for series in iq_graph.series
+    }
+    assert skipped and "other.h5" in skipped[0]
+    assert window.undo_stack.count() == count + 1
+    window.undo_stack.undo()
+    assert len(window.controller.workspace.graphs) == 1
+    assert not window.controller.workspace.graphs[0].series
+    window.controller.workspace.dirty = False
+    window.close()
+
+
+def test_result_import_dialog_previews_targets_and_skips(qapp, tmp_path):
+    from shutil import copy2
+
+    from bernardyn.gui.dialogs import ResultImportDialog
+    from bernardyn.io.result_batch import survey_results
+
+    source = Path(__file__).parents[1] / "testData"
+    files = [
+        copy2(source / "Al_Mg_Si__40C_0min_0498.h5", tmp_path / "sample.h5"),
+        copy2(source / "pyirena_1_2_WAXS_Al_7075.h5", tmp_path / "waxs.h5"),
+    ]
+    survey = survey_results(files)
+    dialog = ResultImportDialog(survey, iq_allowed=False)
+    assert dialog.analysis.currentData() == "unified_fit"
+    # Data + fit is disabled outside an I(Q) view, so the next kind is chosen.
+    assert dialog.selection() == ("unified_fit", ("residuals",))
+    text = dialog.preview.text()
+    assert "Residuals: 1 file → new graph “Unified Fit residuals”" in text
+    assert "Skipped 1 file: waxs.h5" in text
+    dialog.close()

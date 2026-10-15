@@ -170,3 +170,69 @@ def test_pyirena_1_2_saved_results_are_plottable_and_portable(tmp_path, analysis
         residual = load_result_curve(descriptor, "residuals")
         assert residual.curve.point_count > 0
         assert matches_dataset_filter(residual.curve, f"{analysis}_residuals")
+
+
+def _modeling(path):
+    return next(item for item in discover_results(path) if item.analysis == "modeling")
+
+
+def test_modeling_bundle_adds_the_primary_measured_curve():
+    bundle = load_result_bundle(_modeling(FIXTURE))
+    roles = [record.metadata["bernardyn_result"]["role"] for record in bundle.records]
+    assert roles == ["measured", "fit", "population_1"]
+    measured = bundle.records[0]
+    assert measured.metadata["bernardyn_result"]["measured_source"] == "primary_scattering_data"
+    assert measured.uncertainty is not None
+    assert bundle.styles[0].symbol == "o" and bundle.styles[0].line_style == "none"
+
+
+def test_modeling_without_primary_data_still_imports_its_model():
+    bundle = load_result_bundle(_modeling(RESULT_FIXTURES / "pyirena_1_2_Modeling_PP15.h5"))
+    roles = [record.metadata["bernardyn_result"]["role"] for record in bundle.records]
+    assert roles == ["fit", "population_1", "population_2"]
+
+
+def test_modeling_population_volume_distributions_integrate_to_their_volume_fraction():
+    from bernardyn.io.results import _result, load_result_curves
+
+    descriptor = _modeling(RESULT_FIXTURES / "pyirena_1_2_Modeling_PP15.h5")
+    assert "volume_distribution" in available_curve_kinds(descriptor)
+    (bundle,) = load_result_curves(descriptor, "volume_distribution")
+    curve = bundle.curve
+    assert (curve.x_unit, curve.y_unit) == ("angstrom", "volume_fraction/angstrom")
+    scale = _result(descriptor)["populations"][0]["scale"]
+    assert np.trapezoid(curve.y, curve.x) == pytest.approx(scale, rel=0.01)
+
+
+def test_result_reads_are_cached_until_the_file_changes(tmp_path, monkeypatch):
+    import os
+
+    from bernardyn.io import results
+
+    source = tmp_path / FIXTURE.name
+    copy2(FIXTURE, source)
+    reads = []
+    original = results._read_result
+    monkeypatch.setattr(results, "_read_result", lambda item: reads.append(item) or original(item))
+    results.clear_result_cache()
+    (descriptor, *_) = discover_results(source)
+    available_curve_kinds(descriptor)
+    load_result_bundle(descriptor)
+    load_result_curve(descriptor, "residuals")
+    assert len(reads) == 1
+    stat = source.stat()
+    os.utime(source, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
+    load_result_bundle(descriptor)
+    assert len(reads) == 2
+
+
+def test_survey_records_unreadable_files_instead_of_failing(tmp_path):
+    from bernardyn.io.result_batch import load_result_batch, survey_results
+
+    broken = tmp_path / "broken.h5"
+    broken.write_text("not hdf5")
+    survey = survey_results([FIXTURE, broken])
+    assert [item.error is not None for item in survey.files] == [False, True]
+    batch = load_result_batch(survey, "unified_fit", ("residuals",))
+    assert len(batch.curves["residuals"]) == 1
+    assert [path.name for path, _ in batch.skipped] == ["broken.h5"]

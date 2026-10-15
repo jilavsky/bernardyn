@@ -55,21 +55,31 @@ workspace. Each target graph applies its own selected view, so moving a curve
 to an I(Q) graph restores I(Q) rather than retaining a transform intended for
 the source graph. All transfers can be undone or redone.
 
-Use **Add pyIrena results…** to select saved **Unified Fit**, **Size
-Distribution**, **Modeling**, **Simple Fits**, **WAXS Peak Fit**, or **Carbon
-fitting** results from an HDF5 file. Bernardyn uses pyIrena's HDF5 schema to
-find saved results and its result readers to load them. Choose **I(Q) curves**
-to add the available measured data, total fit, and components to a graph using
-the General I(Q) view. Modeling stores a total model and population curves,
-but no measured data. WAXS includes its background and individual peaks;
-Carbon fitting includes its grain Porod, micropore, and diffraction components.
-WAXS curves use linear axes when added to an empty graph.
+Use **Add pyIrena results…** to select one or more HDF5 files with saved
+**Unified Fit**, **Size Distribution**, **Modeling**, **Simple Fits**, **WAXS
+Peak Fit**, or **Carbon fitting** results. Bernardyn uses pyIrena's HDF5 schema
+to find saved results and its result readers to load them. One dialog applies
+to the whole selection: choose the analysis, then tick the curves to add. The
+dialog shows how many files offer each choice, where the curves will go, and
+which files will be skipped and why.
 
-Choose **Residuals** to create a separate graph with normalised residual on a
-linear Y axis. WAXS residuals also use a linear Q axis. Size Distribution
-offers separate linear graphs for volume, number, surface, and cumulative
-distributions. Bernardyn uses the stored radius centres and values; it does
-not infer bin widths or recalculate distributions.
+**Data + fit I(Q)** adds the measured data, total fit, and components to the
+current graph, which must use the General I(Q) view. With several files, each
+file keeps one colour: data as symbols, the fit as a solid line, and components
+dashed. Modeling saves no copy of the data it fitted, so Bernardyn adds the
+file's primary scattering curve as the measured data when the file has one.
+WAXS includes its background and individual peaks; Carbon fitting includes its
+grain Porod, micropore, and diffraction components. WAXS curves use linear axes
+when added to an empty graph.
+
+Every other choice creates **one new graph holding that curve from every
+file**, so a batch gives a comparison rather than a tab per file. A file keeps
+the same colour on each graph. **Residuals** use a linear Y axis; WAXS
+residuals also use a linear Q axis. Size Distribution offers volume, number,
+surface, and cumulative distributions, and Modeling offers the volume
+distribution of each population. Bernardyn uses the stored radius centres and
+values; it does not infer bin widths or recalculate distributions. The whole
+import is one Undo step.
 
 Use **Graph → New 2D graph** or Ctrl/Cmd+Shift+N to create a 2-D graph quickly.
 

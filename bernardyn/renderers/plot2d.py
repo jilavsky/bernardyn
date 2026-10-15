@@ -539,8 +539,10 @@ class Plot2DWidget(pg.PlotWidget):
                 upper = snapshot.y + snapshot.dy
                 lower = snapshot.y - snapshot.dy
                 valid &= (upper > 0) & (lower > 0)
-                top = np.log10(upper) - y
-                bottom = y - np.log10(lower)
+                # Bars reaching zero or below are excluded by ``valid``.
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    top = np.log10(upper) - y
+                    bottom = y - np.log10(lower)
             else:
                 top = snapshot.dy
                 bottom = snapshot.dy
@@ -562,8 +564,9 @@ class Plot2DWidget(pg.PlotWidget):
                 right = snapshot.x + snapshot.dx
                 left = snapshot.x - snapshot.dx
                 valid &= (right > 0) & (left > 0)
-                right = np.log10(right) - x
-                left = x - np.log10(left)
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    right = np.log10(right) - x
+                    left = x - np.log10(left)
             else:
                 right = snapshot.dx
                 left = snapshot.dx

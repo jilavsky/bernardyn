@@ -13,6 +13,18 @@ behavior changes.
 - A graph warns when its curves have different units (for example arbitrary
   and absolute intensity) and so are not on a common scale. Mixing is still
   allowed.
+- **Add pyIrena results…** now handles many files at once with a single
+  dialog. Choose the analysis and the curves you want; the dialog shows how
+  many files offer each choice, where the curves will go, and which files will
+  be skipped and why.
+  - Each chosen curve kind becomes one comparison graph holding every file's
+    curve, with one colour per file.
+  - The whole import is one Undo step.
+- Modeling imports include the file's primary scattering curve as the measured
+  data, when the file has one.
+- Modeling population volume distributions can be imported (one graph for all
+  populations). The new `modeling_volume_distribution` recipe does the same
+  from the Python API, CLI, and MCP.
 
 ### Changed
 
@@ -45,6 +57,14 @@ behavior changes.
   axes for that view, rather than showing Kratky data under I(Q) labels.
 - The Python API and CLI reject an unsupported image file type before writing
   any output, so a failed request no longer leaves a package without its image.
+- Importing residuals or distributions from several files no longer opens a
+  separate graph for each file.
+- The `dimensionless_kratky` recipe now takes I₀ and Rg from each dataset's own
+  metadata when no explicit values are given, as documented.
+- Error bars that reach zero or below on a logarithmic axis no longer emit
+  numerical warnings; they were already hidden.
+- Reading saved results is faster: each file is read once per import rather
+  than once per curve kind.
 
 ## 0.0.1b7 — 2026-10-02
 

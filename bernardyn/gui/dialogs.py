@@ -45,6 +45,7 @@ from bernardyn.io.file_browser import (
     make_file_matcher,
     sort_paths,
 )
+from bernardyn.io.result_batch import IQ_KIND, ResultSurvey, kind_label
 from bernardyn.io.sources import ScatteringLocation
 
 
@@ -378,6 +379,96 @@ class GraphSelectionDialog(QDialog):
             for index in range(self.list.count())
             if self.list.item(index).checkState() == Qt.CheckState.Checked
         ]
+
+
+def _files(count: int) -> str:
+    return f"{count} file" if count == 1 else f"{count} files"
+
+
+class ResultImportDialog(QDialog):
+    """Choose one analysis and its curve kinds for a whole batch of files.
+
+    Each chosen kind becomes one graph holding every file's curve, so a batch
+    of files gives a comparison rather than a tab per file.
+    """
+
+    def __init__(self, survey: ResultSurvey, *, iq_allowed: bool, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Add saved pyIrena results")
+        self.survey = survey
+        self.iq_allowed = iq_allowed
+        total = len(survey.files)
+        self.analysis = QComboBox(self)
+        for analysis, title, count in survey.analyses():
+            self.analysis.addItem(f"{title} — {count} of {_files(total)}", analysis)
+        self.kinds = QListWidget(self)
+        self.preview = QLabel(self)
+        self.preview.setWordWrap(True)
+        self.preview.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
+            parent=self,
+        )
+        self.buttons.accepted.connect(self.accept)
+        self.buttons.rejected.connect(self.reject)
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+        form.addRow("Analysis:", self.analysis)
+        layout.addLayout(form)
+        layout.addWidget(QLabel("Curves to add:"))
+        layout.addWidget(self.kinds)
+        layout.addWidget(self.preview)
+        layout.addWidget(self.buttons)
+        self.analysis.currentIndexChanged.connect(self._fill_kinds)
+        self.kinds.itemChanged.connect(lambda _item: self._update_preview())
+        self._fill_kinds()
+        self.resize(560, 420)
+
+    def _fill_kinds(self) -> None:
+        self.kinds.blockSignals(True)
+        self.kinds.clear()
+        analysis = self.analysis.currentData()
+        first_checked = False
+        for kind, count in self.survey.kinds(analysis) if analysis else ():
+            item = QListWidgetItem(f"{kind_label(kind)} ({_files(count)})")
+            item.setData(Qt.ItemDataRole.UserRole, kind)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            if kind == IQ_KIND and not self.iq_allowed:
+                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEnabled)
+                item.setToolTip("Data + fit uses the General I(Q) view. Select an I(Q) graph first.")
+                item.setCheckState(Qt.CheckState.Unchecked)
+            elif not first_checked:
+                item.setCheckState(Qt.CheckState.Checked)
+                first_checked = True
+            else:
+                item.setCheckState(Qt.CheckState.Unchecked)
+            self.kinds.addItem(item)
+        self.kinds.blockSignals(False)
+        self._update_preview()
+
+    def selection(self) -> tuple[str, tuple[str, ...]]:
+        kinds = tuple(
+            str(self.kinds.item(index).data(Qt.ItemDataRole.UserRole))
+            for index in range(self.kinds.count())
+            if self.kinds.item(index).checkState() == Qt.CheckState.Checked
+        )
+        return str(self.analysis.currentData() or ""), kinds
+
+    def _update_preview(self) -> None:
+        analysis, kinds = self.selection()
+        title = next((name for key, name, _ in self.survey.analyses() if key == analysis), "")
+        counts = dict(self.survey.kinds(analysis)) if analysis else {}
+        lines = []
+        for kind in kinds:
+            target = "the current graph" if kind == IQ_KIND else f"new graph “{title} {kind_label(kind).lower()}”"
+            lines.append(f"{kind_label(kind)}: {_files(counts.get(kind, 0))} → {target}")
+        skipped = self.survey.skipped(analysis, kinds) if analysis else []
+        if skipped:
+            names = ", ".join(path.name for path, _ in skipped[:6])
+            more = f" and {len(skipped) - 6} more" if len(skipped) > 6 else ""
+            lines.append(f"Skipped {_files(len(skipped))}: {names}{more}")
+        self.preview.setText("\n".join(lines) or "Choose at least one kind of curve.")
+        self.buttons.button(QDialogButtonBox.StandardButton.Ok).setEnabled(bool(kinds))
 
 
 class HDFMappingDialog(QDialog):

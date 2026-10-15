@@ -79,30 +79,26 @@ One upstream item remains: pyIrena's Simple Fits writer and schema still label
 
 ### P2
 
-**F4 — Modeling results are incomplete (verified).** Import gives only the
-total model and the population curves. It omits:
-- the measured data;
-- residuals;
-- per-population `volume_dist`/`number_dist`, which the reader already
-  returns.
+**F4 — done (unreleased), mostly.** Modeling "Data + fit" now adds the file's
+primary NXcanSAS curve as the measured data, when the file has one. It is
+marked `measured_source: primary_scattering_data`, and the full data range is
+kept, not trimmed to the fit range. Each population's `volume_dist` is offered
+as a volume-fraction-density curve: ∫P(r)dr equals the population's volume
+fraction, which was verified on the fixtures.
 
-`available_curve_kinds()` returns `()` for both Modeling fixtures. "Data + fit"
-for Modeling therefore shows no data.
-*Fix:* pair the model with the file's primary NXcanSAS curve over the fitted
-Q range, marked as role `measured` with provenance. Add residuals if the
-reader stores them. Add population distributions as `GenericCurve`s using the
-existing distribution semantics.
+Still open:
+- Modeling residuals. pyIrena does not store them, and Bernardyn does not
+  recompute model curves.
+- Modeling `number_dist`. It has no stored or documented absolute units, so
+  ask pyIrena to write a `units` attribute for both arrays.
 
-**F5 — Batch result import makes one graph per file and asks two modal
-questions per file.** For residuals and distributions, `_add_results` calls
-`new_graph()` inside the per-file loop. Ten files give ten residual tabs
-rather than one comparison graph, after twenty dialogs. Colour assignment
-also assumes two records per bundle, so WAXS peak colours collide with the
-next file.
-*Fix:* use one dialog for the batch, with the union of available analyses and
-the kinds as checkboxes. Group the selections into one graph per (analysis,
-kind). Assign colours per file, with role shown by line style. This is
-also the main open R3 usability item (§5).
+**F5 — done (unreleased).** A Qt-free planner, `bernardyn/io/result_batch.py`,
+surveys the files, loads the selection, and groups the curves. One dialog,
+`ResultImportDialog`, covers the whole batch:
+- Each chosen kind makes one graph, with one colour per file; components are
+  dashed when there are several files.
+- Skipped files are reported.
+- The import is one Undo step.
 
 **F6 — done (unreleased).** A command whose first `redo()` fails marks
 itself obsolete and rolls back, so no phantom Undo entry is left.
@@ -194,10 +190,8 @@ Each is small (≤ ½ day) and independent:
 - **I5 Self-describing exports.** CSV: add a `# bernardyn-export v1` header with
   the graph title, axis labels and units, and transform id/version. ITX: add
   `SetScale d` units per wave. Use `zip(strict=True)`.
-- **I6 Cheaper result reading.** `available_curve_kinds()` and then
-  `load_result_curve()` re-read the file for every kind. Cache `_result` per
-  descriptor and fingerprint. Merge the duplicated provenance code in
-  `load_result_bundle`/`_result_context`.
+- ~~**I6 Cheaper result reading.**~~ Done: results and units are cached per
+  file identity, and the provenance code is shared.
 - **I7 Doctor checks.** Report a pyIrena version below the floor, a missing
   `mcp` extra, and the PySide6 build in use.
 
@@ -207,12 +201,13 @@ Merged from the old roadmap (R3, M3, R4, §6, §12), `docs/TODO.md`, and
 `specifications.txt`:
 
 ### R3: result workflow polish
-- One batch result dialog with grouping preview and skipped-file explanations
-  (F5).
+- ~~One batch result dialog with grouping preview and skipped-file explanations
+  (F5).~~ Done.
 - A compact result summary in the inspector: χ², fit-quality, key scalars from
   `bernardyn_result` metadata, and accessible provenance, without a permanent
   editable panel per tool.
-- Modeling completeness (F4). Optional: SAXS Morph and Data Merge results that
+- Modeling completeness (F4): done, except residuals and number distributions
+  (upstream). Optional: SAXS Morph and Data Merge results that
   are in pyIrena's `TOOL_REGISTRY` but not in `_ANALYSES`.
 - Optional, only after user feedback: a shared-axis residual subpanel under
   I(Q). Separate tabs remain the default.
@@ -275,7 +270,7 @@ Merged from the old roadmap (R3, M3, R4, §6, §12), `docs/TODO.md`, and
 | 2 | ~~F7~~ — done | — | — |
 | 3 | ~~F6, F8~~ — done | — | — |
 | 4 | ~~F13–F15~~ — done (default branch is `main`); local pyIrena reinstall remains | — | — |
-| 5 | **F5 + I6** batch result dialog with grouped graphs; **F4** Modeling completeness | 2–3 d | The main remaining usability gap for real multi-file work |
+| 5 | ~~F5 + I6, F4~~ — done; Modeling residuals and number-distribution units need pyIrena | — | — |
 | 6 | **F9** uncertainty kind for scattering data; **F10, F11, F12** | 1 d | Honest uncertainties; robustness |
 | 7 | **I1–I5, I7** quick improvements | 1–2 d | Visible polish, low risk |
 | 8 | Usability pass with beamline data (§2.6), then release **1.0.0rc1** | — | Gate |

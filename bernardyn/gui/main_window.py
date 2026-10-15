@@ -60,18 +60,14 @@ from bernardyn.gui.dialogs import (
     GraphSelectionDialog,
     HDFMappingDialog,
     LocationDialog,
+    ResultImportDialog,
     SeriesTransformParameterDialog,
 )
 from bernardyn.gui.graph_page import GraphPage, OutputPreviewDialog, PreviewPage
 from bernardyn.gui.inspector import InspectorWidget
 from bernardyn.io.container import ensure_package_suffix, load_package
 from bernardyn.io.igor import export_datasets_to_h5xp
-from bernardyn.io.results import (
-    available_curve_kinds,
-    discover_results,
-    load_result_bundle,
-    load_result_curve,
-)
+from bernardyn.io.result_batch import ResultBatch, load_result_batch, survey_results
 from bernardyn.renderers import builtin_renderers
 from bernardyn.state import UserState
 from bernardyn.template.graph_templates import apply_template, load_template, save_template
@@ -118,6 +114,13 @@ def _edit_error_text(exc: BaseException) -> str:
     which is noise to a user.
     """
     return _UNDO_OVERRIDE_PREFIX.sub("", str(exc))
+
+
+def _skipped_text(skipped) -> str:
+    lines = [f"{path.name}: {reason}" for path, reason in skipped[:12]]
+    if len(skipped) > 12:
+        lines.append(f"… and {len(skipped) - 12} more")
+    return "\n".join(lines)
 
 
 class WorkerSignals(QObject):
@@ -1149,105 +1152,94 @@ class MainWindow(QMainWindow):
             str(self.user_state.get("last_data_folder", "")),
             "HDF5 / NeXus files (*.h5 *.hdf5 *.hdf *.nxs)",
         )
-        selected_results = []
-        for value in paths:
-            try:
-                descriptors = discover_results(value)
-                if not descriptors:
-                    QMessageBox.information(
-                        self, "pyIrena results", f"No supported saved results in {Path(value).name}."
-                    )
-                    continue
-                descriptor = descriptors[0]
-                if len(descriptors) > 1:
-                    title, accepted = QInputDialog.getItem(
-                        self,
-                        "Choose saved result",
-                        f"Available in {Path(value).name}:",
-                        [item.title for item in descriptors],
-                        0,
-                        False,
-                    )
-                    if not accepted:
-                        continue
-                    descriptor = next(item for item in descriptors if item.title == title)
-                curve_labels = {
-                    "residuals": "Residuals",
-                    "volume_distribution": "Distribution",
-                    "number_distribution": "Number distribution",
-                    "surface_distribution": "Surface distribution",
-                    "cumulative_volume_distribution": "Cumulative volume distribution",
-                    "cumulative_number_distribution": "Cumulative number distribution",
-                    "cumulative_surface_distribution": "Cumulative surface distribution",
-                }
-                choices = [("I(Q) curves", "iq")]
-                choices.extend(
-                    (curve_labels.get(kind, kind), kind)
-                    for kind in available_curve_kinds(descriptor)
-                )
-                choice, accepted = QInputDialog.getItem(
-                    self,
-                    "Choose result data",
-                    f"Import from {descriptor.title}:",
-                    [label for label, _ in choices],
-                    0,
-                    False,
-                )
-                if not accepted:
-                    continue
-                kind = next(kind for label, kind in choices if label == choice)
-                selected_results.append(
-                    (kind, load_result_bundle(descriptor) if kind == "iq" else load_result_curve(descriptor, kind))
-                )
-            except Exception as exc:
-                QMessageBox.warning(self, "pyIrena results", f"{Path(value).name}: {exc}")
-        if not selected_results:
+        if not paths:
             return
-        try:
-            if any(kind == "iq" for kind, _ in selected_results) and graph.view_transform_id != "raw":
-                raise ValueError("Data + fit uses the General I(Q) view. Create or select an I(Q) graph first.")
+        survey = survey_results(paths)
+        if not survey.analyses():
+            QMessageBox.information(
+                self,
+                "pyIrena results",
+                "No supported saved results in the selected files.\n\n"
+                + _skipped_text(survey.skipped("", ())),
+            )
+            return
+        dialog = ResultImportDialog(survey, iq_allowed=graph.view_transform_id == "raw", parent=self)
+        if dialog.exec() != dialog.DialogCode.Accepted:
+            return
+        analysis, kinds = dialog.selection()
+        batch = load_result_batch(survey, analysis, kinds)
+        if not batch.iq and not batch.curves:
+            QMessageBox.warning(
+                self, "pyIrena results", "Nothing could be imported.\n\n" + _skipped_text(batch.skipped)
+            )
+            return
+        graph_id = graph.id
+        if not self._push_edit(
+            WorkspaceEditCommand(self, "Import pyIrena results", lambda: self._add_result_batch(graph_id, batch)),
+            "pyIrena results",
+        ):
+            return
+        self.user_state.set("last_data_folder", str(Path(paths[0]).parent))
+        self.user_state.save()
+        if batch.skipped:
+            QMessageBox.information(
+                self, "pyIrena results", "Some files were skipped:\n\n" + _skipped_text(batch.skipped)
+            )
 
-            def action() -> None:
-                iq_bundles = [bundle for kind, bundle in selected_results if kind == "iq"]
-                if iq_bundles:
-                    datasets = []
-                    styles = []
-                    for bundle_index, bundle in enumerate(iq_bundles):
-                        base = len(graph.series) + 2 * bundle_index
-                        has_measured = bundle.records[0].metadata["bernardyn_result"]["role"] == "measured"
-                        datasets.extend(record.to_dataset() for record in bundle.records)
-                        styles.extend(
-                            replace(style, color=PALETTE[(base + max(0, index - int(has_measured))) % len(PALETTE)])
-                            for index, style in enumerate(bundle.styles)
-                        )
-                    if not graph.series and all(
-                        bundle.descriptor.analysis == "waxs_peakfit" for bundle in iq_bundles
-                    ):
-                        self.controller.update_graph(replace(
-                            graph,
-                            x_axis=replace(graph.x_axis, log=False),
-                            y_axis=replace(graph.y_axis, log=False),
-                        ))
-                    self.controller.add_datasets(datasets, graph_id=graph.id, series_styles=styles)
-                for kind, bundle in selected_results:
-                    if kind == "iq":
-                        continue
-                    target = self.controller.new_graph(title=bundle.graph_title)
-                    target = replace(
-                        target,
-                        x_axis=AxisSpec(label=axis_label(bundle.curve.x_label, bundle.curve.x_unit), log=bundle.x_log),
-                        y_axis=AxisSpec(label=axis_label(bundle.curve.y_label, bundle.curve.y_unit), log=bundle.y_log),
-                    )
-                    self.controller.update_graph(target)
-                    self.controller.add_datasets(
-                        (bundle.curve,), graph_id=target.id, series_styles=(bundle.style,)
-                    )
+    def _add_result_batch(self, graph_id: str, batch: ResultBatch) -> None:
+        """Add a loaded result batch: I(Q) to the graph, one new graph per other kind.
 
-            self.undo_stack.push(WorkspaceEditCommand(self, "Import pyIrena results", action))
-            self.user_state.set("last_data_folder", str(Path(paths[0]).parent))
-            self.user_state.save()
-        except Exception as exc:
-            QMessageBox.warning(self, "pyIrena results", _edit_error_text(exc))
+        Across several files each file keeps one colour; within one file,
+        components get their own colours as before.
+        """
+        graph = self.controller.workspace.graph(graph_id)
+        if batch.iq:
+            datasets = []
+            styles = []
+            several = len(batch.iq) > 1
+            base = len(graph.series)
+            for file_index, bundle in batch.iq:
+                has_measured = bundle.records[0].metadata["bernardyn_result"]["role"] == "measured"
+                for index, (record, style) in enumerate(zip(bundle.records, bundle.styles, strict=True)):
+                    if several:
+                        # Role is shown by style: symbols for data, a solid
+                        # line for the fit, dashes for components.
+                        color = PALETTE[(base + file_index) % len(PALETTE)]
+                        if record.metadata["bernardyn_result"]["role"] not in ("measured", "fit"):
+                            style = replace(style, line_style="dash")
+                    else:
+                        color = PALETTE[(base + max(0, index - int(has_measured))) % len(PALETTE)]
+                    datasets.append(record.to_dataset())
+                    styles.append(replace(style, color=color))
+            if not graph.series and all(
+                bundle.descriptor.analysis == "waxs_peakfit" for _, bundle in batch.iq
+            ):
+                self.controller.update_graph(replace(
+                    graph,
+                    x_axis=replace(graph.x_axis, log=False),
+                    y_axis=replace(graph.y_axis, log=False),
+                ))
+            self.controller.add_datasets(datasets, graph_id=graph.id, series_styles=styles)
+        for items in batch.curves.values():
+            first = items[0][1]
+            target = self.controller.new_graph(title=first.graph_title)
+            target = replace(
+                target,
+                x_axis=AxisSpec(label=axis_label(first.curve.x_label, first.curve.x_unit), log=first.x_log),
+                y_axis=AxisSpec(label=axis_label(first.curve.y_label, first.curve.y_unit), log=first.y_log),
+            )
+            self.controller.update_graph(target)
+            # One curve per file: colour by file.  Several per file (Modeling
+            # populations): colour each curve so they stay distinguishable.
+            by_file = len({file_index for file_index, _ in items}) == len(items)
+            self.controller.add_datasets(
+                tuple(bundle.curve for _, bundle in items),
+                graph_id=target.id,
+                series_styles=tuple(
+                    replace(bundle.style, color=PALETTE[(file_index if by_file else position) % len(PALETTE)])
+                    for position, (file_index, bundle) in enumerate(items)
+                ),
+            )
 
     def _dropped_data_paths(self, dropped: list[Path]) -> None:
         """Open dropped files/folders through the normal profile-aware importer."""

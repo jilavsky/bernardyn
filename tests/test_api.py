@@ -182,3 +182,33 @@ def test_unsupported_image_suffix_is_rejected_before_any_output(tmp_path):
     with pytest.raises(ValueError, match="image_path"):
         create_plot(request)
     assert list(tmp_path.iterdir()) == []
+
+
+def test_modeling_volume_distribution_recipe_puts_each_population_on_one_graph(tmp_path):
+    result = create_plot(PlotRequest(
+        "modeling_volume_distribution",
+        result=ResultInput(RESULT_FIXTURES / "pyirena_1_2_Modeling_PP15.h5", "modeling"),
+        package_path=tmp_path / "populations",
+    ))
+    assert len(result.graph.series) == 1
+    assert result.graph.y_axis.label == "Volume fraction density [vol. fraction·Å⁻¹]"
+    assert load_package(result.package_path).workspace.graphs[0].title == "Modeling volume distribution"
+
+
+def test_dimensionless_kratky_falls_back_to_each_datasets_own_metadata(tmp_path, monkeypatch):
+    from bernardyn.api import PlotService
+    from bernardyn.core.models import Dataset
+
+    samples = iter((
+        Dataset(q=[0.01, 0.02], intensity=[2.0, 1.0], label="a", metadata={"I0": 2.0, "Rg": 10.0}),
+        Dataset(q=[0.01, 0.02], intensity=[4.0, 3.0], label="b", metadata={"I0": 5.0, "Rg": 20.0}),
+    ))
+    monkeypatch.setattr(PlotService, "_load_scattering", lambda self, controller, selection: next(samples))
+    result = create_plot(PlotRequest(
+        "dimensionless_kratky",
+        inputs=(ScatteringInput(DATA), ScatteringInput(DATA)),
+        package_path=tmp_path / "dk",
+    ))
+    assert [series.transform_parameters for series in result.graph.series] == [
+        {"I0": 2.0, "Rg": 10.0}, {"I0": 5.0, "Rg": 20.0},
+    ]

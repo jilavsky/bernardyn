@@ -78,8 +78,9 @@ paths and point-count diagnostics.
   `I0` and `Rg` in each `series_parameters` row (or matching source metadata).
 - `<tool>_data_fit` recipes for `unified_fit`, `size_distribution`, `modeling`,
   `simple_fits`, `waxs_peakfit`, and `carbon_fit` use the saved I(Q) curves.
-  Modeling includes its total and population models; WAXS includes background
-  and individual peaks; Carbon fitting includes its component curves.
+  Modeling includes its total and population models, plus the file's primary
+  scattering curve as measured data when present; WAXS includes background and
+  individual peaks; Carbon fitting includes its component curves.
 - `<tool>_residuals` recipes for every listed tool except Modeling use typed
   residual curves with a linear Y axis. WAXS uses a linear Q axis too.
 - `size_distribution_volume_distribution`, `size_distribution_number_distribution`,
@@ -89,6 +90,8 @@ paths and point-count diagnostics.
   `size_distribution_cumulative_number_distribution`, and
   `size_distribution_cumulative_surface_distribution` use their stored
   cumulative arrays without recalculating them.
+- `modeling_volume_distribution` puts the stored volume-fraction density of
+  every Modeling population on one graph.
 
 Recipes preserve the same canonical datasets, transformations, graph package
 format, and result semantics as the GUI. Pixel-identical images are not

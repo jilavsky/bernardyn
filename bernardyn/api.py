@@ -18,11 +18,10 @@ from bernardyn.core.units import axis_label
 from bernardyn.io.container import ensure_package_suffix
 from bernardyn.io.results import (
     ResultBundle,
-    ResultCurveBundle,
     ResultDescriptor,
     discover_results,
     load_result_bundle,
-    load_result_curve,
+    load_result_curves,
 )
 from bernardyn.io.sources import ScatteringLocation
 from bernardyn.template.graph_templates import apply_template, load_template
@@ -186,8 +185,14 @@ RECIPES = (
         result_kind="cumulative_surface_distribution",
     ),
     RecipeDescriptor(
-        "modeling_data_fit", "Modeling curves", "Saved total and population model I(Q).",
+        "modeling_data_fit", "Modeling curves",
+        "The file's primary measured I(Q), when present, with saved total and population model I(Q).",
         result_analysis="modeling", result_kind="data_fit",
+    ),
+    RecipeDescriptor(
+        "modeling_volume_distribution", "Modeling volume distributions",
+        "Saved volume-fraction density of each Modeling population.",
+        result_analysis="modeling", result_kind="volume_distribution",
     ),
     RecipeDescriptor(
         "simple_fits_data_fit", "Simple Fits data + fit", "Saved Simple Fits I(Q) curves.",
@@ -357,8 +362,11 @@ class PlotService:
         graph = replace(controller.workspace.graph(graph.id), title=recipe.name)
         controller.update_graph(graph)
         datasets = tuple(self._load_scattering(controller, selection) for selection in request.inputs)
-        parameters = request.series_parameters or tuple({} for _ in datasets)
-        controller.add_datasets(datasets, graph_id=graph.id, transform_parameters=parameters)
+        # Without explicit rows each dataset falls back to its own metadata
+        # (e.g. I0/Rg), never to another sample's values.
+        controller.add_datasets(
+            datasets, graph_id=graph.id, transform_parameters=request.series_parameters or None
+        )
         return controller.workspace.graph(graph.id)
 
     def _load_scattering(self, controller: ApplicationController, selection: ScatteringInput) -> Dataset:
@@ -407,8 +415,10 @@ class PlotService:
                 series_styles=styles,
             )
             return controller.workspace.graph(graph.id)
-        bundle = load_result_curve(descriptor, recipe.result_kind or "")
-        assert isinstance(bundle, ResultCurveBundle)
+        bundles = load_result_curves(descriptor, recipe.result_kind or "")
+        if not bundles:
+            raise ValueError(f"{recipe.name} found no stored curves in {descriptor.path.name}")
+        bundle = bundles[0]
         graph = replace(
             graph,
             title=bundle.graph_title,
@@ -416,7 +426,14 @@ class PlotService:
             y_axis=AxisSpec(label=axis_label(bundle.curve.y_label, bundle.curve.y_unit), log=bundle.y_log),
         )
         controller.update_graph(graph)
-        controller.add_datasets((bundle.curve,), graph_id=graph.id, series_styles=(bundle.style,))
+        controller.add_datasets(
+            tuple(item.curve for item in bundles),
+            graph_id=graph.id,
+            series_styles=tuple(
+                replace(item.style, color=PALETTE[index % len(PALETTE)])
+                for index, item in enumerate(bundles)
+            ),
+        )
         return controller.workspace.graph(graph.id)
 
     def _apply_presentation(

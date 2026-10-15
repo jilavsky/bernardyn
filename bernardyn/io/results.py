@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Mapping
-from dataclasses import dataclass
+from collections import OrderedDict
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -88,8 +89,36 @@ def _reader():
     return load_result
 
 
+# Recently read results, keyed by file identity.  Choosing curves and then
+# loading several kinds from one file would otherwise re-read it each time.
+_CACHE: OrderedDict[tuple[str, str, str, int, int], Any] = OrderedDict()
+_CACHE_SIZE = 64
+
+
+def _cached(kind: str, descriptor: ResultDescriptor, load: Callable[[ResultDescriptor], Any]) -> Any:
+    """Return ``load(descriptor)``, reusing it while the file is unchanged."""
+    stat = descriptor.path.stat()
+    key = (kind, str(descriptor.path), descriptor.analysis, stat.st_size, stat.st_mtime_ns)
+    if key in _CACHE:
+        _CACHE.move_to_end(key)
+        return _CACHE[key]
+    value = load(descriptor)
+    _CACHE[key] = value
+    while len(_CACHE) > _CACHE_SIZE:
+        _CACHE.popitem(last=False)
+    return value
+
+
+def clear_result_cache() -> None:
+    _CACHE.clear()
+
+
 def _result(descriptor: ResultDescriptor) -> Mapping[str, Any]:
     """Load one result with pyIrena's readers, including all Sizes curves."""
+    return _cached("result", descriptor, _read_result)
+
+
+def _read_result(descriptor: ResultDescriptor) -> Mapping[str, Any]:
     if descriptor.analysis in _EXTRA_READERS:
         from importlib import import_module
 
@@ -128,6 +157,10 @@ def _result(descriptor: ResultDescriptor) -> Mapping[str, Any]:
 
 def _stored_units(descriptor: ResultDescriptor) -> dict[str, str]:
     """Return the ``units`` attribute of each array directly in the result group."""
+    return _cached("units", descriptor, _read_stored_units)
+
+
+def _read_stored_units(descriptor: ResultDescriptor) -> dict[str, str]:
     from pyirena.io.schema import TOOL_REGISTRY
 
     units: dict[str, str] = {}
@@ -207,29 +240,21 @@ def load_result_bundle(descriptor: ResultDescriptor) -> ResultBundle:
     uncertainty = (
         None if uncertainty_value is None else _array(result, "intensity_error", length=len(q))
     )
-    fingerprint = _fingerprint(descriptor.path)
-    result_metadata = {
-        "analysis": descriptor.analysis,
-        "title": descriptor.title,
-        "timestamp": result.get("timestamp"),
-        "program": result.get("program"),
-        "chi_squared": result.get("chi_squared"),
-        "fit_quality": result.get("fit_quality"),
-    }
-    provenance = {
-        "source_name": descriptor.path.name,
-        "source_path": str(descriptor.path),
-        "adapter": _reader_id(descriptor.analysis),
-        "adapter_version": "1",
-        "result": result_metadata,
-    }
+    fingerprint, result_metadata, provenance = _result_context(descriptor, result)
     stem = descriptor.path.stem
     records: list[ScatteringRecord] = []
     styles: list[SeriesStyle] = []
     stored = _stored_units(descriptor)
     q_key = "model_q" if descriptor.analysis == "modeling" else "Q"
     q_unit = stored.get(q_key, "1/angstrom")
-    has_measured = result.get("intensity_data") is not None
+    # Modeling saves no copy of the data it fitted; use the file's primary
+    # scattering curve, which is what pyIrena Modeling reads by default.
+    primary = (
+        _primary_measured(descriptor)
+        if descriptor.analysis == "modeling" and result.get("intensity_data") is None
+        else None
+    )
+    has_measured = result.get("intensity_data") is not None or primary is not None
     measured_unit = (
         stored.get("intensity_data")
         or _registry_unit(descriptor.analysis, "intensity_data")
@@ -242,6 +267,22 @@ def load_result_bundle(descriptor: ResultDescriptor) -> ResultBundle:
         "carbon_fit": "I_model",
     }.get(descriptor.analysis, "intensity_model")
 
+    if primary is not None:
+        records.append(replace(
+            primary,
+            label=f"{stem} — {descriptor.title} data",
+            metadata={**primary.metadata, "bernardyn_result": {
+                **result_metadata,
+                "role": "measured",
+                "measured_source": "primary_scattering_data",
+                "intensity_unit_source": "file",
+            }},
+            provenance={**primary.provenance, "result": result_metadata},
+        ))
+        styles.append(SeriesStyle(
+            line_style="none", symbol="o", show_error_bars=primary.uncertainty is not None,
+        ))
+
     def intensity_unit(file_key: str, role: str) -> tuple[str, str]:
         """Choose a curve's intensity unit and record where it came from.
 
@@ -253,6 +294,8 @@ def load_result_bundle(descriptor: ResultDescriptor) -> ResultBundle:
         if role == "measured":
             return measured_unit, "file" if "intensity_data" in stored else "default"
         own = stored.get(file_key)
+        if primary is not None and _is_arbitrary(own):
+            return primary.intensity_unit, "measured_data"
         if has_measured and _is_arbitrary(own):
             return measured_unit, "measured_data"
         if own is not None:
@@ -323,6 +366,20 @@ def load_result_bundle(descriptor: ResultDescriptor) -> ResultBundle:
     )
 
 
+def _primary_measured(descriptor: ResultDescriptor) -> ScatteringRecord | None:
+    """Return the file's preferred primary I(Q) curve, or None if it has none."""
+    from bernardyn.io.sources import builtin_sources
+
+    sources = builtin_sources(discover_plugins=False)
+    try:
+        chosen = sources.select_preferred_locations(sources.discover_path(descriptor.path))
+        if len(chosen) != 1:
+            return None
+        return sources.load_location(chosen[0])
+    except (OSError, KeyError, ValueError, RuntimeError):
+        return None
+
+
 def _result_context(descriptor: ResultDescriptor, result: Mapping[str, Any]) -> tuple[str, dict[str, Any], dict[str, Any]]:
     fingerprint = _fingerprint(descriptor.path)
     result_metadata = {
@@ -351,6 +408,8 @@ def available_curve_kinds(descriptor: ResultDescriptor) -> tuple[str, ...]:
     available: list[str] = []
     if result.get("Q") is not None and result.get("residuals") is not None:
         available.append("residuals")
+    if descriptor.analysis == "modeling" and _modeling_populations(result):
+        available.append("volume_distribution")
     if (
         descriptor.analysis == "size_distribution"
         and result.get("r_grid") is not None
@@ -374,11 +433,77 @@ def available_curve_kinds(descriptor: ResultDescriptor) -> tuple[str, ...]:
     return tuple(available)
 
 
+def _modeling_populations(result: Mapping[str, Any]) -> list[tuple[int, Mapping[str, Any]]]:
+    """Return (1-based index, population) pairs that store a volume distribution."""
+    return [
+        (index, population)
+        for index, population in enumerate(result.get("populations") or (), 1)
+        if population.get("radius_grid") is not None and population.get("volume_dist") is not None
+    ]
+
+
+def load_result_curves(descriptor: ResultDescriptor, kind: str) -> tuple[ResultCurveBundle, ...]:
+    """Load every curve of one kind; Modeling has one distribution per population."""
+    if descriptor.analysis == "modeling" and kind == "volume_distribution":
+        result = _result(descriptor)
+        return tuple(
+            load_result_curve(descriptor, f"population_{index}_volume_distribution")
+            for index, _ in _modeling_populations(result)
+        )
+    return (load_result_curve(descriptor, kind),)
+
+
+def _modeling_volume_distribution(
+    descriptor: ResultDescriptor, result: Mapping[str, Any], kind: str
+) -> ResultCurveBundle:
+    fingerprint, result_metadata, provenance = _result_context(descriptor, result)
+    populations = dict(_modeling_populations(result))
+    try:
+        index = int(kind.split("_")[1])
+        population = populations[index]
+    except (IndexError, KeyError, ValueError):
+        raise ValueError(f"{kind!r} is not available for {descriptor.title}") from None
+    radii = _array(population, "radius_grid")
+    curve = GenericCurve(
+        x=radii,
+        y=_array(population, "volume_dist", length=len(radii)),
+        label=f"{descriptor.path.stem} — {descriptor.title} population {index} volume distribution",
+        role=CurveRole.DISTRIBUTION,
+        x_semantic="particle_radius",
+        y_semantic="volume_fraction_density_per_radius",
+        x_label="Radius",
+        y_label="Volume fraction density",
+        # pyIrena stores no units here.  Modeling normalises each population
+        # so that the integral over radius equals its volume fraction
+        # (pyirena.core.modeling.build_distributions), as for Size Distribution.
+        x_unit="angstrom",
+        y_unit="volume_fraction/angstrom",
+        metadata={"bernardyn_result": {
+            **result_metadata,
+            "role": kind,
+            "population": index,
+            "unit_source": "pyirena_modeling_normalisation",
+        }},
+        provenance=provenance,
+        source_fingerprint=fingerprint,
+    )
+    return ResultCurveBundle(
+        descriptor=descriptor,
+        curve=curve,
+        style=SeriesStyle(line_style="solid", symbol=None),
+        graph_title=f"{descriptor.title} volume distribution",
+        x_log=False,
+        y_log=False,
+    )
+
+
 def load_result_curve(descriptor: ResultDescriptor, kind: str) -> ResultCurveBundle:
     """Load a supported non-I(Q) curve without assigning scattering semantics."""
     result = _result(descriptor)
     if not result.get("found"):
         raise ValueError(f"{descriptor.title} is no longer available in {descriptor.path.name}")
+    if descriptor.analysis == "modeling" and kind.startswith("population_"):
+        return _modeling_volume_distribution(descriptor, result, kind)
     fingerprint, result_metadata, provenance = _result_context(descriptor, result)
     stem = descriptor.path.stem
     stored = _stored_units(descriptor)
