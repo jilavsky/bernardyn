@@ -10,6 +10,29 @@ behavior changes.
 
 - The `bernardyn` launcher accepts `--version`, `-version`, `--v`, and `-V`.
   The desktop app shows its version in the status bar and in **About Bernardyn**.
+- A graph warns when its curves have different units (for example arbitrary
+  and absolute intensity) and so are not on a common scale. Mixing is still
+  allowed.
+
+### Changed
+
+- Axis labels show compact units (`q [Å⁻¹]`, `Intensity·q² [cm⁻¹·Å⁻²]`,
+  `Radius [Å]`). An empty graph takes its labels from the first curve added,
+  unless you have typed your own labels.
+- Saved pyIrena result curves take their units from the HDF5 file. A fitted
+  model or component shares the units of the measured data it was fitted to.
+- Size distribution curves are labelled with the stored units, e.g. volume
+  distributions show `vol. fraction·Å⁻¹`.
+
+### Fixed
+
+- Changing the scientific view (Kratky, Porod, Guinier, …) no longer drops the
+  units from both axis labels.
+- WAXS Peak Fit data + fit graphs are labelled in arbitrary units rather than
+  `cm⁻¹`.
+- Simple Fits data and model curves are no longer shown in different units on
+  one axis. pyIrena stores the model as `arb`, but it was fitted to the
+  absolute data.
 
 ## 0.0.1b7 — 2026-10-02
 

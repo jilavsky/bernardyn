@@ -52,6 +52,7 @@ from PySide6.QtWidgets import (
 from bernardyn import __version__
 from bernardyn.core.controller import PALETTE, ApplicationController
 from bernardyn.core.models import AxisSpec, GraphDocument
+from bernardyn.core.units import axis_label
 from bernardyn.gui.dataset_filters import DATASET_FILTERS, matches_dataset_filter
 from bernardyn.gui.dialogs import (
     DataFileSelectorDialog,
@@ -104,10 +105,6 @@ def _metadata_number(value, key: str) -> float | None:
         if found is not None:
             return found
     return None
-
-
-def _axis_label(label: str, unit: str) -> str:
-    return f"{label} [{unit}]" if unit else label
 
 
 class WorkerSignals(QObject):
@@ -951,6 +948,10 @@ class MainWindow(QMainWindow):
                 return
             parameters = dialog.values()
         before = graph
+        x_label, y_label = self.controller.axis_labels(
+            transform_id,
+            self.controller.workspace.datasets[graph.series[0].dataset_id] if graph.series else None,
+        )
         series = tuple(
             replace(
                 item,
@@ -963,8 +964,8 @@ class MainWindow(QMainWindow):
             graph,
             view_transform_id=transform_id,
             series=series,
-            x_axis=replace(graph.x_axis, label=transform.default_x_label, log=transform.default_x_log, auto_range=True),
-            y_axis=replace(graph.y_axis, label=transform.default_y_label, log=transform.default_y_log, auto_range=True),
+            x_axis=replace(graph.x_axis, label=x_label, log=transform.default_x_log, auto_range=True),
+            y_axis=replace(graph.y_axis, label=y_label, log=transform.default_y_log, auto_range=True),
         )
         try:
             self.controller.validate_graph_update(after, recompute=True)
@@ -1187,8 +1188,8 @@ class MainWindow(QMainWindow):
                     target = self.controller.new_graph(title=bundle.graph_title)
                     target = replace(
                         target,
-                        x_axis=AxisSpec(label=_axis_label(bundle.curve.x_label, bundle.curve.x_unit), log=bundle.x_log),
-                        y_axis=AxisSpec(label=_axis_label(bundle.curve.y_label, bundle.curve.y_unit), log=bundle.y_log),
+                        x_axis=AxisSpec(label=axis_label(bundle.curve.x_label, bundle.curve.x_unit), log=bundle.x_log),
+                        y_axis=AxisSpec(label=axis_label(bundle.curve.y_label, bundle.curve.y_unit), log=bundle.y_log),
                     )
                     self.controller.update_graph(target)
                     self.controller.add_datasets(

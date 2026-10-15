@@ -14,6 +14,7 @@ from typing import Mapping
 
 from bernardyn.core.controller import PALETTE, ApplicationController
 from bernardyn.core.models import AxisSpec, Dataset, GenericCurve, GraphDocument, PlotSeries
+from bernardyn.core.units import axis_label
 from bernardyn.io.container import ensure_package_suffix
 from bernardyn.io.results import (
     ResultBundle,
@@ -405,8 +406,8 @@ class PlotService:
         graph = replace(
             graph,
             title=bundle.graph_title,
-            x_axis=AxisSpec(label=_axis_label(bundle.curve.x_label, bundle.curve.x_unit), log=bundle.x_log),
-            y_axis=AxisSpec(label=_axis_label(bundle.curve.y_label, bundle.curve.y_unit), log=bundle.y_log),
+            x_axis=AxisSpec(label=axis_label(bundle.curve.x_label, bundle.curve.x_unit), log=bundle.x_log),
+            y_axis=AxisSpec(label=axis_label(bundle.curve.y_label, bundle.curve.y_unit), log=bundle.y_log),
         )
         controller.update_graph(graph)
         controller.add_datasets((bundle.curve,), graph_id=graph.id, series_styles=(bundle.style,))
@@ -512,10 +513,6 @@ def _result_descriptor(selection: ResultInput) -> ResultDescriptor:
         if descriptor.analysis == selection.analysis:
             return descriptor
     raise ValueError(f"{selection.analysis!r} result is not available in {selection.path.name}")
-
-
-def _axis_label(label: str, unit: str) -> str:
-    return f"{label} [{unit}]" if unit else label
 
 
 def _point_count(dataset: Dataset | GenericCurve) -> int:

@@ -19,6 +19,7 @@ from bernardyn.core.models import (
     new_id,
 )
 from bernardyn.core.transforms import TransformRegistry, builtin_transforms, resolve_series
+from bernardyn.core.units import axis_label, format_unit, units_equivalent
 from bernardyn.io.container import LoadedPackage, import_graphs, load_package, save_package
 from bernardyn.io.sources import ScatteringLocation, SourceRegistry, builtin_sources
 
@@ -32,6 +33,16 @@ PALETTE = (
     (140, 86, 75, 255),
     (227, 119, 194, 255),
 )
+
+# Stands in for "default scattering units" when a graph has no data yet, so
+# an empty graph is labelled as q [Å⁻¹] / Intensity [cm⁻¹] in every view.
+_NOMINAL_DATASET = Dataset(q=[1.0], intensity=[1.0], label="nominal")
+
+
+def _curve_units(dataset: Dataset | GenericCurve) -> tuple[str, str]:
+    if isinstance(dataset, GenericCurve):
+        return dataset.x_unit, dataset.y_unit
+    return dataset.q_unit, dataset.intensity_unit
 
 
 class ApplicationController:
@@ -134,6 +145,43 @@ class ApplicationController:
                     return found
         return None
 
+    def axis_labels(
+        self, transform_id: str, dataset: Dataset | GenericCurve | None = None
+    ) -> tuple[str, str]:
+        """Return X/Y axis labels, with units, for one view of one curve.
+
+        Without a curve the default scattering units are assumed.  Generic
+        curves always describe themselves.
+        """
+        if isinstance(dataset, GenericCurve):
+            return axis_label(dataset.x_label, dataset.x_unit), axis_label(dataset.y_label, dataset.y_unit)
+        transform = self.transforms.get(transform_id)
+        source = dataset if dataset is not None else _NOMINAL_DATASET
+        # Plugin transforms need not provide unit formulas; show them unitless.
+        x_unit = getattr(transform, "x_unit_formula", None)
+        y_unit = getattr(transform, "y_unit_formula", None)
+        return (
+            axis_label(transform.default_x_label, x_unit(source) if callable(x_unit) else ""),
+            axis_label(transform.default_y_label, y_unit(source) if callable(y_unit) else ""),
+        )
+
+    def _has_automatic_labels(self, graph: GraphDocument) -> bool:
+        """Whether an empty graph still carries labels Bernardyn generated.
+
+        Only such labels are replaced by the first curve's own quantities;
+        a label the user typed is never overwritten by adding data.
+        """
+        try:
+            transform = self.transforms.get(graph.view_transform_id)
+        except KeyError:
+            return False
+        automatic = {
+            self.axis_labels(graph.view_transform_id),
+            # Labels written by releases before units were added to views.
+            (transform.default_x_label, transform.default_y_label),
+        }
+        return (graph.x_axis.label, graph.y_axis.label) in automatic
+
     def add_dataset(
         self,
         dataset: Dataset | GenericCurve,
@@ -221,6 +269,13 @@ class ApplicationController:
                 )
             )
         candidate = graph.replace_series((*graph.series, *views))
+        if not graph.series and additions and self._has_automatic_labels(graph):
+            x_label, y_label = self.axis_labels(graph.view_transform_id, additions[0])
+            candidate = replace(
+                candidate,
+                x_axis=replace(candidate.x_axis, label=x_label),
+                y_axis=replace(candidate.y_axis, label=y_label),
+            )
         # Resolve before mutating the catalog or graph.  In particular, a
         # parameterized transform must not leave a half-imported dataset.
         datasets = {**self.workspace.datasets, **{dataset.id: dataset for dataset in additions}}
@@ -384,6 +439,38 @@ class ApplicationController:
                     x_log=graph.x_axis.log,
                     y_log=graph.y_axis.log,
                 )
+        return self._with_unit_warnings(graph, datasets, resolved)
+
+    @staticmethod
+    def _with_unit_warnings(
+        graph: GraphDocument,
+        datasets: Mapping[str, Dataset | GenericCurve],
+        resolved: dict[str, PlotSeries],
+    ) -> dict[str, PlotSeries]:
+        """Flag curves whose canonical units differ from the graph's first curve.
+
+        Mixed units are allowed (users may knowingly compare shapes), but a
+        shared axis must never imply a common scale silently.
+        """
+        if len(graph.series) < 2:
+            return resolved
+        reference = datasets[graph.series[0].dataset_id]
+        reference_units = _curve_units(reference)
+        for view in graph.series[1:]:
+            units = _curve_units(datasets[view.dataset_id])
+            differences = [
+                f"{axis}: {format_unit(own) or 'dimensionless'} vs "
+                f"{format_unit(first) or 'dimensionless'}"
+                for axis, own, first in zip(("X", "Y"), units, reference_units, strict=True)
+                if not units_equivalent(own, first)
+            ]
+            if differences and view.id in resolved:
+                snapshot = resolved[view.id]
+                warning = (
+                    f"{snapshot.label}: units differ from {reference.label!r} "
+                    f"({'; '.join(differences)}); these curves are not on a common scale"
+                )
+                resolved[view.id] = replace(snapshot, warnings=(*snapshot.warnings, warning))
         return resolved
 
     @staticmethod
@@ -461,6 +548,10 @@ class ApplicationController:
         ):
             raise ValueError("graphs containing generic curves support only the raw view")
         transform = self.transforms.get(transform_id)
+        x_label, y_label = self.axis_labels(
+            transform_id,
+            self.workspace.datasets[graph.series[0].dataset_id] if graph.series else None,
+        )
         series = tuple(
             replace(
                 item,
@@ -475,13 +566,13 @@ class ApplicationController:
             series=series,
             x_axis=replace(
                 graph.x_axis,
-                label=transform.default_x_label,
+                label=x_label,
                 log=transform.default_x_log,
                 auto_range=True,
             ),
             y_axis=replace(
                 graph.y_axis,
-                label=transform.default_y_label,
+                label=y_label,
                 log=transform.default_y_log,
                 auto_range=True,
             ),

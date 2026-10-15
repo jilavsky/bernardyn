@@ -87,7 +87,7 @@ def test_pyirena_distribution_import_creates_a_typed_linear_graph(qapp, monkeypa
     window._add_pyirena_results()
     assert len(window.controller.workspace.graphs) == 2
     graph = window.controller.workspace.graphs[-1]
-    assert graph.x_axis.label == "Radius [angstrom]"
+    assert graph.x_axis.label == "Radius [Å]"
     assert not graph.x_axis.log and not graph.y_axis.log
     dataset = window.controller.workspace.datasets[graph.series[0].dataset_id]
     assert isinstance(dataset, GenericCurve)

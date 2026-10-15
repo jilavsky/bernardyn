@@ -11,6 +11,7 @@ import h5py
 import numpy as np
 
 from bernardyn.core.models import CurveRole, GenericCurve, SeriesStyle
+from bernardyn.core.units import parse_unit
 from bernardyn.io.sources import ScatteringRecord
 
 
@@ -124,6 +125,39 @@ def _result(descriptor: ResultDescriptor) -> Mapping[str, Any]:
     return result
 
 
+def _stored_units(descriptor: ResultDescriptor) -> dict[str, str]:
+    """Return the ``units`` attribute of each array directly in the result group."""
+    from pyirena.io.schema import TOOL_REGISTRY
+
+    units: dict[str, str] = {}
+    with h5py.File(descriptor.path, "r") as handle:
+        group = handle.get(TOOL_REGISTRY[descriptor.analysis]["group"])
+        if not isinstance(group, h5py.Group):
+            return units
+        for name, item in group.items():
+            if not isinstance(item, h5py.Dataset) or "units" not in item.attrs:
+                continue
+            value = item.attrs["units"]
+            if isinstance(value, bytes):
+                value = value.decode("utf-8", errors="replace")
+            if str(value).strip():
+                units[name] = str(value).strip()
+    return units
+
+
+def _registry_unit(analysis: str, key: str) -> str | None:
+    from pyirena.io.schema import TOOL_REGISTRY
+
+    for plot in TOOL_REGISTRY[analysis]["plots"]:
+        if plot["y"] == key and plot.get("y_units"):
+            return str(plot["y_units"])
+    return None
+
+
+def _is_arbitrary(unit: str | None) -> bool:
+    return unit is None or parse_unit(unit) == parse_unit("arb")
+
+
 def discover_results(path: str | Path) -> list[ResultDescriptor]:
     """Report result groups with at least one stored I(Q) curve."""
     source = Path(path).expanduser().resolve()
@@ -191,6 +225,39 @@ def load_result_bundle(descriptor: ResultDescriptor) -> ResultBundle:
     stem = descriptor.path.stem
     records: list[ScatteringRecord] = []
     styles: list[SeriesStyle] = []
+    stored = _stored_units(descriptor)
+    q_key = "model_q" if descriptor.analysis == "modeling" else "Q"
+    q_unit = stored.get(q_key, "1/angstrom")
+    has_measured = result.get("intensity_data") is not None
+    measured_unit = (
+        stored.get("intensity_data")
+        or _registry_unit(descriptor.analysis, "intensity_data")
+        or "1/cm"
+    )
+    model_key = {
+        "modeling": "model_I",
+        "simple_fits": "I_model",
+        "waxs_peakfit": "I_fit",
+        "carbon_fit": "I_model",
+    }.get(descriptor.analysis, "intensity_model")
+
+    def intensity_unit(file_key: str, role: str) -> tuple[str, str]:
+        """Choose a curve's intensity unit and record where it came from.
+
+        A fitted model, background, or component shares the measured data's
+        units: it was fitted to them.  Some producers label such arrays
+        ``arb`` (pyIrena Simple Fits ``I_model``), which would otherwise put
+        data and fit on one axis in different units.
+        """
+        if role == "measured":
+            return measured_unit, "file" if "intensity_data" in stored else "default"
+        own = stored.get(file_key)
+        if has_measured and _is_arbitrary(own):
+            return measured_unit, "measured_data"
+        if own is not None:
+            return own, "file"
+        registry = _registry_unit(descriptor.analysis, file_key)
+        return (registry, "registry") if registry else ("1/cm", "default")
 
     def add(
         key: str, role: str, label: str, *, x: np.ndarray = q,
@@ -200,18 +267,21 @@ def load_result_bundle(descriptor: ResultDescriptor) -> ResultBundle:
         if values.get(key) is None:
             return
         y = _array(values, key, length=len(x))
-        intensity_unit = (
-            "arb" if descriptor.analysis == "waxs_peakfit" or (
-                descriptor.analysis == "simple_fits" and role != "measured"
-            ) else "1/cm"
-        )
+        # The reader renames each tool's total-model array to
+        # ``intensity_model``.  Peak and population arrays live in subgroups
+        # without top-level units; they are components of that total fit.
+        file_key = model_key if source is not None or key == "intensity_model" else key
+        unit, unit_source = intensity_unit(file_key, role)
         records.append(ScatteringRecord(
             q=x,
             intensity=y,
             uncertainty=uncertainty if role == "measured" else None,
-            intensity_unit=intensity_unit,
+            q_unit=q_unit,
+            intensity_unit=unit,
             label=f"{stem} — {descriptor.title} {label}",
-            metadata={"bernardyn_result": {**result_metadata, "role": role}},
+            metadata={"bernardyn_result": {
+                **result_metadata, "role": role, "intensity_unit_source": unit_source,
+            }},
             provenance=provenance,
             source_fingerprint=fingerprint,
         ))
@@ -310,6 +380,8 @@ def load_result_curve(descriptor: ResultDescriptor, kind: str) -> ResultCurveBun
         raise ValueError(f"{descriptor.title} is no longer available in {descriptor.path.name}")
     fingerprint, result_metadata, provenance = _result_context(descriptor, result)
     stem = descriptor.path.stem
+    stored = _stored_units(descriptor)
+    radius_unit = stored.get("r_grid", "angstrom")
     if kind == "residuals":
         q = _array(result, "Q")
         residuals = _array(result, "residuals", length=len(q))
@@ -322,8 +394,8 @@ def load_result_curve(descriptor: ResultDescriptor, kind: str) -> ResultCurveBun
             y_semantic="normalised_residual",
             x_label="q",
             y_label="Normalised residual",
-            x_unit="1/angstrom",
-            y_unit="dimensionless",
+            x_unit=stored.get("Q", "1/angstrom"),
+            y_unit=stored.get("residuals", "dimensionless"),
             metadata={"bernardyn_result": {**result_metadata, "role": "residual"}},
             provenance=provenance,
             source_fingerprint=fingerprint,
@@ -350,8 +422,8 @@ def load_result_curve(descriptor: ResultDescriptor, kind: str) -> ResultCurveBun
             y_semantic="volume_fraction_density_per_radius",
             x_label="Radius",
             y_label="Volume fraction density",
-            x_unit="angstrom",
-            y_unit="1/angstrom",
+            x_unit=radius_unit,
+            y_unit=stored.get("distribution", "volume_fraction/angstrom"),
             uncertainty_kind="standard_deviation" if error is not None else None,
             metadata={"bernardyn_result": {**result_metadata, "role": "volume_distribution"}},
             provenance=provenance,
@@ -383,8 +455,8 @@ def load_result_curve(descriptor: ResultDescriptor, kind: str) -> ResultCurveBun
             y_semantic=semantic,
             x_label="Radius",
             y_label=title,
-            x_unit="angstrom",
-            y_unit="1/angstrom",
+            x_unit=radius_unit,
+            y_unit=stored.get(key, "1/angstrom"),
             metadata={"bernardyn_result": {**result_metadata, "role": kind}},
             provenance=provenance,
             source_fingerprint=fingerprint,
@@ -432,8 +504,8 @@ def load_result_curve(descriptor: ResultDescriptor, kind: str) -> ResultCurveBun
             y_semantic=semantic,
             x_label="Radius",
             y_label=y_label,
-            x_unit="angstrom",
-            y_unit=y_unit,
+            x_unit=radius_unit,
+            y_unit=stored.get(key, y_unit),
             metadata={"bernardyn_result": {**result_metadata, "role": kind}},
             provenance=provenance,
             source_fingerprint=fingerprint,
