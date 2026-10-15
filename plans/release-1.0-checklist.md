@@ -52,6 +52,7 @@ most.
    them.
    - Modeling should now show your measured data too.
    - Simple Fits data and fit should share one axis unit.
+   - Modeling saved with the new pyIrena should also offer **Residuals**.
    - WAXS should use linear axes and `arb. units`.
 
 ## C. Distributions: correct axes
@@ -66,6 +67,9 @@ most.
    point, or export CSV before and after the change.
 4. Compare one peak position and the total volume fraction with what pyIrena
    or Irena reports for the same fit.
+5. Import a **Number distribution**, from an older file and from one saved by
+   the new pyIrena. Both should read cm⁻³·Å⁻¹ with values of similar size,
+   roughly 10¹⁵–10²⁰. A value around 10⁻⁵ means the legacy scaling was missed.
 
 ## D. Multi-file batch with one Undo
 
@@ -141,6 +145,9 @@ These are done once A–E pass and the findings are fixed:
    `MINIMUM_PYIRENA` in `bernardyn/diagnostics.py`; a test checks that the last
    one matches `pyproject.toml`.
 5. pyIrena-side items, which are welcome but not blocking:
+   - Release the `8a54ee8` changes (Modeling residuals, number-density
+     units). Bernardyn already handles files from both before and after them.
+   - Make `read_number_dist` public.
    - Simple Fits `I_model` units should be the data's units, not `arb`.
-   - Write `units` attributes on Modeling `volume_dist`/`number_dist`.
+   - Check why `cumul_num_dist` ends about 30% below ∫N(r)dr.
    - Agree authoritative size-bin edges, if distribution bars are wanted.

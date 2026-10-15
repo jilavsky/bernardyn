@@ -32,6 +32,9 @@ behavior changes.
   - The whole import is one Undo step.
 - Modeling imports include the file's primary scattering curve as the measured
   data, when the file has one.
+- Modeling residuals (pyIrena files that store them) and each population's
+  number distribution can be imported, also as the `modeling_residuals` and
+  `modeling_number_distribution` recipes.
 - Modeling population volume distributions can be imported (one graph for all
   populations). The new `modeling_volume_distribution` recipe does the same
   from the Python API, CLI, and MCP.
@@ -51,6 +54,12 @@ behavior changes.
   `bernardyn-displayed-data-csv v1`). The columns are unchanged. Readers that
   do not skip comment lines need `comment="#"` (pandas) or equivalent.
 - Igor ITX exports set each wave's data units.
+- Number distributions (Size Distribution and Modeling) are shown in Irena
+  units, cm⁻³·Å⁻¹; cumulative number is in cm⁻³ and is now labelled
+  "Cumulative number density". Older pyIrena files, which stored these per Å³
+  of sample, are converted (×10²⁴) on reading, the same way pyIrena does.
+  Bernardyn uses pyIrena's reader for this when the installed pyIrena
+  provides it.
 
 ### Fixed
 

@@ -103,12 +103,12 @@ def test_real_pyirena_result_fixture_exposes_r2_generic_curves_and_round_trips(t
         kind: bundle.curve.y_semantic for kind, bundle in cumulative.items()
     } == {
         "cumulative_volume_distribution": "cumulative_volume_fraction",
-        "cumulative_number_distribution": "cumulative_number_fraction",
+        "cumulative_number_distribution": "cumulative_number_density",
         "cumulative_surface_distribution": "cumulative_specific_surface",
     }
     assert [bundle.curve.y_unit for bundle in cumulative.values()] == [
         "volume_fraction",
-        "dimensionless",
+        "1/cm^3",
         "1/angstrom",
     ]
     for bundle in cumulative.values():
@@ -236,3 +236,62 @@ def test_survey_records_unreadable_files_instead_of_failing(tmp_path):
     batch = load_result_batch(survey, "unified_fit", ("residuals",))
     assert len(batch.curves["residuals"]) == 1
     assert [path.name for path, _ in batch.skipped] == ["broken.h5"]
+
+
+def test_modeling_residuals_are_offered_when_the_file_stores_them(tmp_path):
+    source = tmp_path / "with-residuals.h5"
+    copy2(RESULT_FIXTURES / "pyirena_1_2_Modeling_PP15.h5", source)
+    with h5py.File(source, "r+") as handle:
+        group = handle["entry/modeling_results"]
+        residuals = group.create_dataset("residuals", data=np.linspace(-2.0, 2.0, len(group["model_q"])))
+        residuals.attrs["units"] = "dimensionless"
+    descriptor = _modeling(source)
+    assert "residuals" in available_curve_kinds(descriptor)
+    curve = load_result_curve(descriptor, "residuals").curve
+    assert (curve.x_unit, curve.y_unit, curve.y.min()) == ("1/angstrom", "dimensionless", -2.0)
+    # Files saved before pyIrena stored Modeling residuals simply lack the kind.
+    assert "residuals" not in available_curve_kinds(_modeling(RESULT_FIXTURES / "pyirena_1_2_Modeling_PP15.h5"))
+
+
+@pytest.mark.parametrize("use_pyirena_reader", [True, False])
+def test_number_distributions_use_irena_units_for_old_and_new_files(tmp_path, monkeypatch, use_pyirena_reader):
+    from pyirena.io import _nxcansas_common
+
+    from bernardyn.io.results import NUMBER_DIST_UNITS, _read_number_dist
+
+    if not use_pyirena_reader:
+        monkeypatch.delattr(_nxcansas_common, "read_number_dist", raising=False)
+    path = tmp_path / "numbers.h5"
+    with h5py.File(path, "w") as handle:
+        handle.create_dataset("legacy", data=[1.0, 2.0]).attrs["units"] = "1/angstrom"
+        handle.create_dataset("untagged", data=[1.0])
+        handle.create_dataset("current", data=[3.0]).attrs["units"] = NUMBER_DIST_UNITS
+    with h5py.File(path, "r") as handle:
+        np.testing.assert_allclose(_read_number_dist(handle, "legacy"), [1e24, 2e24])
+        np.testing.assert_allclose(_read_number_dist(handle, "untagged"), [1e24])
+        np.testing.assert_allclose(_read_number_dist(handle, "current"), [3.0])
+        assert _read_number_dist(handle, "missing") is None
+
+
+def test_size_number_distribution_integrates_to_the_volume_based_number_density():
+    from bernardyn.io.results import load_result_curve as curve_of
+
+    descriptor = next(item for item in discover_results(FIXTURE) if item.analysis == "size_distribution")
+    number = curve_of(descriptor, "number_distribution").curve
+    volume = curve_of(descriptor, "volume_distribution").curve
+    assert number.y_unit == "1/(cm^3 angstrom)"
+    spheres_cm3 = 4 / 3 * np.pi * volume.x**3 * 1e-24
+    assert np.trapezoid(number.y, number.x) == pytest.approx(
+        np.trapezoid(volume.y / spheres_cm3, volume.x), rel=1e-6
+    )
+    cumulative = curve_of(descriptor, "cumulative_number_distribution").curve
+    assert (cumulative.y_semantic, cumulative.y_unit) == ("cumulative_number_density", "1/cm^3")
+
+
+def test_modeling_population_number_distribution_is_in_irena_units():
+    from bernardyn.io.results import load_result_curves
+
+    (bundle,) = load_result_curves(_modeling(FIXTURE), "number_distribution")
+    assert bundle.curve.y_unit == "1/(cm^3 angstrom)"
+    assert bundle.graph_title == "Modeling number distribution"
+    assert bundle.curve.y.max() > 1e15  # per cm³, not per Å³

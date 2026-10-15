@@ -26,6 +26,8 @@ FIXTURES = Path(__file__).parents[1] / "testData"
         ("[cm2/cm3]·(1/angstrom)²", "cm⁻¹·Å⁻²"),
         ("1/(1/cm)", "cm"),
         ("volume_fraction/angstrom", "vol. fraction·Å⁻¹"),
+        ("1/(cm^3 angstrom)", "cm⁻³·Å⁻¹"),
+        ("1 / cm", "cm⁻¹"),
         # Unrecognised units are shown as written, never reinterpreted.
         ("counts/s/pixel", "counts/s/pixel"),
     ],

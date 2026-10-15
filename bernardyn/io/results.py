@@ -118,7 +118,70 @@ def _result(descriptor: ResultDescriptor) -> Mapping[str, Any]:
     return _cached("result", descriptor, _read_result)
 
 
+# pyIrena's number-density convention (Irena units), whichever pyIrena wrote
+# the file.  Files from before it stored values per Å³ of sample.
+NUMBER_DIST_UNITS = "1/(cm^3 angstrom)"
+CUMUL_NUMBER_DIST_UNITS = "1/cm^3"
+_A3_PER_CM3 = 1e24
+
+
+def _read_number_dist(group: h5py.Group, name: str) -> np.ndarray | None:
+    """Read a number distribution in Irena units, or None if absent.
+
+    Uses pyIrena's own reader when the installed pyIrena has it, so the
+    legacy rule lives in one place.  Older pyIrena returns the raw stored
+    values, so the same rule is applied here: anything not already tagged in
+    the current units was written per Å³ of sample and is scaled by 1e24.
+    """
+    try:
+        from pyirena.io._nxcansas_common import read_number_dist
+    except ImportError:
+        read_number_dist = None
+    if read_number_dist is not None:
+        return read_number_dist(group, name)
+    if name not in group:
+        return None
+    dataset = group[name]
+    data = np.asarray(dataset[()], dtype=np.float64)
+    units = dataset.attrs.get("units", "")
+    if isinstance(units, bytes):
+        units = units.decode("utf-8", errors="replace")
+    if units not in (NUMBER_DIST_UNITS, CUMUL_NUMBER_DIST_UNITS):
+        data = data * _A3_PER_CM3
+    return data
+
+
+def _with_number_distributions(descriptor: ResultDescriptor, result: dict[str, Any]) -> dict[str, Any]:
+    """Replace loader number distributions with version-independent ones."""
+    from pyirena.io.schema import TOOL_REGISTRY
+
+    with h5py.File(descriptor.path, "r") as handle:
+        group = handle.get(TOOL_REGISTRY[descriptor.analysis]["group"])
+        if not isinstance(group, h5py.Group):
+            return result
+        if descriptor.analysis == "size_distribution":
+            for key in ("number_dist", "cumul_num_dist"):
+                result[key] = _read_number_dist(group, key)
+        elif descriptor.analysis == "modeling":
+            # pyIrena lists populations in sorted pop_NN order; match it.
+            names = sorted(name for name in group if name.startswith("pop_"))
+            populations = [dict(item) for item in result.get("populations") or ()]
+            for name, population in zip(names, populations, strict=False):
+                subgroup = group[name]
+                if isinstance(subgroup, h5py.Group):
+                    population["number_dist"] = _read_number_dist(subgroup, "number_dist")
+            result["populations"] = populations
+    return result
+
+
 def _read_result(descriptor: ResultDescriptor) -> Mapping[str, Any]:
+    result = _read_result_raw(descriptor)
+    if result.get("found") and descriptor.analysis in ("size_distribution", "modeling"):
+        return _with_number_distributions(descriptor, dict(result))
+    return result
+
+
+def _read_result_raw(descriptor: ResultDescriptor) -> Mapping[str, Any]:
     if descriptor.analysis in _EXTRA_READERS:
         from importlib import import_module
 
@@ -410,8 +473,10 @@ def available_curve_kinds(descriptor: ResultDescriptor) -> tuple[str, ...]:
     available: list[str] = []
     if result.get("Q") is not None and result.get("residuals") is not None:
         available.append("residuals")
-    if descriptor.analysis == "modeling" and _modeling_populations(result):
-        available.append("volume_distribution")
+    if descriptor.analysis == "modeling":
+        for kind, key in (("volume_distribution", "volume_dist"), ("number_distribution", "number_dist")):
+            if _modeling_populations(result, key):
+                available.append(kind)
     if (
         descriptor.analysis == "size_distribution"
         and result.get("r_grid") is not None
@@ -435,56 +500,73 @@ def available_curve_kinds(descriptor: ResultDescriptor) -> tuple[str, ...]:
     return tuple(available)
 
 
-def _modeling_populations(result: Mapping[str, Any]) -> list[tuple[int, Mapping[str, Any]]]:
-    """Return (1-based index, population) pairs that store a volume distribution."""
+def _modeling_populations(
+    result: Mapping[str, Any], key: str = "volume_dist"
+) -> list[tuple[int, Mapping[str, Any]]]:
+    """Return (1-based index, population) pairs that store distribution ``key``."""
     return [
         (index, population)
         for index, population in enumerate(result.get("populations") or (), 1)
-        if population.get("radius_grid") is not None and population.get("volume_dist") is not None
+        if population.get("radius_grid") is not None and population.get(key) is not None
     ]
 
 
 def load_result_curves(descriptor: ResultDescriptor, kind: str) -> tuple[ResultCurveBundle, ...]:
     """Load every curve of one kind; Modeling has one distribution per population."""
-    if descriptor.analysis == "modeling" and kind == "volume_distribution":
+    if descriptor.analysis == "modeling" and kind in _MODELING_DISTRIBUTIONS:
         result = _result(descriptor)
         return tuple(
-            load_result_curve(descriptor, f"population_{index}_volume_distribution")
-            for index, _ in _modeling_populations(result)
+            load_result_curve(descriptor, f"population_{index}_{kind}")
+            for index, _ in _modeling_populations(result, _MODELING_DISTRIBUTIONS[kind][0])
         )
     return (load_result_curve(descriptor, kind),)
 
 
-def _modeling_volume_distribution(
+# kind -> (population key, title, y semantic, y label, y unit, unit source)
+_MODELING_DISTRIBUTIONS = {
+    # pyIrena stores no units on volume_dist.  Modeling normalises each
+    # population so that the integral over radius equals its volume fraction
+    # (pyirena.core.modeling.build_distributions), as for Size Distribution.
+    "volume_distribution": (
+        "volume_dist", "volume distribution", "volume_fraction_density_per_radius",
+        "Volume fraction density", "volume_fraction/angstrom", "pyirena_modeling_normalisation",
+    ),
+    "number_distribution": (
+        "number_dist", "number distribution", "number_density_per_radius",
+        "Number distribution", NUMBER_DIST_UNITS, "pyirena_number_density_convention",
+    ),
+}
+
+
+def _modeling_population_distribution(
     descriptor: ResultDescriptor, result: Mapping[str, Any], kind: str
 ) -> ResultCurveBundle:
+    """Load ``population_<n>_<volume|number>_distribution`` from a Modeling result."""
     fingerprint, result_metadata, provenance = _result_context(descriptor, result)
-    populations = dict(_modeling_populations(result))
     try:
-        index = int(kind.split("_")[1])
-        population = populations[index]
-    except (IndexError, KeyError, ValueError):
+        _, number, distribution = kind.split("_", 2)
+        key, title, semantic, y_label, y_unit, unit_source = _MODELING_DISTRIBUTIONS[distribution]
+        index = int(number)
+        population = dict(_modeling_populations(result, key))[index]
+    except (KeyError, ValueError):
         raise ValueError(f"{kind!r} is not available for {descriptor.title}") from None
     radii = _array(population, "radius_grid")
     curve = GenericCurve(
         x=radii,
-        y=_array(population, "volume_dist", length=len(radii)),
-        label=f"{descriptor.path.stem} — {descriptor.title} population {index} volume distribution",
+        y=_array(population, key, length=len(radii)),
+        label=f"{descriptor.path.stem} — {descriptor.title} population {index} {title}",
         role=CurveRole.DISTRIBUTION,
         x_semantic="particle_radius",
-        y_semantic="volume_fraction_density_per_radius",
+        y_semantic=semantic,
         x_label="Radius",
-        y_label="Volume fraction density",
-        # pyIrena stores no units here.  Modeling normalises each population
-        # so that the integral over radius equals its volume fraction
-        # (pyirena.core.modeling.build_distributions), as for Size Distribution.
+        y_label=y_label,
         x_unit="angstrom",
-        y_unit="volume_fraction/angstrom",
+        y_unit=y_unit,
         metadata={"bernardyn_result": {
             **result_metadata,
             "role": kind,
             "population": index,
-            "unit_source": "pyirena_modeling_normalisation",
+            "unit_source": unit_source,
         }},
         provenance=provenance,
         source_fingerprint=fingerprint,
@@ -493,7 +575,7 @@ def _modeling_volume_distribution(
         descriptor=descriptor,
         curve=curve,
         style=SeriesStyle(line_style="solid", symbol=None),
-        graph_title=f"{descriptor.title} volume distribution",
+        graph_title=f"{descriptor.title} {title}",
         x_log=False,
         y_log=False,
     )
@@ -505,7 +587,7 @@ def load_result_curve(descriptor: ResultDescriptor, kind: str) -> ResultCurveBun
     if not result.get("found"):
         raise ValueError(f"{descriptor.title} is no longer available in {descriptor.path.name}")
     if descriptor.analysis == "modeling" and kind.startswith("population_"):
-        return _modeling_volume_distribution(descriptor, result, kind)
+        return _modeling_population_distribution(descriptor, result, kind)
     fingerprint, result_metadata, provenance = _result_context(descriptor, result)
     stem = descriptor.path.stem
     stored = _stored_units(descriptor)
@@ -522,7 +604,7 @@ def load_result_curve(descriptor: ResultDescriptor, kind: str) -> ResultCurveBun
             y_semantic="normalised_residual",
             x_label="q",
             y_label="Normalised residual",
-            x_unit=stored.get("Q", "1/angstrom"),
+            x_unit=stored.get("model_q" if descriptor.analysis == "modeling" else "Q", "1/angstrom"),
             y_unit=stored.get("residuals", "dimensionless"),
             metadata={"bernardyn_result": {**result_metadata, "role": "residual"}},
             provenance=provenance,
@@ -584,7 +666,9 @@ def load_result_curve(descriptor: ResultDescriptor, kind: str) -> ResultCurveBun
             x_label="Radius",
             y_label=title,
             x_unit=radius_unit,
-            y_unit=stored.get(key, "1/angstrom"),
+            # Number values were converted to Irena units on reading, so the
+            # stored attribute (legacy "1/angstrom") no longer describes them.
+            y_unit=NUMBER_DIST_UNITS if key == "number_dist" else stored.get(key, "1/angstrom"),
             metadata={"bernardyn_result": {**result_metadata, "role": kind}},
             provenance=provenance,
             source_fingerprint=fingerprint,
@@ -608,9 +692,9 @@ def load_result_curve(descriptor: ResultDescriptor, kind: str) -> ResultCurveBun
         "cumulative_number_distribution": (
             "cumul_num_dist",
             "Cumulative number distribution",
-            "cumulative_number_fraction",
-            "Cumulative number fraction",
-            "dimensionless",
+            "cumulative_number_density",
+            "Cumulative number density",
+            CUMUL_NUMBER_DIST_UNITS,
         ),
         "cumulative_surface_distribution": (
             "cumul_surf_dist",
@@ -633,7 +717,7 @@ def load_result_curve(descriptor: ResultDescriptor, kind: str) -> ResultCurveBun
             x_label="Radius",
             y_label=y_label,
             x_unit=radius_unit,
-            y_unit=stored.get(key, y_unit),
+            y_unit=y_unit if key == "cumul_num_dist" else stored.get(key, y_unit),
             metadata={"bernardyn_result": {**result_metadata, "role": kind}},
             provenance=provenance,
             source_fingerprint=fingerprint,

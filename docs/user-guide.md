@@ -78,11 +78,17 @@ when added to an empty graph.
 Every other choice creates **one new graph holding that curve from every
 file**, so a batch gives a comparison rather than a tab per file. A file keeps
 the same colour on each graph. **Residuals** use a linear Y axis; WAXS
-residuals also use a linear Q axis. Size Distribution offers volume, number,
-surface, and cumulative distributions, and Modeling offers the volume
-distribution of each population. Bernardyn uses the stored radius centres and
-values; it does not infer bin widths or recalculate distributions. The whole
-import is one Undo step.
+residuals also use a linear Q axis. Modeling residuals are available for
+files saved by a pyIrena version that stores them. Size Distribution offers
+volume, number, surface, and cumulative distributions, and Modeling offers the
+volume and number distribution of each population. Bernardyn uses the stored
+radius centres and values; it does not infer bin widths or recalculate
+distributions.
+
+Number distributions are shown in Irena units, cm⁻³·Å⁻¹ (cumulative number in
+cm⁻³). Files from older pyIrena versions stored them per Å³ of sample; those
+values are converted (×10²⁴) on reading, as pyIrena does. The whole import is
+one Undo step.
 
 Use **Graph → New 2D graph** or Ctrl/Cmd+Shift+N to create a 2-D graph quickly.
 

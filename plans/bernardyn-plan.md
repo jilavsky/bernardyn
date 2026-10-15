@@ -86,11 +86,23 @@ kept, not trimmed to the fit range. Each population's `volume_dist` is offered
 as a volume-fraction-density curve: ∫P(r)dr equals the population's volume
 fraction, which was verified on the fixtures.
 
-Still open:
-- Modeling residuals. pyIrena does not store them, and Bernardyn does not
-  recompute model curves.
-- Modeling `number_dist`. It has no stored or documented absolute units, so
-  ask pyIrena to write a `units` attribute for both arrays.
+Since then, pyIrena commit `8a54ee8` (on `feature/data-merge-plots`, still
+labelled 1.2.0b3) added two things, and Bernardyn now uses both:
+- Modeling residuals are imported when the file stores them, and the
+  `modeling_residuals` recipe was added.
+- Number distributions use Irena units, 1/(cm³·Å), and cumulative number uses
+  1/cm³. They are read through pyIrena's `read_number_dist` when the installed
+  pyIrena has it. Otherwise Bernardyn applies the same rule itself: values not
+  tagged in the current units are multiplied by 10²⁴.
+- Modeling population number distributions are importable, with a
+  `modeling_number_distribution` recipe.
+
+Open, upstream:
+- `read_number_dist` lives in the private `pyirena.io._nxcansas_common`;
+  ask pyIrena to make it public.
+- On the Al_Mg_Si fixture, ∫N(r)dr equals ∫P(r)/V(r)dr (7.68×10¹³ cm⁻³), but
+  the stored `cumul_num_dist` ends at 5.28×10¹³ cm⁻³. Check how pyIrena
+  integrates the cumulative number.
 
 **F5 — done (unreleased).** A Qt-free planner, `bernardyn/io/result_batch.py`,
 surveys the files, loads the selection, and groups the curves. One dialog,
@@ -189,8 +201,7 @@ Merged from the old roadmap (R3, M3, R4, §6, §12), `docs/TODO.md`, and
 - A compact result summary in the inspector: χ², fit-quality, key scalars from
   `bernardyn_result` metadata, and accessible provenance, without a permanent
   editable panel per tool.
-- Modeling completeness (F4): done, except residuals and number distributions
-  (upstream). Optional: SAXS Morph and Data Merge results that
+- Modeling completeness (F4): done. Optional: SAXS Morph and Data Merge results that
   are in pyIrena's `TOOL_REGISTRY` but not in `_ANALYSES`.
 - Optional, only after user feedback: a shared-axis residual subpanel under
   I(Q). Separate tabs remain the default.
@@ -253,7 +264,7 @@ Merged from the old roadmap (R3, M3, R4, §6, §12), `docs/TODO.md`, and
 | 2 | ~~F7~~ — done | — | — |
 | 3 | ~~F6, F8~~ — done | — | — |
 | 4 | ~~F13–F15~~ — done (default branch is `main`; pyIrena reinstalled) | — | — |
-| 5 | ~~F5 + I6, F4~~ — done; Modeling residuals and number-distribution units need pyIrena | — | — |
+| 5 | ~~F5 + I6, F4~~ — done, including Modeling residuals and number distributions | — | — |
 | 6 | ~~F9–F12~~ — done; synthetic-error default left unchanged | — | — |
 | 7 | ~~I1–I5, I7~~ — done | — | — |
 | 8 | Usability pass with beamline data (§2.6) using [release-1.0-checklist.md](release-1.0-checklist.md), then release **1.0.0rc1** | ~1.5 h | Gate |

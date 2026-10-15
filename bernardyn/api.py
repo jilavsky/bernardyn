@@ -190,9 +190,19 @@ RECIPES = (
         result_analysis="modeling", result_kind="data_fit",
     ),
     RecipeDescriptor(
+        "modeling_residuals", "Modeling residuals",
+        "Saved Modeling normalised residuals (pyIrena files that store them).",
+        result_analysis="modeling", result_kind="residuals",
+    ),
+    RecipeDescriptor(
         "modeling_volume_distribution", "Modeling volume distributions",
         "Saved volume-fraction density of each Modeling population.",
         result_analysis="modeling", result_kind="volume_distribution",
+    ),
+    RecipeDescriptor(
+        "modeling_number_distribution", "Modeling number distributions",
+        "Saved number distribution of each Modeling population, in 1/(cm³·Å).",
+        result_analysis="modeling", result_kind="number_distribution",
     ),
     RecipeDescriptor(
         "simple_fits_data_fit", "Simple Fits data + fit", "Saved Simple Fits I(Q) curves.",

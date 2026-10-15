@@ -81,8 +81,9 @@ paths and point-count diagnostics.
   Modeling includes its total and population models, plus the file's primary
   scattering curve as measured data when present; WAXS includes background and
   individual peaks; Carbon fitting includes its component curves.
-- `<tool>_residuals` recipes for every listed tool except Modeling use typed
-  residual curves with a linear Y axis. WAXS uses a linear Q axis too.
+- `<tool>_residuals` recipes for every listed tool use typed residual curves
+  with a linear Y axis. WAXS uses a linear Q axis too. `modeling_residuals`
+  needs a file saved by a pyIrena version that stores Modeling residuals.
 - `size_distribution_volume_distribution`, `size_distribution_number_distribution`,
   and `size_distribution_surface_distribution` use stored radius centres and
   densities; they do not infer histogram widths.
@@ -90,8 +91,12 @@ paths and point-count diagnostics.
   `size_distribution_cumulative_number_distribution`, and
   `size_distribution_cumulative_surface_distribution` use their stored
   cumulative arrays without recalculating them.
-- `modeling_volume_distribution` puts the stored volume-fraction density of
-  every Modeling population on one graph.
+- `modeling_volume_distribution` and `modeling_number_distribution` put the
+  stored volume-fraction density, or the number distribution, of every Modeling
+  population on one graph.
+- Number distributions are in 1/(cm³·Å) and cumulative number in 1/cm³ (Irena
+  units). Legacy files, which stored them per Å³ of sample, are converted by
+  10²⁴ on reading, exactly as pyIrena does.
 
 Recipes preserve the same canonical datasets, transformations, graph package
 format, and result semantics as the GUI. Pixel-identical images are not

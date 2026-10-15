@@ -95,10 +95,14 @@ def parse_unit(unit: str | None) -> UnitPowers | None:
 
 
 def _parse(text: str) -> UnitPowers:
-    text = text.strip()
+    # Spaces around operators are layout, not multiplication: "1 / cm".
+    text = re.sub(r"\s*([/·*^()])\s*", r"\1", text.strip())
     if not text:
         raise ValueError("empty unit factor")
     factors = _split_top_level(text.replace("*", "·"), "·")
+    if len(factors) == 1 and text.lower() not in _ARBITRARY:
+        # A space also multiplies, as in pyIrena's "1/(cm^3 angstrom)".
+        factors = [factor for factor in _split_top_level(text, " ") if factor]
     if len(factors) > 1:
         result: UnitPowers = {}
         for factor in factors:
