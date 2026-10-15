@@ -16,4 +16,4 @@ an Igor `.h5xp` file.
 ## Documentation maintenance
 
 User-facing features and behavior changes must be documented in the relevant
-guide and recorded in [`../changelog.md`](../changelog.md) in the same change.
+guide and recorded in [`../CHANGELOG.md`](../CHANGELOG.md) in the same change.

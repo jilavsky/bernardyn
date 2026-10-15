@@ -7,9 +7,10 @@ become the source of truth.
 from __future__ import annotations
 
 import math
-from dataclasses import asdict, dataclass, field, replace
+from collections.abc import Iterable, Mapping
+from dataclasses import asdict, dataclass, field, fields, replace
 from enum import Enum
-from typing import Any, Iterable, Mapping
+from typing import Any
 from uuid import UUID, uuid4
 
 import numpy as np
@@ -54,6 +55,32 @@ def json_value(value: Any) -> Any:
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
     return str(value)
+
+
+def split_known_fields(kind: type, value: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Split a JSON object into this dataclass's fields and unknown extras.
+
+    Unknown keys come from a newer Bernardyn.  They are returned separately so
+    the caller can keep them in ``extras`` rather than failing with a
+    ``TypeError`` or silently dropping them on the next save.  A literal
+    ``extras`` key is never accepted from a file.
+    """
+    names = {item.name for item in fields(kind)} - {"extras"}
+    known = {key: item for key, item in value.items() if key in names}
+    extras = {key: item for key, item in value.items() if key not in names and key != "extras"}
+    return known, extras
+
+
+def merge_extras(model: Any, document: dict[str, Any]) -> dict[str, Any]:
+    """Write preserved unknown fields back beside the known ones.
+
+    Extras never override a known field, and the ``extras`` key itself is not
+    written, so a file without unknown fields is unchanged for older readers.
+    """
+    result = {key: item for key, item in document.items() if key != "extras"}
+    for key, item in getattr(model, "extras", {}).items():
+        result.setdefault(key, json_value(item))
+    return result
 
 
 # WARNING -- these are ``str``-based enums, and that has one sharp edge.
@@ -115,6 +142,8 @@ class Dataset:
     metadata: Mapping[str, Any] = field(default_factory=dict)
     provenance: Mapping[str, Any] = field(default_factory=dict)
     source_fingerprint: str | None = None
+    # Metadata keys written by a newer Bernardyn; kept and written back.
+    extras: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "id", _valid_id(self.id))
@@ -138,7 +167,7 @@ class Dataset:
         object.__setattr__(self, "provenance", dict(self.provenance))
 
     def metadata_dict(self) -> dict[str, Any]:
-        return {
+        document = {
             "canonical_type": "scattering_curve_v1",
             "id": self.id,
             "kind": self.kind.value,
@@ -149,6 +178,7 @@ class Dataset:
             "provenance": json_value(self.provenance),
             "source_fingerprint": self.source_fingerprint,
         }
+        return merge_extras(self, document)
 
     @property
     def point_count(self) -> int:
@@ -182,6 +212,8 @@ class GenericCurve:
     metadata: Mapping[str, Any] = field(default_factory=dict)
     provenance: Mapping[str, Any] = field(default_factory=dict)
     source_fingerprint: str | None = None
+    # Metadata keys written by a newer Bernardyn; kept and written back.
+    extras: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "id", _valid_id(self.id))
@@ -202,7 +234,7 @@ class GenericCurve:
         object.__setattr__(self, "provenance", dict(self.provenance))
 
     def metadata_dict(self) -> dict[str, Any]:
-        return {
+        document = {
             "canonical_type": "generic_curve_v2",
             "id": self.id,
             "label": self.label,
@@ -218,6 +250,7 @@ class GenericCurve:
             "provenance": json_value(self.provenance),
             "source_fingerprint": self.source_fingerprint,
         }
+        return merge_extras(self, document)
 
     @property
     def point_count(self) -> int:
@@ -239,6 +272,10 @@ class SeriesStyle:
     error_cap_size: float = 0.5
     error_color: RGBA = (90, 90, 90, 180)
     error_width: float = 1.0
+    # Fields written by a newer Bernardyn that this version does not know.
+    # They are kept, and written back unchanged, so an older reader never
+    # strips a newer reader's settings.  See ``split_known_fields``.
+    extras: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         for color in (self.color, self.error_color):
@@ -265,6 +302,10 @@ class SeriesView:
     visible: bool = True
     legend_label: str | None = None
     style: SeriesStyle = field(default_factory=SeriesStyle)
+    # Fields written by a newer Bernardyn that this version does not know.
+    # They are kept, and written back unchanged, so an older reader never
+    # strips a newer reader's settings.  See ``split_known_fields``.
+    extras: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "id", _valid_id(self.id))
@@ -287,6 +328,10 @@ class AxisSpec:
     minor_tick_labels: bool = False
     color: RGBA = (30, 30, 30, 255)
     thickness: float = 1.0
+    # Fields written by a newer Bernardyn that this version does not know.
+    # They are kept, and written back unchanged, so an older reader never
+    # strips a newer reader's settings.  See ``split_known_fields``.
+    extras: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.minimum is not None and self.maximum is not None and self.minimum >= self.maximum:
@@ -300,6 +345,10 @@ class TypographySpec:
     axis_label_size: int = 12
     tick_size: int = 10
     legend_size: int = 10
+    # Fields written by a newer Bernardyn that this version does not know.
+    # They are kept, and written back unchanged, so an older reader never
+    # strips a newer reader's settings.  See ``split_known_fields``.
+    extras: Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -309,6 +358,10 @@ class LegendSpec:
     framed: bool = True
     columns: int = 1
     symbol_size: float = 8.0
+    # Fields written by a newer Bernardyn that this version does not know.
+    # They are kept, and written back unchanged, so an older reader never
+    # strips a newer reader's settings.  See ``split_known_fields``.
+    extras: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.columns < 1:
@@ -332,6 +385,10 @@ class Annotation:
     # It is used only by POWER_LAW annotations; the line's amplitude is
     # derived from ``position`` so that a guide can be repositioned directly.
     slope: float | None = None
+    # Fields written by a newer Bernardyn that this version does not know.
+    # They are kept, and written back unchanged, so an older reader never
+    # strips a newer reader's settings.  See ``split_known_fields``.
+    extras: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "id", _valid_id(self.id))
@@ -378,6 +435,10 @@ class GraphDocument:
     )
     description: str = ""
     notes: str = ""
+    # Fields written by a newer Bernardyn that this version does not know.
+    # They are kept, and written back unchanged, so an older reader never
+    # strips a newer reader's settings.  See ``split_known_fields``.
+    extras: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "id", _valid_id(self.id))
@@ -392,61 +453,73 @@ class GraphDocument:
             raise ValueError("physical graph dimensions and DPI must be positive")
 
     def to_dict(self) -> dict[str, Any]:
-        return json_value(asdict(self))
+        document = merge_extras(self, json_value(asdict(self)))
+        for axis in ("x_axis", "y_axis"):
+            document[axis] = merge_extras(getattr(self, axis), document[axis])
+        document["typography"] = merge_extras(self.typography, document["typography"])
+        document["legend"] = merge_extras(self.legend, document["legend"])
+        document["series"] = [
+            {**merge_extras(series, item), "style": merge_extras(series.style, item["style"])}
+            for series, item in zip(self.series, document["series"], strict=True)
+        ]
+        document["annotations"] = [
+            merge_extras(annotation, item)
+            for annotation, item in zip(self.annotations, document["annotations"], strict=True)
+        ]
+        return document
 
     @classmethod
-    def from_dict(cls, value: Mapping[str, Any]) -> "GraphDocument":
-        series = tuple(
-            SeriesView(
-                **{
-                    **item,
-                    "style": SeriesStyle(
-                        **{
-                            **item.get("style", {}),
-                            "color": tuple(item.get("style", {}).get("color", (31, 119, 180, 255))),
-                            "error_color": tuple(
-                                item.get("style", {}).get("error_color", (90, 90, 90, 180))
-                            ),
-                        }
-                    ),
-                    "q_range": tuple(item.get("q_range", (None, None))),
-                }
-            )
-            for item in value.get("series", [])
-        )
-        annotations = tuple(
-            Annotation(
-                **{
-                    **item,
-                    "kind": AnnotationKind(item["kind"]),
-                    "position": tuple(item["position"]),
-                    "end": tuple(item["end"]) if item.get("end") is not None else None,
-                    "color": tuple(item.get("color", (20, 20, 20, 255))),
-                }
-            )
-            for item in value.get("annotations", [])
-        )
-        x_axis = dict(value.get("x_axis", {}))
-        y_axis = dict(value.get("y_axis", {}))
-        if "color" in x_axis:
-            x_axis["color"] = tuple(x_axis["color"])
-        if "color" in y_axis:
-            y_axis["color"] = tuple(y_axis["color"])
+    def from_dict(cls, value: Mapping[str, Any]) -> GraphDocument:
+        """Build a graph from its JSON form, keeping fields from newer writers."""
+
+        def style(item: Mapping[str, Any]) -> SeriesStyle:
+            known, extras = split_known_fields(SeriesStyle, item)
+            for name, default in (("color", (31, 119, 180, 255)), ("error_color", (90, 90, 90, 180))):
+                known[name] = tuple(known.get(name, default))
+            return SeriesStyle(**known, extras=extras)
+
+        def series_view(item: Mapping[str, Any]) -> SeriesView:
+            known, extras = split_known_fields(SeriesView, item)
+            known["style"] = style(known.get("style", {}))
+            known["q_range"] = tuple(known.get("q_range", (None, None)))
+            return SeriesView(**known, extras=extras)
+
+        def annotation(item: Mapping[str, Any]) -> Annotation:
+            known, extras = split_known_fields(Annotation, item)
+            known["kind"] = AnnotationKind(known["kind"])
+            known["position"] = tuple(known["position"])
+            known["end"] = tuple(known["end"]) if known.get("end") is not None else None
+            known["color"] = tuple(known.get("color", (20, 20, 20, 255)))
+            return Annotation(**known, extras=extras)
+
+        def axis(item: Mapping[str, Any]) -> AxisSpec:
+            known, extras = split_known_fields(AxisSpec, item)
+            if "color" in known:
+                known["color"] = tuple(known["color"])
+            return AxisSpec(**known, extras=extras)
+
+        def simple(kind: type, item: Mapping[str, Any]) -> Any:
+            known, extras = split_known_fields(kind, item)
+            return kind(**known, extras=extras)
+
+        series = tuple(series_view(item) for item in value.get("series", []))
+        annotations = tuple(annotation(item) for item in value.get("annotations", []))
         inherited_view = (
             series[0].transform_id
             if series and all(item.transform_id == series[0].transform_id for item in series)
             else "raw"
         )
+        _, extras = split_known_fields(cls, value)
         return cls(
             id=str(value["id"]),
             title=str(value.get("title", "Scattering plot")),
             renderer_id=str(value.get("renderer_id", "plot2d")),
             view_transform_id=str(value.get("view_transform_id", inherited_view)),
             series=series,
-            x_axis=AxisSpec(**x_axis),
-            y_axis=AxisSpec(**y_axis),
-            typography=TypographySpec(**value.get("typography", {})),
-            legend=LegendSpec(**value.get("legend", {})),
+            x_axis=axis(value.get("x_axis", {})),
+            y_axis=axis(value.get("y_axis", {})),
+            typography=simple(TypographySpec, value.get("typography", {})),
+            legend=simple(LegendSpec, value.get("legend", {})),
             box_axes=bool(value.get("box_axes", False)),
             annotations=annotations,
             background=tuple(value.get("background", (255, 255, 255, 255))),
@@ -459,9 +532,10 @@ class GraphDocument:
             renderer_config=value.get("renderer_config", {}),
             description=str(value.get("description", "")),
             notes=str(value.get("notes", "")),
+            extras=extras,
         )
 
-    def replace_series(self, series: Iterable[SeriesView]) -> "GraphDocument":
+    def replace_series(self, series: Iterable[SeriesView]) -> GraphDocument:
         return replace(self, series=tuple(series))
 
 

@@ -7,10 +7,10 @@ import logging
 import math
 import os
 import tempfile
+from collections.abc import Mapping
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
-from typing import Mapping
 
 import numpy as np
 import pyqtgraph as pg
@@ -503,7 +503,7 @@ class Plot2DWidget(pg.PlotWidget):
             return False
         if len(previous.series) != len(graph.series):
             return False
-        for old, new in zip(previous.series, graph.series):
+        for old, new in zip(previous.series, graph.series, strict=True):
             if replace(old, style=new.style) != new:
                 return False
             if (
@@ -1007,7 +1007,7 @@ class Plot2DWidget(pg.PlotWidget):
             writer = csv.writer(handle)
             writer.writerow(["series", "x", "y", "dx", "dy"])
             for snapshot in self._snapshots.values():
-                for index, (x, y) in enumerate(zip(snapshot.x, snapshot.y)):
+                for index, (x, y) in enumerate(zip(snapshot.x, snapshot.y, strict=True)):
                     writer.writerow(
                         [
                             snapshot.label,

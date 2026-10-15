@@ -54,13 +54,15 @@ exact workflow file, `release.yml`.
 
 1. Change the package version consistently in `pyproject.toml`,
    `bernardyn/__init__.py`, `recipe/meta.yaml`, the schema status line, and
-   `changelog.md`. Raise `bernardyn/io/container.py`'s
+   `CHANGELOG.md`. Raise `bernardyn/io/container.py`'s
    `MIN_READER_VERSION` only when the release writes package content an older
    reader cannot understand.
 2. Run `pytest`, `ruff check bernardyn tests`, `python -m build`, and
    `python -m twine check dist/*` locally.
 3. Merge to `main`, create the matching `v<version>` GitHub Release, and
-   publish it. Approve the protected `pypi` environment.
+   publish it. Approve the protected `pypi` environment. Check that `main` is
+   the repository's default branch (**Settings → General**); GitHub's release
+   form preselects the default branch as the tag target.
 
 PyPI does not allow replacing an already uploaded version. If a release needs
 correction, bump the version (for example, `0.0.1b6`) and release that instead.

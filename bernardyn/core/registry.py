@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable
 from importlib.metadata import entry_points
-from typing import Generic, Iterable, Protocol, TypeVar
+from typing import Generic, Protocol, TypeVar
 
 
 class Identified(Protocol):

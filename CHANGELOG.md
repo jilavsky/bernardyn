@@ -23,6 +23,7 @@ behavior changes.
   model or component shares the units of the measured data it was fitted to.
 - Size distribution curves are labelled with the stored units, e.g. volume
   distributions show `vol. fraction·Å⁻¹`.
+- PySide6 6.10.x is excluded, matching pyIrena's Qt plotting extra.
 
 ### Fixed
 
@@ -33,6 +34,17 @@ behavior changes.
 - Simple Fits data and model curves are no longer shown in different units on
   one axis. pyIrena stores the model as `arb`, but it was fitted to the
   absolute data.
+- Graph packages and templates written by a newer Bernardyn open instead of
+  failing, and settings this version does not know are kept when the package
+  is saved again. A damaged graph document is reported as an invalid package.
+- A graph edit that fails, such as applying a Kratky template to a residual
+  graph, now shows its error. It no longer leaves an empty Undo entry, and a
+  multi-step change (for example a pyIrena result import) is rolled back
+  completely.
+- **Reset graph to defaults** keeps the graph's scientific view and labels its
+  axes for that view, rather than showing Kratky data under I(Q) labels.
+- The Python API and CLI reject an unsupported image file type before writing
+  any output, so a failed request no longer leaves a package without its image.
 
 ## 0.0.1b7 — 2026-10-02
 

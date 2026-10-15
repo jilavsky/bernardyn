@@ -1078,3 +1078,70 @@ def test_power_law_dialog_uses_a_readable_label_font_default(qapp):
     assert dialog.font_size.value() == 14
     assert dialog.value().font_size == 14
     dialog.close()
+
+
+def _residual_curve():
+    return GenericCurve(
+        x=[0.01, 0.02, 0.03], y=[-1.0, 0.5, 2.0], label="res", role="residual",
+        x_semantic="scattering_q", y_semantic="normalised_residual", x_label="q",
+        y_label="Normalised residual", x_unit="1/angstrom", y_unit="dimensionless",
+    )
+
+
+def test_failed_template_leaves_no_undo_entry_and_no_change(qapp, monkeypatch, tmp_path):
+    from bernardyn.template.graph_templates import save_template
+
+    window = MainWindow()
+    graph_id = window.controller.workspace.active_graph_id
+    window.controller.add_dataset(_residual_curve(), graph_id=graph_id)
+    # A Kratky template cannot apply to a residual curve.
+    kratky = ApplicationController()
+    kratky.set_transform(kratky.workspace.active_graph_id, "kratky")
+    template = save_template(tmp_path / "kratky", kratky.workspace.graphs[0], "kratky")
+    monkeypatch.setattr(window, "_choose_template", lambda title: template)
+    warnings = []
+    monkeypatch.setattr(main_window.QMessageBox, "warning", lambda *args: warnings.append(args))
+    before = window.controller.workspace.graph(graph_id)
+    count = window.undo_stack.count()
+
+    window._apply_template()
+
+    assert warnings and "raw view" in warnings[0][2]
+    assert window.undo_stack.count() == count
+    assert window.controller.workspace.graph(graph_id) == before
+
+
+def test_failed_multi_step_workspace_edit_is_rolled_back(qapp, monkeypatch):
+    window = MainWindow()
+    graphs = list(window.controller.workspace.graphs)
+    count = window.undo_stack.count()
+    warnings = []
+    monkeypatch.setattr(main_window.QMessageBox, "warning", lambda *args: warnings.append(args))
+
+    def action():
+        window.controller.new_graph(title="half done")
+        raise ValueError("second step failed")
+
+    command = main_window.WorkspaceEditCommand(window, "Two steps", action)
+    assert not window._push_edit(command, "Two steps")
+    assert warnings[0][2] == "second step failed"
+    assert window.controller.workspace.graphs == graphs
+    assert window.tabs.count() == len(graphs)
+    assert window.undo_stack.count() == count
+
+
+def test_reset_graph_defaults_keeps_the_scientific_view(qapp, monkeypatch):
+    window = MainWindow()
+    graph_id = window.controller.workspace.active_graph_id
+    window.controller.add_dataset(
+        Dataset(q=[0.01, 0.02], intensity=[2.0, 1.0], label="s"), graph_id=graph_id
+    )
+    window.controller.set_transform(graph_id, "kratky")
+    monkeypatch.setattr(
+        main_window.QMessageBox, "question", lambda *args: main_window.QMessageBox.StandardButton.Yes
+    )
+    window._reset_graph_defaults()
+    graph = window.controller.workspace.graph(graph_id)
+    assert graph.view_transform_id == "kratky"
+    assert (graph.x_axis.label, graph.y_axis.label) == ("q [Å⁻¹]", "Intensity·q² [cm⁻¹·Å⁻²]")
+    assert not graph.y_axis.log

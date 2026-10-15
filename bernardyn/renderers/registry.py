@@ -6,9 +6,10 @@ Third-party packages can publish registrations through ``bernardyn.renderers``.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Mapping, Protocol
+from typing import Protocol
 
 from PySide6.QtWidgets import QWidget
 

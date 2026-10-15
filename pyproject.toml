@@ -34,7 +34,12 @@ dependencies = [
     # PyIrena.  PySide6 6.9.1 is excluded: QGraphicsItem.setParentItem fails
     # silently in that release and pyqtgraph plots come out empty.
     "pyqtgraph>=0.13.7",
-    "PySide6>=6.8,!=6.9.1",
+    # PySide6 is a core dependency, not a [gui] extra (house-standard
+    # deviation): Bernardyn is a desktop application first, and even the
+    # headless recipes render images with the Qt 2-D renderer.  6.10.* is
+    # excluded to match pyirena[qtplot]; environment.yml additionally stays
+    # below 6.10 for the reference conda environment.
+    "PySide6>=6.8,!=6.9.1,!=6.10.*",
 ]
 
 [project.optional-dependencies]
@@ -70,5 +75,6 @@ target-version = "py310"
 line-length = 100
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "W"]
-ignore = ["E501"]
+select = ["E", "F", "W", "I", "UP", "B"]
+# E741 stays off: I, l, Q are physics notation (intensity, level, Q).
+ignore = ["E501", "E741", "E701", "E702", "E402"]

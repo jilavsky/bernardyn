@@ -162,7 +162,7 @@ def test_pyirena_1_2_saved_results_are_plottable_and_portable(tmp_path, analysis
     restored = ApplicationController()
     restored.open_package(saved)
     assert len(restored.workspace.graphs[0].series) == len(bundle.records)
-    for record, series in zip(bundle.records, restored.workspace.graphs[0].series):
+    for record, series in zip(bundle.records, restored.workspace.graphs[0].series, strict=True):
         dataset = restored.workspace.datasets[series.dataset_id]
         np.testing.assert_allclose(dataset.q, record.q)
         np.testing.assert_allclose(dataset.intensity, record.intensity)

@@ -6,9 +6,9 @@ import logging
 import math
 import subprocess
 import sys
+from collections.abc import Mapping
 from functools import lru_cache
 from pathlib import Path
-from typing import Mapping
 
 import numpy as np
 from PySide6.QtCore import QBuffer, QByteArray, QIODevice
@@ -218,7 +218,7 @@ class OpenGLPlotWidget(QWidget):
     def _render_waterfall(self, graph, visible) -> None:
         series_positions = self._series_positions(graph, visible)
         positions: list[np.ndarray] = []
-        for series_position, (series_view, snapshot) in zip(series_positions, visible):
+        for series_position, (series_view, snapshot) in zip(series_positions, visible, strict=True):
             x, z = self._display_coordinates(graph, snapshot)
             pos = np.column_stack((x, np.full_like(x, series_position), z))
             rgba = tuple(channel / 255 for channel in series_view.style.color)

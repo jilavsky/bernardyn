@@ -9,7 +9,14 @@ from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any
 
-from bernardyn.core.models import GraphDocument, SeriesStyle, SeriesView, json_value
+from bernardyn.core.models import (
+    GraphDocument,
+    SeriesStyle,
+    SeriesView,
+    json_value,
+    merge_extras,
+    split_known_fields,
+)
 
 TEMPLATE_FORMAT = "BERNARDYN_GRAPH_TEMPLATE"
 TEMPLATE_VERSION = 1
@@ -17,7 +24,7 @@ TEMPLATE_VERSION = 1
 
 def template_document(graph: GraphDocument, name: str) -> dict[str, Any]:
     document = graph.to_dict()
-    styles = [json_value(asdict(series.style)) for series in graph.series]
+    styles = [merge_extras(series.style, json_value(asdict(series.style))) for series in graph.series]
     transform_id = graph.view_transform_id
     document["series"] = []
     return {
@@ -69,16 +76,12 @@ def load_template(path: str | Path) -> dict[str, Any]:
 
 def apply_template(graph: GraphDocument, document: dict[str, Any]) -> GraphDocument:
     template = GraphDocument.from_dict(document["graph"])
-    styles = [
-        SeriesStyle(
-            **{
-                **value,
-                "color": tuple(value.get("color", (31, 119, 180, 255))),
-                "error_color": tuple(value.get("error_color", (90, 90, 90, 180))),
-            }
-        )
-        for value in document.get("series_styles", [])
-    ]
+    styles = []
+    for value in document.get("series_styles", []):
+        known, extras = split_known_fields(SeriesStyle, value)
+        known["color"] = tuple(known.get("color", (31, 119, 180, 255)))
+        known["error_color"] = tuple(known.get("error_color", (90, 90, 90, 180)))
+        styles.append(SeriesStyle(**known, extras=extras))
     transform_id = str(document.get("transform_id", "raw"))
     series: list[SeriesView] = []
     for index, existing in enumerate(graph.series):

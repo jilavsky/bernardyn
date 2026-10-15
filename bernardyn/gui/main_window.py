@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import re
 from dataclasses import replace
 from pathlib import Path
 
@@ -51,7 +52,7 @@ from PySide6.QtWidgets import (
 
 from bernardyn import __version__
 from bernardyn.core.controller import PALETTE, ApplicationController
-from bernardyn.core.models import AxisSpec, GraphDocument
+from bernardyn.core.models import AxisSpec, GenericCurve, GraphDocument
 from bernardyn.core.units import axis_label
 from bernardyn.gui.dataset_filters import DATASET_FILTERS, matches_dataset_filter
 from bernardyn.gui.dialogs import (
@@ -107,6 +108,18 @@ def _metadata_number(value, key: str) -> float | None:
     return None
 
 
+_UNDO_OVERRIDE_PREFIX = re.compile(r"^Error calling Python override of \w+::\w+\(\): ")
+
+
+def _edit_error_text(exc: BaseException) -> str:
+    """Return the message of an exception raised inside an undo command.
+
+    PySide re-raises such exceptions with a prefix naming the C++ override,
+    which is noise to a user.
+    """
+    return _UNDO_OVERRIDE_PREFIX.sub("", str(exc))
+
+
 class WorkerSignals(QObject):
     loaded = Signal(object, object)
     failed = Signal(str)
@@ -157,7 +170,14 @@ class GraphEditCommand(QUndoCommand):
         self.recompute = recompute
 
     def redo(self) -> None:
-        self.window._commit_graph(self.after, self.recompute)
+        try:
+            self.window._commit_graph(self.after, self.recompute)
+        except Exception:
+            # update_graph validates before mutating, so nothing changed.
+            # An obsolete command is dropped by QUndoStack.push instead of
+            # leaving an undo entry for an edit that never happened.
+            self.setObsolete(True)
+            raise
 
     def undo(self) -> None:
         self.window._commit_graph(self.before, self.recompute)
@@ -181,12 +201,17 @@ class DatasetImportCommand(QUndoCommand):
     def redo(self) -> None:
         if self.after is None:
             self.before = self.window._controller_state()
-            self.window.controller.add_datasets(
-                self.datasets,
-                graph_id=self.graph_id,
-                transform_parameters=self.transform_parameters,
-                series_styles=self.series_styles,
-            )
+            try:
+                self.window.controller.add_datasets(
+                    self.datasets,
+                    graph_id=self.graph_id,
+                    transform_parameters=self.transform_parameters,
+                    series_styles=self.series_styles,
+                )
+            except Exception:
+                self.window._restore_controller_state(self.before)
+                self.setObsolete(True)
+                raise
             self.after = self.window._controller_state()
         else:
             self.window._restore_controller_state(self.after)
@@ -214,7 +239,15 @@ class WorkspaceEditCommand(QUndoCommand):
     def redo(self) -> None:
         if self.after is None:
             self.before = self.window._controller_state()
-            self.action()
+            try:
+                self.action()
+            except Exception:
+                # A multi-step action may fail after earlier steps succeeded
+                # (e.g. a later graph of a result import).  Roll all of it back.
+                self.window._restore_controller_state(self.before)
+                self.window._rebuild_tabs()
+                self.setObsolete(True)
+                raise
             self.after = self.window._controller_state()
         else:
             self.window._restore_controller_state(self.after)
@@ -919,6 +952,20 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Graph change", str(exc))
             self._sync_inspector()
 
+    def _push_edit(self, command: QUndoCommand, title: str) -> bool:
+        """Push an undoable edit, reporting a failure instead of raising.
+
+        A command whose first redo fails marks itself obsolete, so the stack
+        holds no entry for it and the workspace is unchanged.
+        """
+        try:
+            self.undo_stack.push(command)
+        except Exception as exc:
+            QMessageBox.warning(self, title, _edit_error_text(exc))
+            self._sync_inspector()
+            return False
+        return True
+
     def _commit_graph(self, graph: GraphDocument, recompute: bool) -> None:
         self.controller.update_graph(graph, recompute=recompute)
         self._render_graph(graph.id)
@@ -1090,7 +1137,7 @@ class MainWindow(QMainWindow):
                     )
             self.undo_stack.push(WorkspaceEditCommand(self, f"{verb} datasets", action))
         except Exception as exc:
-            QMessageBox.warning(self, f"{verb} datasets", str(exc))
+            QMessageBox.warning(self, f"{verb} datasets", _edit_error_text(exc))
 
     def _add_pyirena_results(self) -> None:
         graph = self._current_graph()
@@ -1200,7 +1247,7 @@ class MainWindow(QMainWindow):
             self.user_state.set("last_data_folder", str(Path(paths[0]).parent))
             self.user_state.save()
         except Exception as exc:
-            QMessageBox.warning(self, "pyIrena results", str(exc))
+            QMessageBox.warning(self, "pyIrena results", _edit_error_text(exc))
 
     def _dropped_data_paths(self, dropped: list[Path]) -> None:
         """Open dropped files/folders through the normal profile-aware importer."""
@@ -1443,8 +1490,9 @@ class MainWindow(QMainWindow):
         if graph is None or not series_ids:
             return
         retained = tuple(series for series in graph.series if series.id not in series_ids)
-        self.undo_stack.push(
-            GraphEditCommand(self, graph, replace(graph, series=retained), True, "Remove datasets")
+        self._push_edit(
+            GraphEditCommand(self, graph, replace(graph, series=retained), True, "Remove datasets"),
+            "Remove datasets",
         )
 
     def _dataset_list_reordered(self) -> None:
@@ -1670,7 +1718,27 @@ class MainWindow(QMainWindow):
             description=graph.description,
             notes=graph.notes,
         )
-        self.undo_stack.push(GraphEditCommand(self, graph, defaults, True, "Reset graph to defaults"))
+        # Reset presentation only: keep the scientific view and label the axes
+        # for the data actually plotted, not for a default I(Q) graph.
+        first = (
+            self.controller.workspace.datasets[graph.series[0].dataset_id] if graph.series else None
+        )
+        x_label, y_label = self.controller.axis_labels(graph.view_transform_id, first)
+        if isinstance(first, GenericCurve):
+            x_log, y_log = graph.x_axis.log, graph.y_axis.log
+        else:
+            transform = self.controller.transforms.get(graph.view_transform_id)
+            x_log, y_log = transform.default_x_log, transform.default_y_log
+        defaults = replace(
+            defaults,
+            view_transform_id=graph.view_transform_id,
+            x_axis=replace(defaults.x_axis, label=x_label, log=x_log),
+            y_axis=replace(defaults.y_axis, label=y_label, log=y_log),
+        )
+        self._push_edit(
+            GraphEditCommand(self, graph, defaults, True, "Reset graph to defaults"),
+            "Reset graph to defaults",
+        )
 
     def _export_csv(self) -> None:
         page = self._current_page()
@@ -1775,8 +1843,12 @@ class MainWindow(QMainWindow):
         path = self._choose_template("Apply template")
         if graph is None or path is None:
             return
-        after = apply_template(graph, load_template(path))
-        self.undo_stack.push(GraphEditCommand(self, graph, after, True, "Apply graph template"))
+        try:
+            after = apply_template(graph, load_template(path))
+        except Exception as exc:
+            QMessageBox.warning(self, "Apply template", f"{path.name}: {exc}")
+            return
+        self._push_edit(GraphEditCommand(self, graph, after, True, "Apply graph template"), "Apply template")
 
     def _delete_template(self) -> None:
         path = self._choose_template("Delete template")

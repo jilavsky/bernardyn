@@ -13,7 +13,7 @@ The original product brief stays in [specifications.txt](specifications.txt).
 Verified in the `bernardyn` conda env (Python 3.13, PySide6 6.9.3,
 pyqtgraph 0.14.0, NumPy 2.5.3):
 
-- `pytest`: **143 passed, 3 skipped** (OpenGL hardware ×2, MCP-SDK import ×1).
+- `pytest`: **143 passed, 3 skipped** (all three need a hardware OpenGL context).
 - `ruff check bernardyn tests` passes with the repo's own config. Under the house
   rule set (`E,F,W,I,UP,B`) it reports 26 findings; see F15.
 
@@ -40,7 +40,7 @@ format is [graph-package-v3.md](../bernardyn/schemas/graph-package-v3.md).
 the version moves from `0.0.1bN` to `1.0.0`:
 
 1. No open **P1** items in §3 (F1–F3 done).
-2. The package reader tolerates unknown fields (F7). After 1.0, every 1.x
+2. The package reader tolerates unknown fields (F7, done). After 1.0, every 1.x
    minor release will add presentation fields, and today an older reader
    crashes on them.
 3. Every axis in a saved or exported figure shows its quantity and its unit
@@ -104,37 +104,24 @@ the kinds as checkboxes. Group the selections into one graph per (analysis,
 kind). Assign colours per file, with role shown by line style. This is
 also the main open R3 usability item (§5).
 
-**F6 — A failed undoable edit leaves a phantom undo entry and possibly partial
-state (verified).** `QUndoStack.push()` keeps a command whose `redo()` raises
-(count = 1 after a raising redo). Two paths can raise inside `redo()`:
-- `_apply_template` pushes without validating first, e.g. a Kratky template on
-  a residual graph, or a dimensionless-Kratky template on series without
-  I₀/Rg. The exception goes to stderr and the user sees nothing.
-- `WorkspaceEditCommand` (the results import) can fail halfway through its
-  action, after `new_graph()` has run.
+**F6 — done (unreleased).** A command whose first `redo()` fails marks
+itself obsolete and rolls back, so no phantom Undo entry is left.
+`_push_edit` reports the error. **Reset graph to defaults** now keeps the
+scientific view, which was a related silent mislabel. Tests are in
+`tests/test_gui.py`.
 
-*Fix:* call `controller.validate_graph_update(after, recompute=True)` before every
-`GraphEditCommand` push, as `_set_transform` already does. In
-`WorkspaceEditCommand.redo`, restore `before` on exception, call
-`setObsolete(True)`, and re-raise to a message box.
+**F7 — done (unreleased).** The serialised models (graph, axes, typography,
+legend, series, style, annotation, dataset metadata) carry an `extras` mapping:
+- Unknown keys are kept on read and written back on save.
+- Files without unknown keys are byte-for-byte the same as before.
+- Released 0.0.1b7 opens the new packages.
 
-**F7 — Package and template readers crash on unknown fields (verified).**
-`GraphDocument.from_dict` passes nested dicts straight into the dataclass
-constructors (`AxisSpec(**x_axis)`, `SeriesView(**item)`, `SeriesStyle`,
-`Annotation`, `LegendSpec`, `TypographySpec`). A field added in a later
-release raises `TypeError`, not `PackageValidationError`. Unknown top-level
-keys are silently dropped on the next save. The old §8 acceptance required
-retaining unknown keys.
-*Fix:* add one helper that splits a mapping into known fields and an `extras`
-dict. Keep `extras` on each model and write it back out. Convert any remaining
-`TypeError`/`KeyError` into `PackageValidationError`. Freeze a v3 package from
-0.0.1b7 as a test fixture, and add a fixture with injected future fields.
-**Release gate.**
+Malformed graph JSON now raises `PackageValidationError`. A frozen package
+written by 0.0.1b7 (`tests/fixtures/workspace-0.0.1b7.h5`) and injected future
+fields are tested in `tests/test_forward_compat.py`.
 
-**F8 — The API can leave a partial artifact set.** `_write_artifacts` checks
-the image suffix only after writing the package. A request with
-`image_path="x.tif"` writes `x.bernardyn.h5` and then raises.
-*Fix:* move the suffix check into `_validate_request`.
+**F8 — done (unreleased).** The image suffix is validated before any output
+is written.
 
 **F9 — Synthesised uncertainties look like measured ones.** Text files without
 an error column get `error_fraction`×|I| (default 5%) stored as canonical
@@ -175,32 +162,20 @@ that shows the lock owner's host and PID.
 - CSV/ITX exports are written in place. Use the same temp-file +
   `os.replace` pattern as packages and templates.
 
-**F13 — CI skips the MCP tests.** The workflow installs `.[dev]` only, so
-`tests/test_mcp.py` skips on `importorskip("mcp.server.fastmcp")`.
-*Fix:* install `.[dev,mcp]` in `test.yml` and `release.yml`.
+**F13–F15 — done (unreleased), except as noted.**
+- CI and the release workflow install `.[dev,mcp]`.
+- Ruff uses the house rule set, with all findings fixed (`zip(strict=True)`
+  throughout).
+- `changelog.md` was renamed to `CHANGELOG.md`.
+- `Claude outputs/` was removed.
+- PySide6 is pinned `!=6.10.*` like pyIrena. The core-dependency deviation is
+  documented in `pyproject.toml`.
+- `docs/releasing.md` reminds you to check the default branch.
 
-**F14 — Release plumbing.**
-- GitHub's default branch (`origin/HEAD`) is `codex/rebuild`, 34 commits behind
-  `main`, but [releasing.md](../docs/releasing.md) assumes `main`.
-- Its example tag is still `v0.0.1b6`.
-- The local `bernardyn` env reports pyIrena `1.1.1` (stale editable metadata;
-  the source is 1.2.0b3), below the declared `>=1.2.0b2`. Reinstall it, and
-  have `bernardyn-doctor` check the version floor.
-- `environment.yml` caps `pyside6<6.10`, but `pyproject.toml` has no cap. Pick
-  one policy and write the reason next to it.
-
-**F15 — House-standard deviations.** Fix these or document them in
-`pyproject.toml`:
-- The ruff `select` lacks `UP`,`B`, and `ignore` lacks `E741,E701,E702,E402`.
-  Under the house set there are 26 findings: 18 UP035, 6 B905
-  (`zip` without `strict=`, real value in curve export), and 2 UP037.
-- The file is `changelog.md`, not `CHANGELOG.md`.
-- PySide6 is a core dependency, not a `[gui]` extra. That is defensible for a
-  GUI-first app, but write the reason down.
-- There is no `gui/_qt.py` shim.
-- The tracked `Claude outputs/*.png` files should be removed from the repo.
-- The stale `plans/conda-env.yml` was removed in this merge; the root
-  `environment.yml` is authoritative.
+Still open:
+- Reinstall the local editable pyIrena so its metadata reports ≥ 1.2.0b2.
+- Optional: a `gui/_qt.py` import shim. That is a mechanical refactor of every
+  GUI module, left for its own change.
 
 ## 4. Simple, valuable improvements to do now
 
@@ -269,7 +244,7 @@ Merged from the old roadmap (R3, M3, R4, §6, §12), `docs/TODO.md`, and
 - Remote HTTP and live GUI control remain deferred.
 
 ### Format stability
-- Unknown-field preservation (F7). This is the remaining part of old §8.
+- ~~Unknown-field preservation (F7)~~ — done, with a frozen 0.0.1b7 fixture.
 - An explicit pure `vN → vN+1` migration helper, written when the first
   migration that changes semantics is needed. v1→v3 is currently read
   directly, which is acceptable.
@@ -297,14 +272,14 @@ Merged from the old roadmap (R3, M3, R4, §6, §12), `docs/TODO.md`, and
 | Step | Work | Size | Why now |
 |---|---|---|---|
 | 1 | ~~F1 + F2 + F3~~ — done; pyIrena `I_model` unit fix remains upstream | — | — |
-| 2 | **F7** unknown-field-tolerant reader + frozen-fixture tests | 1 d | 1.0 format promise; cheap now, expensive after release |
-| 3 | **F6, F8** (validate before push; atomic API artifacts) | ½ d | Small, removes silent failures |
-| 4 | **F13, F14, F15** (CI extras, default branch, pins, ruff house set, repo cleanup) | ½ d | Release hygiene; makes CI cover MCP |
+| 2 | ~~F7~~ — done | — | — |
+| 3 | ~~F6, F8~~ — done | — | — |
+| 4 | ~~F13–F15~~ — done (default branch is `main`); local pyIrena reinstall remains | — | — |
 | 5 | **F5 + I6** batch result dialog with grouped graphs; **F4** Modeling completeness | 2–3 d | The main remaining usability gap for real multi-file work |
 | 6 | **F9** uncertainty kind for scattering data; **F10, F11, F12** | 1 d | Honest uncertainties; robustness |
 | 7 | **I1–I5, I7** quick improvements | 1–2 d | Visible polish, low risk |
 | 8 | Usability pass with beamline data (§2.6), then release **1.0.0rc1** | — | Gate |
 | 9 | After 1.0: M3 Aida checks → pyIrena hand-off → distribution bars (when edges exist) → R4 tables → 2-D detector images | — | Feature growth on a stable format |
 
-Update `changelog.md` and the user guide as each step ships, not when it is
+Update `CHANGELOG.md` and the user guide as each step ships, not when it is
 planned.

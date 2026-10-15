@@ -7,11 +7,12 @@ import json
 import os
 import platform
 import tempfile
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any
 
 import h5py
 import numpy as np
@@ -385,6 +386,22 @@ def save_package(
     return destination
 
 
+SCATTERING_METADATA_KEYS = frozenset({
+    "canonical_type", "id", "kind", "label", "q_unit", "intensity_unit",
+    "metadata", "provenance", "source_fingerprint",
+})
+GENERIC_METADATA_KEYS = frozenset({
+    "canonical_type", "id", "label", "role", "x_semantic", "y_semantic", "x_label",
+    "y_label", "x_unit", "y_unit", "uncertainty_kind", "metadata", "provenance",
+    "source_fingerprint",
+})
+
+
+def _metadata_extras(metadata: Mapping[str, Any], known: frozenset[str]) -> dict[str, Any]:
+    """Keep dataset metadata keys from newer writers so a resave retains them."""
+    return {key: value for key, value in metadata.items() if key not in known}
+
+
 def _read_dataset(group: h5py.Group, warnings: list[str]) -> tuple[Dataset | GenericCurve, bool]:
     metadata = _read_json(group, "metadata")
     data_group = group.get("data")
@@ -416,6 +433,7 @@ def _read_dataset(group: h5py.Group, warnings: list[str]) -> tuple[Dataset | Gen
             metadata=metadata.get("metadata", {}),
             provenance=metadata.get("provenance", {}),
             source_fingerprint=metadata.get("source_fingerprint"),
+            extras=_metadata_extras(metadata, GENERIC_METADATA_KEYS),
         )
     elif canonical_type == "scattering_curve_v1":
         q, q_ok = _read_numeric(data_group, "Q")
@@ -436,6 +454,7 @@ def _read_dataset(group: h5py.Group, warnings: list[str]) -> tuple[Dataset | Gen
             metadata=metadata.get("metadata", {}),
             provenance=metadata.get("provenance", {}),
             source_fingerprint=metadata.get("source_fingerprint"),
+            extras=_metadata_extras(metadata, SCATTERING_METADATA_KEYS),
         )
     else:
         raise PackageValidationError(f"unsupported canonical dataset type {canonical_type!r}")
@@ -538,7 +557,10 @@ def load_package(path: str | Path) -> LoadedPackage:
             if graph_id not in handle["graphs"]:
                 raise PackageValidationError(f"manifest references missing graph {graph_id}")
             group = handle["graphs"][graph_id]
-            graph = GraphDocument.from_dict(_read_json(group, "document"))
+            try:
+                graph = GraphDocument.from_dict(_read_json(group, "document"))
+            except (KeyError, TypeError, ValueError) as exc:
+                raise PackageValidationError(f"invalid graph document {graph_id}: {exc}") from exc
             graphs.append(graph)
             graph_snapshots: dict[str, PlotSeries] = {}
             series_root = group.get("series")

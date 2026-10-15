@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import csv
 import re
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Mapping
 
 from bernardyn.core.models import GraphDocument, PlotSeries
 
@@ -27,7 +27,7 @@ def export_displayed_csv(
             snapshot = snapshots.get(view.id)
             if snapshot is None:
                 continue
-            for index, (x, y) in enumerate(zip(snapshot.x, snapshot.y)):
+            for index, (x, y) in enumerate(zip(snapshot.x, snapshot.y, strict=True)):
                 writer.writerow(
                     [
                         snapshot.label,
@@ -83,7 +83,7 @@ def export_displayed_itx(
             names = [_wave_name(snapshot.label, suffix, used) for suffix, _ in columns]
             handle.write(f"WAVES/D/O/N=({len(snapshot.x)}) {','.join(names)}\n")
             handle.write("BEGIN\n")
-            for row in zip(*(values for _, values in columns)):
+            for row in zip(*(values for _, values in columns), strict=True):
                 handle.write("\t".join(f"{float(value):.17g}" for value in row) + "\n")
             handle.write("END\n")
             escaped_label = snapshot.label.replace('"', "'")

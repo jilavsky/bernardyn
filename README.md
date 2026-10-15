@@ -29,7 +29,7 @@ see [headless recipes](docs/headless-recipes.md).
 Local MCP-capable agents can use the five-tool [`bernardyn-mcp`](docs/mcp.md)
 server for the same recipe workflow.
 
-User-visible changes are recorded in [`changelog.md`](changelog.md).
+User-visible changes are recorded in [`CHANGELOG.md`](CHANGELOG.md).
 
 ## Install and run
 

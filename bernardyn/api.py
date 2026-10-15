@@ -8,9 +8,9 @@ not fit or modify scientific source files.
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Mapping
 
 from bernardyn.core.controller import PALETTE, ApplicationController
 from bernardyn.core.models import AxisSpec, Dataset, GenericCurve, GraphDocument, PlotSeries
@@ -26,6 +26,8 @@ from bernardyn.io.results import (
 )
 from bernardyn.io.sources import ScatteringLocation
 from bernardyn.template.graph_templates import apply_template, load_template
+
+IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".svg"})
 
 
 @dataclass(frozen=True)
@@ -336,6 +338,10 @@ class PlotService:
         ]
         if not destinations:
             raise ValueError("request a package_path, image_path, or both")
+        # Checked before anything is written, so a bad image path cannot leave
+        # a package behind without its requested image.
+        if request.image_path is not None and request.image_path.suffix.lower() not in IMAGE_SUFFIXES:
+            raise ValueError("image_path must end in .png, .jpg, .jpeg, or .svg")
         for destination in destinations:
             if destination.exists() and not request.overwrite:
                 raise FileExistsError(f"output already exists: {destination}")
@@ -463,8 +469,6 @@ class PlotService:
             artifacts.append(PlotArtifact("package", controller.save(destination, graph_ids=(graph.id,))))
         if request.image_path is not None:
             destination = request.image_path
-            if destination.suffix.lower() not in {".png", ".jpg", ".jpeg", ".svg"}:
-                raise ValueError("image_path must end in .png, .jpg, .jpeg, or .svg")
             destination.parent.mkdir(parents=True, exist_ok=True)
             render_2d_image(graph, controller.snapshots[graph.id], destination)
             artifacts.append(PlotArtifact("image", destination))

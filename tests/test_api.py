@@ -170,3 +170,15 @@ def test_cli_result_recipe_writes_a_package(tmp_path, capsys):
     )
     assert destination.with_name(destination.name + ".bernardyn.h5").is_file()
     assert "graph_id" in capsys.readouterr().out
+
+
+def test_unsupported_image_suffix_is_rejected_before_any_output(tmp_path):
+    request = PlotRequest(
+        "raw_iq",
+        inputs=(ScatteringInput(DATA),),
+        package_path=tmp_path / "graph",
+        image_path=tmp_path / "graph.tif",
+    )
+    with pytest.raises(ValueError, match="image_path"):
+        create_plot(request)
+    assert list(tmp_path.iterdir()) == []
