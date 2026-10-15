@@ -59,7 +59,11 @@ from bernardyn.core.controller import (
 )
 from bernardyn.core.models import AxisSpec, GenericCurve, GraphDocument
 from bernardyn.core.units import axis_label
-from bernardyn.gui.dataset_filters import DATASET_FILTERS, matches_dataset_filter
+from bernardyn.gui.dataset_filters import (
+    DATASET_FILTERS,
+    dataset_category_label,
+    matches_dataset_filter,
+)
 from bernardyn.gui.dialogs import (
     ChecklistDialog,
     DataFileSelectorDialog,
@@ -112,6 +116,13 @@ def _edit_error_text(exc: BaseException) -> str:
     which is noise to a user.
     """
     return _UNDO_OVERRIDE_PREFIX.sub("", str(exc))
+
+
+def _result_titles(path: Path) -> list[str]:
+    """Titles of saved pyIrena results in one file, for the folder browser."""
+    from bernardyn.io.results import discover_results
+
+    return [item.title for item in discover_results(path)]
 
 
 def _skipped_text(skipped) -> str:
@@ -382,23 +393,34 @@ class MainWindow(QMainWindow):
         self.dataset_filter.currentIndexChanged.connect(self._refresh_dataset_list)
         filter_row.addWidget(self.dataset_filter, 1)
         layout.addLayout(filter_row)
-        open_button = QPushButton("Open data…", data_widget)
+        # The two ways to add data sit side by side; the folder browser below
+        # offers both for a whole folder, and the workspace catalog reuses
+        # anything already loaded.
+        open_button = QPushButton("Add I(Q) data…", data_widget)
+        open_button.setToolTip("Choose files and add their scattering I(Q) curves to this graph.")
         open_button.clicked.connect(self._open_data)
+        add_results_button = QPushButton("Add pyIrena results…", data_widget)
+        add_results_button.setToolTip(
+            "Choose files and add their saved pyIrena fits, residuals, or distributions."
+        )
+        add_results_button.clicked.connect(self._add_pyirena_results)
         open_folder_button = QPushButton("Open folder…", data_widget)
+        open_folder_button.setToolTip(
+            "Browse, sort, and filter a folder, then add I(Q) data or pyIrena results."
+        )
         open_folder_button.clicked.connect(self._open_folder)
         add_catalog_button = QPushButton("Add from workspace…", data_widget)
+        add_catalog_button.setToolTip("Add data or results already loaded in this workspace.")
         add_catalog_button.clicked.connect(self._add_from_workspace)
-        add_results_button = QPushButton("Add pyIrena results…", data_widget)
-        add_results_button.clicked.connect(self._add_pyirena_results)
         remove_button = QPushButton("Remove selected from graph", data_widget)
         remove_button.clicked.connect(self._remove_datasets)
         cancel_button = QPushButton("Cancel loading", data_widget)
         cancel_button.clicked.connect(self._cancel_loading)
         button_grid = QGridLayout()
         button_grid.addWidget(open_button, 0, 0)
-        button_grid.addWidget(open_folder_button, 0, 1)
-        button_grid.addWidget(add_catalog_button, 1, 0)
-        button_grid.addWidget(add_results_button, 1, 1)
+        button_grid.addWidget(add_results_button, 0, 1)
+        button_grid.addWidget(open_folder_button, 1, 0)
+        button_grid.addWidget(add_catalog_button, 1, 1)
         layout.addLayout(button_grid)
         layout.addWidget(self.dataset_list, 1)
         action_grid = QGridLayout()
@@ -441,7 +463,8 @@ class MainWindow(QMainWindow):
     def _build_actions(self) -> None:
         self.new_workspace_action = self._action("New workspace", self._new_workspace, QKeySequence.StandardKey.New)
         self.new_window_action = self._action("New window", self.newWindowRequested.emit)
-        self.open_data_action = self._action("Open data…", self._open_data, QKeySequence.StandardKey.Open)
+        self.open_data_action = self._action("Add I(Q) data…", self._open_data, QKeySequence.StandardKey.Open)
+        self.add_results_action = self._action("Add pyIrena results…", self._add_pyirena_results)
         self.open_folder_action = self._action("Open folder…", self._open_folder, "Ctrl+Shift+F")
         self.browse_datasets_action = self._action("Browse data sets…", self._browse_datasets)
         self.workspace_properties_action = self._action(
@@ -504,7 +527,8 @@ class MainWindow(QMainWindow):
         file_menu = self.menuBar().addMenu("&File")
         for action in (
             self.new_workspace_action, self.new_window_action, self.workspace_properties_action,
-            self.open_data_action, self.open_folder_action, self.browse_datasets_action,
+            self.open_data_action, self.add_results_action, self.open_folder_action,
+            self.browse_datasets_action,
             self.open_package_action, self.open_package_new_window_action,
         ):
             file_menu.addAction(action)
@@ -851,6 +875,9 @@ class MainWindow(QMainWindow):
         self._sync_inspector()
 
     def _rebuild_tabs(self) -> None:
+        # Removing and adding tabs emits currentChanged, which records each
+        # passing tab as active; keep the intended one (e.g. a new graph).
+        active = self.controller.workspace.active_graph_id
         while self.tabs.count():
             widget = self.tabs.widget(0)
             self.tabs.removeTab(0)
@@ -879,10 +906,10 @@ class MainWindow(QMainWindow):
                     page.powerLawMoved.connect(self._move_power_law)
                     self.tabs.addTab(page, graph.title)
                     self._render_page(page, graph)
-            active = self.controller.workspace.active_graph_id
             for index in range(self.tabs.count()):
                 if getattr(self.tabs.widget(index), "graph_id", None) == active:
                     self.tabs.setCurrentIndex(index)
+                    self.controller.workspace.active_graph_id = active
                     break
         self._refresh_dataset_list()
         self._sync_inspector()
@@ -1081,7 +1108,7 @@ class MainWindow(QMainWindow):
     def _open_data(self) -> None:
         paths, _ = QFileDialog.getOpenFileNames(
             self,
-            "Open scattering data",
+            "Add I(Q) data",
             str(self.user_state.get("last_data_folder", "")),
             "Scattering data (*.h5 *.hdf5 *.hdf *.nxs *.dat *.txt *.csv);;All files (*)",
         )
@@ -1117,13 +1144,25 @@ class MainWindow(QMainWindow):
             return
         present = {view.dataset_id for view in graph.series}
         catalog = self.controller.workspace.datasets
-        choices = [
-            (dataset.id, f"{dataset.label}  ({dataset.point_count:,} points, {dataset.id[:8]})")
+        # Results (fits, residuals, distributions) are catalog data too.  Typed
+        # non-I(Q) curves can join only a graph in the General I(Q) view.
+        compatible = [
+            dataset
             for dataset in catalog.values()
             if dataset.id not in present
+            and (graph.view_transform_id == "raw" or not isinstance(dataset, GenericCurve))
+        ]
+        choices = [
+            (
+                dataset.id,
+                f"{dataset.label}  — {dataset_category_label(dataset)}, {dataset.point_count:,} points",
+            )
+            for dataset in compatible
         ]
         if not choices:
-            self.statusBar().showMessage("All loaded datasets are already in this graph.", 3000)
+            self.statusBar().showMessage(
+                "No other loaded data can be added to this graph's view.", 4000
+            )
             return
         dialog = ChecklistDialog(
             "Add from workspace", "Loaded data to add to this graph:", choices, parent=self
@@ -1242,6 +1281,13 @@ class MainWindow(QMainWindow):
         )
         if not paths:
             return
+        self._import_results_from_paths([Path(value) for value in paths])
+
+    def _import_results_from_paths(self, paths: list[Path]) -> None:
+        """Offer the saved results in these files, then add the chosen curves."""
+        graph = self._current_graph()
+        if graph is None or not paths:
+            return
         survey = survey_results(paths)
         if not survey.analyses():
             QMessageBox.information(
@@ -1308,9 +1354,11 @@ class MainWindow(QMainWindow):
                     y_axis=replace(graph.y_axis, log=False),
                 ))
             self.controller.add_datasets(datasets, graph_id=graph.id, series_styles=styles)
+        new_graph_ids = []
         for items in batch.curves.values():
             first = items[0][1]
             target = self.controller.new_graph(title=first.graph_title)
+            new_graph_ids.append(target.id)
             target = replace(
                 target,
                 x_axis=AxisSpec(label=axis_label(first.curve.x_label, first.curve.x_unit), log=first.x_log),
@@ -1328,6 +1376,9 @@ class MainWindow(QMainWindow):
                     for position, (file_index, bundle) in enumerate(items)
                 ),
             )
+        # Stay on the I(Q) graph that received data + fit; otherwise show the
+        # first comparison graph the import created.
+        self.controller.workspace.active_graph_id = graph.id if batch.iq else new_graph_ids[0]
 
     def _dropped_data_paths(self, dropped: list[Path]) -> None:
         """Open dropped files/folders through the normal profile-aware importer."""
@@ -1357,12 +1408,16 @@ class MainWindow(QMainWindow):
             self.user_state.get("data_selector", {}),
             paths,
             self,
+            discover_results=_result_titles,
         )
         if dialog.exec() != dialog.DialogCode.Accepted:
             return
         self.user_state.set("last_data_folder", str(folder))
         self.user_state.set("data_selector", dialog.preferences())
         self.user_state.save()
+        if dialog.mode == "results":
+            self._import_results_from_paths(dialog.selected_paths())
+            return
         graph = self._current_graph()
         if graph is not None:
             self._queue_locations(

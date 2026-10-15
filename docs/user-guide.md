@@ -16,12 +16,18 @@ On Windows, use `python -m bernardyn --version` to print it in the terminal.
 
 ## Import data
 
-Use one of the following ways to add data to the active graph:
+The top of the left **Data browser** holds the ways to add data to the active
+graph; the same commands are in the **File** menu:
 
-- **File → Open data…** for one or more files.
-- **File → Open folder…** to browse supported files in a folder.
-- Drag files or folders from the system file browser onto the left **Data
-  browser** list, even when that list is empty.
+- **Add I(Q) data…** adds the scattering curves of one or more chosen files.
+- **Add pyIrena results…** adds saved fits, residuals, or distributions from
+  one or more chosen files (see below).
+- **Open folder…** browses, sorts, and filters a whole folder. Select files,
+  then press **Add I(Q) data** for their curves or **Add pyIrena results…** for
+  their saved fits. Selecting a file lists the pyIrena results it contains.
+- **Add from workspace…** reuses anything already loaded, including results.
+- Drag files or folders from the system file browser onto the **Data browser**
+  list, even when that list is empty; this opens the same folder browser.
 
 The selector recognises HDF5/NXcanSAS (`.h5`, `.hdf5`, `.hdf`, `.nxs`) and
 two-to-four-column text data (`.dat`, `.txt`, `.csv`). For HDF5 files, choose
@@ -44,8 +50,11 @@ does not hide or remove a curve from the graph. Drag rows within the unfiltered
 list to change drawing order, or select rows and use **Remove selected from
 graph** to hide them from that graph. Removing a row does not delete the
 canonical dataset from the workspace.
-Use **Add from workspace…** to tick one or more loaded catalog datasets and
-place them in the active graph without reading their source files again. These
+Use **Add from workspace…** to tick one or more loaded catalog datasets,
+including imported result curves, and place them in the active graph without
+reading their source files again. Each entry names its kind (for example
+"Unified Fit residuals"); in a view other than General I(Q) only scattering
+curves are offered. These
 changes, along with removal and reordering, can be undone and redone.
 **Edit → Remove unused data from workspace…** drops loaded datasets that no
 graph uses, after listing them; source files are never changed and the step

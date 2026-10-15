@@ -295,3 +295,17 @@ def test_modeling_population_number_distribution_is_in_irena_units():
     assert bundle.curve.y_unit == "1/(cm^3 angstrom)"
     assert bundle.graph_title == "Modeling number distribution"
     assert bundle.curve.y.max() > 1e15  # per cm³, not per Å³
+
+
+def test_modeling_result_curves_have_their_own_browser_categories():
+    from bernardyn.gui.dataset_filters import dataset_category_label, result_category
+    from bernardyn.io.results import load_result_curves
+
+    descriptor = _modeling(FIXTURE)
+    bundle = load_result_bundle(descriptor)
+    categories = [result_category(record.to_dataset()) for record in bundle.records]
+    assert categories == ["modeling_measured", "modeling_fit", "modeling_populations"]
+    (volume,) = load_result_curves(descriptor, "volume_distribution")
+    (number,) = load_result_curves(descriptor, "number_distribution")
+    assert dataset_category_label(volume.curve) == "Modeling volume distribution"
+    assert dataset_category_label(number.curve) == "Modeling number distribution"

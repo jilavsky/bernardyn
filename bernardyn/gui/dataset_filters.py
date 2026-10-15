@@ -26,8 +26,12 @@ DATASET_FILTERS = (
     ("Size Distribution cumulative volume", "size_distribution_cumulative_volume_distribution"),
     ("Size Distribution cumulative number", "size_distribution_cumulative_number_distribution"),
     ("Size Distribution cumulative surface", "size_distribution_cumulative_surface_distribution"),
+    ("Modeling results", "modeling_measured"),
     ("Modeling total fit", "modeling_fit"),
     ("Modeling populations", "modeling_populations"),
+    ("Modeling residuals", "modeling_residuals"),
+    ("Modeling volume distribution", "modeling_volume_distribution"),
+    ("Modeling number distribution", "modeling_number_distribution"),
     ("Simple Fits results", "simple_fits_measured"),
     ("Simple Fits model", "simple_fits_fit"),
     ("Simple Fits residuals", "simple_fits_residuals"),
@@ -57,6 +61,11 @@ def result_category(dataset: Dataset | GenericCurve) -> str | None:
     } or not isinstance(role, str):
         return None
     if analysis == "modeling" and role.startswith("population_"):
+        # population_<n> is an I(Q) curve; population_<n>_<kind>_distribution
+        # is one population's size distribution.
+        for kind in ("volume_distribution", "number_distribution"):
+            if role.endswith(kind):
+                return f"modeling_{kind}"
         return "modeling_populations"
     if analysis == "waxs_peakfit" and role.startswith("peak_"):
         return "waxs_peakfit_peaks"
@@ -65,6 +74,14 @@ def result_category(dataset: Dataset | GenericCurve) -> str | None:
     if role == "residual":
         role = "residuals"
     return f"{analysis}_{role}"
+
+
+def dataset_category_label(dataset: Dataset | GenericCurve) -> str:
+    """Short user-facing category, e.g. "Unified Fit residuals" or "SAS data"."""
+    category = result_category(dataset)
+    if category is None:
+        return "SAS data"
+    return next((label for label, filter_id in DATASET_FILTERS if filter_id == category), category)
 
 
 def matches_dataset_filter(dataset: Dataset | GenericCurve, filter_id: str) -> bool:

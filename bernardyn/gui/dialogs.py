@@ -50,7 +50,12 @@ from bernardyn.io.sources import ScatteringLocation
 
 
 class DataFileSelectorDialog(QDialog):
-    """Choose files and their plottable 1-D data without dialog cascades."""
+    """Choose files, then add their I(Q) data or their saved pyIrena results.
+
+    ``mode`` tells the caller which button accepted the dialog: ``"iq"`` for
+    the checked 1-D data, ``"results"`` for the saved results of the selected
+    files (chosen afterwards in ResultImportDialog).
+    """
 
     def __init__(
         self,
@@ -59,10 +64,15 @@ class DataFileSelectorDialog(QDialog):
         preferences: Mapping[str, object] | None = None,
         paths: list[Path] | None = None,
         parent=None,
+        *,
+        discover_results: Callable[[Path], list[str]] | None = None,
     ) -> None:
         super().__init__(parent)
         self.folder = Path(folder)
         self._discover = discover
+        self._discover_results = discover_results
+        self._result_titles: dict[Path, list[str]] = {}
+        self.mode = "iq"
         self._fixed_paths = [Path(path) for path in paths] if paths is not None else None
         stored = dict(preferences or {})
         self._profiles: dict[str, list[int]] = {
@@ -74,7 +84,7 @@ class DataFileSelectorDialog(QDialog):
         self._errors: dict[Path, str] = {}
         self._current_path: Path | None = None
         self._syncing = False
-        self.setWindowTitle(f"Select scattering data — {self.folder.name}")
+        self.setWindowTitle(f"Select data — {self.folder.name}")
         self.file_type = QComboBox(self)
         for label, value in FILE_TYPE_CHOICES:
             self.file_type.addItem(label, value)
@@ -113,18 +123,27 @@ class DataFileSelectorDialog(QDialog):
         select_all = QPushButton("Select all visible", self)
         select_all.clicked.connect(self._select_all_visible)
         filter_row.addWidget(select_all)
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Open | QDialogButtonBox.StandardButton.Cancel,
-            parent=self,
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel, parent=self)
+        self.add_iq_button = buttons.addButton("Add I(Q) data", QDialogButtonBox.ButtonRole.AcceptRole)
+        self.add_iq_button.setDefault(True)
+        self.add_iq_button.setToolTip("Add the checked 1-D data of every selected file.")
+        self.add_results_button = buttons.addButton(
+            "Add pyIrena results…", QDialogButtonBox.ButtonRole.ActionRole
         )
-        buttons.accepted.connect(self._accept_selection)
+        self.add_results_button.setToolTip(
+            "Choose saved fits, residuals, or distributions from the selected files."
+        )
+        self.add_results_button.setVisible(discover_results is not None)
+        self.add_iq_button.clicked.connect(self._accept_selection)
+        self.add_results_button.clicked.connect(self._accept_results)
         buttons.rejected.connect(self.reject)
         layout = QVBoxLayout(self)
         layout.addWidget(
             QLabel(
                 f"Folder: {self.folder}\n"
-                "Select files on the left, then select the desired 1-D data on the right. "
-                "Choices are reused for files with the same layout."
+                "Select files on the left. Add I(Q) data loads the 1-D data checked on the "
+                "right (choices are reused for files with the same layout); Add pyIrena "
+                "results offers the fits saved in the selected files."
             )
         )
         layout.addLayout(controls)
@@ -230,7 +249,9 @@ class DataFileSelectorDialog(QDialog):
             return
         locations = self._locations_for(path)
         if not locations:
-            self.data_status.setText(self._errors.get(path, "No plottable 1-D data was found."))
+            self.data_status.setText(
+                self._errors.get(path, "No plottable 1-D data was found.") + self._results_note(path)
+            )
             self._syncing = False
             return
         profile_key = self._profile_key(locations)
@@ -256,8 +277,27 @@ class DataFileSelectorDialog(QDialog):
             instruction += " Reused from a previous file with this layout."
         elif len(locations) > 1:
             instruction += " No automatic choice is made for a multi-data file."
-        self.data_status.setText(instruction)
+        self.data_status.setText(instruction + self._results_note(path))
         self._syncing = False
+
+    def _results_note(self, path: Path) -> str:
+        """Name the saved pyIrena results in this file, if any."""
+        if self._discover_results is None or path.suffix.lower() not in (".h5", ".hdf5", ".hdf", ".nxs"):
+            return ""
+        if path not in self._result_titles:
+            try:
+                self._result_titles[path] = list(self._discover_results(path))
+            except Exception:
+                self._result_titles[path] = []
+        titles = self._result_titles[path]
+        return f"\nSaved pyIrena results: {', '.join(titles)}." if titles else ""
+
+    def _accept_results(self) -> None:
+        if not self.selected_paths():
+            QMessageBox.information(self, "Add pyIrena results", "Select one or more files first.")
+            return
+        self.mode = "results"
+        self.accept()
 
     def _data_selection_changed(self, item: QListWidgetItem) -> None:
         if self._syncing or self._current_path is None:
@@ -301,6 +341,7 @@ class DataFileSelectorDialog(QDialog):
         }
 
     def _accept_selection(self) -> None:
+        self.mode = "iq"
         if not self.selected_paths():
             QMessageBox.information(self, "Select scattering data", "Select one or more files to load.")
             return

@@ -1277,3 +1277,101 @@ def test_duplicate_graph_and_remove_unused_data_are_undoable(qapp, monkeypatch):
     assert len(window.controller.workspace.datasets) == 2
     window.controller.workspace.dirty = False
     window.close()
+
+
+def test_folder_browser_can_hand_selected_files_to_the_result_import(qapp, monkeypatch, tmp_path):
+    from shutil import copy2
+
+    source = Path(__file__).parents[1] / "testData"
+    files = [
+        copy2(source / "Al_Mg_Si__40C_0min_0498.h5", tmp_path / "sample.h5"),
+        copy2(source / "Rh1_0085.h5", tmp_path / "plain.h5"),
+    ]
+    controller = ApplicationController()
+    dialog = DataFileSelectorDialog(
+        tmp_path, controller.sources.discover_path, discover_results=main_window._result_titles
+    )
+    assert not dialog.add_results_button.isHidden()
+    item = dialog.file_list.findItems("sample.h5", Qt.MatchFlag.MatchExactly)[0]
+    dialog.file_list.setCurrentItem(item)
+    item.setSelected(True)
+    assert "Saved pyIrena results: Unified Fit, Size Distribution, Modeling." in dialog.data_status.text()
+    dialog.add_results_button.click()
+    assert dialog.mode == "results" and dialog.result() == dialog.DialogCode.Accepted
+    assert dialog.selected_paths() == [files[0]]
+
+    class ResultsChoice:
+        DialogCode = dialog.DialogCode
+
+        def __init__(self, *args, **kwargs):
+            self.mode = "results"
+
+        def exec(self):
+            return self.DialogCode.Accepted
+
+        def preferences(self):
+            return {}
+
+        def selected_paths(self):
+            return [files[0]]
+
+    window = MainWindow()
+    window.user_state = UserState(tmp_path / "preferences.json")
+    imported = []
+    monkeypatch.setattr(main_window, "DataFileSelectorDialog", ResultsChoice)
+    monkeypatch.setattr(window, "_import_results_from_paths", lambda paths: imported.append(paths))
+    window._open_file_selector(tmp_path)
+    assert imported == [[files[0]]]
+    window.controller.workspace.dirty = False
+    window.close()
+
+
+def test_add_from_workspace_offers_loaded_results_that_fit_the_view(qapp, monkeypatch):
+    fixture = Path(__file__).parents[1] / "testData" / "Al_Mg_Si__40C_0min_0498.h5"
+    window = MainWindow()
+    monkeypatch.setattr(main_window.QFileDialog, "getOpenFileNames", lambda *args: ([str(fixture)], ""))
+    _accept_results(monkeypatch, "unified_fit", ("iq", "residuals"))
+    window._add_pyirena_results()
+    # A new, empty I(Q) graph can take every loaded result curve.
+    window._new_graph("plot2d")
+    offered = []
+
+    from PySide6.QtWidgets import QDialog
+
+    class AcceptAll:
+        DialogCode = QDialog.DialogCode
+
+        def __init__(self, title, prompt, items, **kwargs):
+            offered.append([label for _, label in items])
+            self.ids = [item_id for item_id, _ in items]
+
+        def exec(self):
+            return QDialog.DialogCode.Accepted
+
+        def selected_ids(self):
+            return self.ids
+
+    monkeypatch.setattr(main_window, "ChecklistDialog", AcceptAll)
+    window._add_from_workspace()
+    labels = offered[-1]
+    assert any("Unified Fit residuals" in label for label in labels)
+    assert any("Unified Fit model" in label for label in labels)
+    graph = window.controller.workspace.graphs[-1]
+    assert len(graph.series) == 3
+    # In a Kratky view only scattering curves are offered.
+    window._new_graph("plot2d")
+    window.controller.set_transform(window.controller.workspace.active_graph_id, "kratky")
+    window._add_from_workspace()
+    assert not any("residuals" in label for label in offered[-1])
+    window.controller.workspace.dirty = False
+    window.close()
+
+
+def test_new_and_duplicated_graphs_become_the_current_tab(qapp):
+    window = MainWindow()
+    window._new_graph("plot2d")
+    assert window._current_graph().id == window.controller.workspace.graphs[-1].id
+    window._duplicate_graph()
+    assert window._current_graph().title.endswith("(copy)")
+    window.controller.workspace.dirty = False
+    window.close()

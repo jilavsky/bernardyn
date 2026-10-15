@@ -8,6 +8,13 @@ behavior changes.
 
 ### Added
 
+- **Open folder…** can now add pyIrena results as well as I(Q) data: select
+  files and press **Add pyIrena results…**. Selecting a file lists the saved
+  results it contains.
+- **Add from workspace…** names each entry's kind (e.g. "Unified Fit
+  residuals") and offers only data that fit the graph's view.
+- Data-browser filters for Modeling measured data, residuals, and volume and
+  number distributions.
 - **Templates → Rename graph template…**. The template list shows each
   template's view, output size, and number of series styles.
 - **Graph → Duplicate graph** copies the active graph into a new, independent
@@ -48,6 +55,9 @@ behavior changes.
   model or component shares the units of the measured data it was fitted to.
 - Size distribution curves are labelled with the stored units, e.g. volume
   distributions show `vol. fraction·Å⁻¹`.
+- **Open data…** is now **Add I(Q) data…**, and sits beside **Add pyIrena
+  results…** at the top of the Data browser, with **Open folder…** and **Add
+  from workspace…** below.
 - PySide6 6.10.x is excluded, matching pyIrena's Qt plotting extra.
 - Displayed-data CSV exports begin with `#` comment lines describing the graph,
   its axes and units, and each series' view (format
@@ -100,6 +110,10 @@ behavior changes.
 - A package lock held by Bernardyn on another computer no longer expires after
   30 seconds. Opening or saving over a locked package names the lock's owner
   and offers **Break lock** for a lock left by a crash.
+- A new or duplicated graph, or one created by an import, now becomes the
+  current tab. Previously the first tab stayed selected.
+- Modeling population distributions are no longer grouped with the population
+  I(Q) curves in the Data-browser filter.
 - Closing a graph tab activates its neighbour, and new graphs never repeat an
   existing "Scattering plot N" title.
 - Saving a template whose file name already exists asks before replacing it.

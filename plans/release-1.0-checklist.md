@@ -1,5 +1,15 @@
 # 1.0 release checklist (plan step 8)
 
+**Result, 2026-10-15:** A, C, D, E, F (fresh conda install from GitHub) and G
+(MCP) passed. B worked as described but felt cumbersome, so it was changed:
+- **Add I(Q) data…** and **Add pyIrena results…** now sit side by side, with
+  **Open folder…** and **Add from workspace…** below.
+- The folder browser adds results as well as I(Q) data.
+- **Add from workspace…** labels result curves.
+- New graphs now become the current tab.
+
+A quick re-check of B with the new layout is worthwhile before rc1.
+
 The automated suite covers the code paths. This pass checks what tests cannot:
 that real beamline data look right and that the workflow feels right to the
 person who will use it. Budget about an hour on macOS, plus about 20 minutes on
