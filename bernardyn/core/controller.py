@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable, Mapping
 from dataclasses import replace
 from pathlib import Path
@@ -10,6 +11,9 @@ from typing import Any
 import numpy as np
 
 from bernardyn.core.models import (
+    ESTIMATED_UNCERTAINTY_KINDS,
+    UNCERTAINTY_MEASURED,
+    UNCERTAINTY_PARTLY_ESTIMATED,
     Dataset,
     GenericCurve,
     GraphDocument,
@@ -38,6 +42,44 @@ PALETTE = (
 # Stands in for "default scattering units" when a graph has no data yet, so
 # an empty graph is labelled as q [Å⁻¹] / Intensity [cm⁻¹] in every view.
 _NOMINAL_DATASET = Dataset(q=[1.0], intensity=[1.0], label="nominal")
+
+
+def metadata_parameter(dataset: Dataset | GenericCurve, key: str) -> float | None:
+    """Return a transform parameter stored at the top level of a dataset's metadata.
+
+    Only top-level keys count (case-insensitive), which is where loaders put
+    values meant for this purpose, e.g. pyIrena Simple Fits Guinier I0/Rg.
+    Nested metadata (file attributes, multi-level fit results) is ignored, so
+    a level-2 Rg is never picked up silently.
+    """
+    for name, value in dataset.metadata.items():
+        if str(name).lower() == key.lower() and not isinstance(value, (Mapping, list, tuple)):
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
+def describe_uncertainty(dataset: Dataset | GenericCurve) -> str:
+    """One line saying where a curve's Y uncertainty came from."""
+    if isinstance(dataset, GenericCurve):
+        if dataset.dy is None:
+            return "No uncertainty"
+        return f"Uncertainty: {(dataset.uncertainty_kind or 'not recorded').replace('_', ' ')}"
+    if dataset.uncertainty is None:
+        return "No uncertainty"
+    kind = dataset.uncertainty_kind
+    fraction = dataset.metadata.get("error_fraction")
+    rule = f"{float(fraction) * 100:g}% of I" if isinstance(fraction, (int, float)) else "a fraction of I"
+    if kind == UNCERTAINTY_MEASURED:
+        return "Uncertainty: measured (from the source file)"
+    if kind == UNCERTAINTY_PARTLY_ESTIMATED:
+        count = dataset.metadata.get("uncertainties_synthesized", "some")
+        return f"Uncertainty: partly estimated ({count} points set to {rule}, not measured)"
+    if kind in ESTIMATED_UNCERTAINTY_KINDS:
+        return f"Uncertainty: estimated as {rule}, not measured"
+    return "Uncertainty: source not recorded"
 
 
 def _curve_units(dataset: Dataset | GenericCurve) -> tuple[str, str]:
@@ -81,7 +123,14 @@ class ApplicationController:
         self.new_graph()
 
     def new_graph(self, renderer_id: str = "plot2d", title: str | None = None) -> GraphDocument:
-        number = len(self.workspace.graphs) + 1
+        # One more than the highest default-numbered title, so closing a
+        # graph never produces two tabs with the same name.
+        used = [
+            int(match.group(1))
+            for graph in self.workspace.graphs
+            if (match := re.fullmatch(r"Scattering plot (\d+)", graph.title))
+        ]
+        number = max(used, default=0) + 1
         graph = GraphDocument(
             title=title or f"Scattering plot {number}",
             renderer_id=renderer_id,
@@ -105,6 +154,10 @@ class ApplicationController:
         return graph
 
     def close_graph(self, graph_id: str) -> None:
+        position = next(
+            (index for index, graph in enumerate(self.workspace.graphs) if graph.id == graph_id), 0
+        )
+        was_active = self.workspace.active_graph_id == graph_id
         self.workspace.graphs = [graph for graph in self.workspace.graphs if graph.id != graph_id]
         self.snapshots.pop(graph_id, None)
         self.previews.pop(graph_id, None)
@@ -114,7 +167,11 @@ class ApplicationController:
         self._graph_warnings.pop(graph_id, None)
         if not self.workspace.graphs:
             self.new_graph()
-        self.workspace.active_graph_id = self.workspace.graphs[-1].id
+        elif was_active or self.workspace.active_graph_id is None:
+            # Activate the neighbour that took the closed tab's place.
+            self.workspace.active_graph_id = self.workspace.graphs[
+                min(position, len(self.workspace.graphs) - 1)
+            ].id
         self.workspace.dirty = True
 
     def _default_parameters(self, dataset: Dataset | GenericCurve, transform_id: str) -> dict[str, float]:
@@ -125,26 +182,11 @@ class ApplicationController:
             return {}
         transform = self.transforms.get(transform_id)
         values: dict[str, float] = {}
-        metadata = dict(dataset.metadata)
         for parameter in transform.parameters:
-            value = self._metadata_number(metadata, parameter.id)
+            value = metadata_parameter(dataset, parameter.id)
             if value is not None:
                 values[parameter.id] = value
         return values
-
-    @staticmethod
-    def _metadata_number(value: Mapping[str, Any], key: str) -> float | None:
-        for name, item in value.items():
-            if str(name).lower() == key.lower():
-                try:
-                    return float(item)
-                except (TypeError, ValueError):
-                    pass
-            if isinstance(item, Mapping):
-                found = ApplicationController._metadata_number(item, key)
-                if found is not None:
-                    return found
-        return None
 
     def axis_labels(
         self, transform_id: str, dataset: Dataset | GenericCurve | None = None
@@ -709,8 +751,70 @@ class ApplicationController:
         return saved
 
     def graph_warnings(self, graph_id: str) -> list[str]:
-        return self._graph_warnings.get(graph_id, []) + [
-            warning
-            for snapshot in self.snapshots.get(graph_id, {}).values()
-            for warning in snapshot.warnings
-        ]
+        return (
+            self._graph_warnings.get(graph_id, [])
+            + [
+                warning
+                for snapshot in self.snapshots.get(graph_id, {}).values()
+                for warning in snapshot.warnings
+            ]
+            + list(self.estimated_uncertainty_notes(graph_id).values())
+            + self.parameter_source_notes(graph_id)
+        )
+
+    def parameter_source_notes(self, graph_id: str) -> list[str]:
+        """Say which series use view parameters stored with their own data.
+
+        Values such as I0/Rg can be filled in from a dataset's metadata when it
+        is added; this keeps that visible rather than silent.
+        """
+        try:
+            graph = self.workspace.graph(graph_id)
+            transform = self.transforms.get(graph.view_transform_id)
+        except KeyError:
+            return []
+        if not transform.parameters:
+            return []
+        notes: list[str] = []
+        for view in graph.series:
+            dataset = self.workspace.datasets.get(view.dataset_id)
+            if dataset is None or not view.transform_parameters:
+                continue
+            stored = {
+                parameter.id: metadata_parameter(dataset, parameter.id) for parameter in transform.parameters
+            }
+            used = {key: float(value) for key, value in view.transform_parameters.items()}
+            if all(stored.get(key) == value for key, value in used.items()):
+                origin = (
+                    "its pyIrena Simple Fits result"
+                    if "pyirena_simple_fit" in dataset.metadata
+                    else "its metadata"
+                )
+                values = ", ".join(f"{key} = {value:g}" for key, value in used.items())
+                notes.append(f"{view.legend_label or dataset.label}: {values} taken from {origin}")
+        return notes
+
+    def estimated_uncertainty_notes(self, graph_id: str) -> dict[str, str]:
+        """Notes, by series ID, for visible Y error bars that were not measured.
+
+        Computed from the current style so that turning error bars on or off
+        updates the warning without recomputing data.
+        """
+        try:
+            graph = self.workspace.graph(graph_id)
+        except KeyError:
+            return {}
+        notes: dict[str, str] = {}
+        for view in graph.series:
+            dataset = self.workspace.datasets.get(view.dataset_id)
+            if (
+                isinstance(dataset, Dataset)
+                and dataset.uncertainty_kind in ESTIMATED_UNCERTAINTY_KINDS
+                and view.visible
+                and view.style.show_error_bars
+                and view.style.show_y_error_bars
+            ):
+                label = view.legend_label or dataset.label
+                detail = describe_uncertainty(dataset).removeprefix("Uncertainty: ")
+                notes[view.id] = f"{label} error bars: {detail}"
+        return notes

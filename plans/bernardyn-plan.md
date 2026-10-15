@@ -119,44 +119,34 @@ fields are tested in `tests/test_forward_compat.py`.
 **F8 — done (unreleased).** The image suffix is validated before any output
 is written.
 
-**F9 — Synthesised uncertainties look like measured ones.** Text files without
-an error column get `error_fraction`×|I| (default 5%) stored as canonical
-`Idev`. This value is then exported to CSV/ITX/H5XP as real error. Only
-`metadata["uncertainties_synthesized"]` records the difference.
-Evidence: [sources.py](../bernardyn/io/sources.py) around line 592.
-*Fix:* add an `uncertainty_kind` (`measured`/`estimated`/`absent`) to
-`Dataset`, as `GenericCurve` already has. Show it in the inspector, write it in
-CSV/ITX headers, and default error bars off for estimated errors. Changing the
-default to "no synthetic errors" would be a behaviour change, so ask first.
+**F9 — done (unreleased).** `Dataset.uncertainty_kind` is `measured`,
+`estimated` or `partly_estimated`, or None for packages written before
+0.0.1b8. Each loader states it; for text files, columns are counted because
+pyIrena does not flag the errors it generates. It is saved in package
+metadata (older readers ignore it) and shown in the dataset tooltip. The graph
+warns while estimated error bars are visible, and ITX/H5XP exports carry a
+note.
+
+Not changed: estimated errors are still synthesised by default (5%). Making
+"no synthetic errors" the default would change behaviour and is your call.
+The CSV header comes with I5.
 
 ### P3
 
-**F10 — Silent parameter defaults for dimensionless Kratky.**
-`_metadata_number` returns the first `Rg`/`I0` found anywhere in nested
-metadata. The GUI shows the value for confirmation, but adding data to an
-existing dimensionless-Kratky graph applies it silently. With multi-level
-Unified results, that may be level 2.
-*Fix:* accept only top-level or explicitly mapped keys, and record the source
-of the value in the series' warnings.
+**F10 — done (unreleased).** `metadata_parameter` reads only top-level keys.
+`parameter_source_notes` reports when a series' I₀/Rg came from its own
+metadata.
 
-**F11 — Edit lock on network shares.** `QLockFile.setStaleLockTime(30_000)`
-lets a second host treat a live lock as stale after 30 s, because Qt can check
-process liveness only on its own host. This is plausible but untested on the
-beamline file server.
-*Fix:* `setStaleLockTime(0)`, plus an explicit "Open anyway / break lock" choice
-that shows the lock owner's host and PID.
+**F11 — done (unreleased).** `setStaleLockTime(0)`. A held lock names its
+owner (program, PID, host) and offers **Break lock**. This is tested with a
+simulated lock from another host. Not yet tried on the real beamline share.
 
-**F12 — Smaller correctness/hygiene items.**
-- `close_graph` always activates the last graph rather than a neighbour of the
-  closed tab.
-- `new_graph` numbering (`len + 1`) repeats titles after closing a graph.
-- `_save_template` sanitises names, so two names can map to one file; the
-  second save silently overwrites the first. Warn first.
-- `dataset_checksum` does not include the canonical type tag that the R2
-  contract promised. Don't change the hash, because that would invalidate
-  existing packages. Correct the v2/v3 schema text instead.
-- CSV/ITX exports are written in place. Use the same temp-file +
-  `os.replace` pattern as packages and templates.
+**F12 — done (unreleased).**
+- Closing a graph activates its neighbour.
+- Default graph titles stay unique.
+- The template overwrite prompt is in place.
+- The v2 schema text describes the actual dataset checksum.
+- CSV/ITX writes are atomic.
 
 **F13–F15 — done (unreleased), except as noted.**
 - CI and the release workflow install `.[dev,mcp]`.
@@ -271,7 +261,7 @@ Merged from the old roadmap (R3, M3, R4, §6, §12), `docs/TODO.md`, and
 | 3 | ~~F6, F8~~ — done | — | — |
 | 4 | ~~F13–F15~~ — done (default branch is `main`); local pyIrena reinstall remains | — | — |
 | 5 | ~~F5 + I6, F4~~ — done; Modeling residuals and number-distribution units need pyIrena | — | — |
-| 6 | **F9** uncertainty kind for scattering data; **F10, F11, F12** | 1 d | Honest uncertainties; robustness |
+| 6 | ~~F9–F12~~ — done; synthetic-error default left unchanged | — | — |
 | 7 | **I1–I5, I7** quick improvements | 1–2 d | Visible polish, low risk |
 | 8 | Usability pass with beamline data (§2.6), then release **1.0.0rc1** | — | Gate |
 | 9 | After 1.0: M3 Aida checks → pyIrena hand-off → distribution bars (when edges exist) → R4 tables → 2-D detector images | — | Feature growth on a stable format |

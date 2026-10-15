@@ -388,7 +388,7 @@ def save_package(
 
 SCATTERING_METADATA_KEYS = frozenset({
     "canonical_type", "id", "kind", "label", "q_unit", "intensity_unit",
-    "metadata", "provenance", "source_fingerprint",
+    "uncertainty_kind", "metadata", "provenance", "source_fingerprint",
 })
 GENERIC_METADATA_KEYS = frozenset({
     "canonical_type", "id", "label", "role", "x_semantic", "y_semantic", "x_label",
@@ -451,6 +451,7 @@ def _read_dataset(group: h5py.Group, warnings: list[str]) -> tuple[Dataset | Gen
             label=str(metadata.get("label", "Dataset")),
             q_unit=str(metadata.get("q_unit", "1/angstrom")),
             intensity_unit=str(metadata.get("intensity_unit", "1/cm")),
+            uncertainty_kind=metadata.get("uncertainty_kind"),
             metadata=metadata.get("metadata", {}),
             provenance=metadata.get("provenance", {}),
             source_fingerprint=metadata.get("source_fingerprint"),

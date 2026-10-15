@@ -320,6 +320,8 @@ def load_result_bundle(descriptor: ResultDescriptor) -> ResultBundle:
             q=x,
             intensity=y,
             uncertainty=uncertainty if role == "measured" else None,
+            # pyIrena stores the measured data's own uncertainty with a fit.
+            uncertainty_kind="measured" if role == "measured" else None,
             q_unit=q_unit,
             intensity_unit=unit,
             label=f"{stem} — {descriptor.title} {label}",

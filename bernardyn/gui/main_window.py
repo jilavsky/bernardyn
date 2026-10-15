@@ -51,7 +51,12 @@ from PySide6.QtWidgets import (
 )
 
 from bernardyn import __version__
-from bernardyn.core.controller import PALETTE, ApplicationController
+from bernardyn.core.controller import (
+    PALETTE,
+    ApplicationController,
+    describe_uncertainty,
+    metadata_parameter,
+)
 from bernardyn.core.models import AxisSpec, GenericCurve, GraphDocument
 from bernardyn.core.units import axis_label
 from bernardyn.gui.dataset_filters import DATASET_FILTERS, matches_dataset_filter
@@ -86,22 +91,6 @@ def _documentation_url() -> QUrl:
     if DOCUMENTATION_DIRECTORY.is_dir():
         return QUrl.fromLocalFile(str(DOCUMENTATION_DIRECTORY))
     return QUrl(DOCUMENTATION_URL)
-
-
-def _metadata_number(value, key: str) -> float | None:
-    if not isinstance(value, dict):
-        return None
-    for name, item in value.items():
-        if str(name).lower() == key.lower():
-            try:
-                return float(item)
-            except (TypeError, ValueError):
-                pass
-    for item in value.values():
-        found = _metadata_number(item, key)
-        if found is not None:
-            return found
-    return None
 
 
 _UNDO_OVERRIDE_PREFIX = re.compile(r"^Error calling Python override of \w+::\w+\(\): ")
@@ -600,13 +589,56 @@ class MainWindow(QMainWindow):
         if self._locked_workspace_path == target and self._workspace_lock is not None:
             return self._workspace_lock, False
         lock = QLockFile(f"{target}.lock")
-        # QLockFile identifies a dead local process and cleans a stale lock;
-        # 30 seconds also covers a crash on filesystems where that check is not
-        # available immediately.
-        lock.setStaleLockTime(30_000)
+        # Never stale by age.  QLockFile still clears a lock whose process has
+        # died on this computer, but it cannot see processes on other hosts:
+        # with an age limit, a second machine on a shared beamline disk would
+        # take over a live lock after that time.  A lock left by a crash
+        # elsewhere is broken explicitly (see _lock_or_ask).
+        lock.setStaleLockTime(0)
         if lock.tryLock(0):
             return lock, True
         return None, False
+
+    @staticmethod
+    def _lock_owner(target: Path) -> str:
+        # PySide6 returns (pid, hostname, appname), or a falsy value when the
+        # lock file cannot be read.
+        info = QLockFile(f"{target}.lock").getLockInfo()
+        if not info or len(info) != 3 or not info[0]:
+            return "another program"
+        pid, host, application = info
+        return f"{application or 'a program'} (process {pid}) on {host or 'an unknown computer'}"
+
+    def _ask_break_lock(self, target: Path, owner: str) -> bool:
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("Workspace already open")
+        box.setText(self._workspace_locked_message(target))
+        box.setInformativeText(
+            f"It is locked by {owner}.\n\n"
+            "If that program is no longer running, for example after a crash on another "
+            "computer, you can break the lock. If it is still running, whichever copy is "
+            "saved last will overwrite the other."
+        )
+        box.addButton(QMessageBox.StandardButton.Cancel)
+        breaker = box.addButton("Break lock", QMessageBox.ButtonRole.DestructiveRole)
+        box.setDefaultButton(QMessageBox.StandardButton.Cancel)
+        box.exec()
+        return box.clickedButton() is breaker
+
+    def _lock_or_ask(self, target: Path) -> tuple[QLockFile | None, bool]:
+        """Acquire the edit lock, offering to break a lock held elsewhere."""
+        lock, acquired = self._try_lock_workspace(target)
+        if lock is not None:
+            return lock, acquired
+        if not self._ask_break_lock(target, self._lock_owner(target)):
+            return None, False
+        try:
+            Path(f"{target}.lock").unlink(missing_ok=True)
+        except OSError as exc:
+            QMessageBox.critical(self, "Workspace already open", f"Could not break the lock: {exc}")
+            return None, False
+        return self._try_lock_workspace(target)
 
     def _release_workspace_lock(self) -> None:
         if self._workspace_lock is not None:
@@ -631,11 +663,11 @@ class MainWindow(QMainWindow):
     ) -> bool:
         """Open one package after acquiring its lifetime edit lock."""
         target = Path(path).expanduser().resolve()
-        lock, acquired = self._try_lock_workspace(target)
+        lock, acquired = (
+            self._lock_or_ask(target) if show_errors else self._try_lock_workspace(target)
+        )
         if lock is None:
-            if show_errors:
-                QMessageBox.warning(self, "Workspace already open", self._workspace_locked_message(target))
-            else:
+            if not show_errors:
                 self.statusBar().showMessage(f"Previous workspace is already open: {target.name}", 5000)
             return False
         try:
@@ -988,7 +1020,7 @@ class MainWindow(QMainWindow):
                 initial = {
                     parameter.id: value
                     for parameter in transform.parameters
-                    if (value := _metadata_number(dict(dataset.metadata), parameter.id))
+                    if (value := metadata_parameter(dataset, parameter.id))
                     is not None
                 }
                 rows.append((item.id, dataset.label, initial))
@@ -1410,7 +1442,7 @@ class MainWindow(QMainWindow):
                             initial = {
                                 parameter.id: value
                                 for parameter in transform.parameters
-                                if (value := _metadata_number(dict(dataset.metadata), parameter.id))
+                                if (value := metadata_parameter(dataset, parameter.id))
                                 is not None
                             }
                             needs_prompt |= any(
@@ -1466,9 +1498,13 @@ class MainWindow(QMainWindow):
                 item = QListWidgetItem(f"{index}. {dataset.label}  ({dataset.point_count:,} points)")
                 item.setData(Qt.ItemDataRole.UserRole, series.id)
                 item.setToolTip(
-                    "Drag to change plot order. Select and remove to hide this data from the graph."
-                    if filter_id == "all"
-                    else "Select to copy, move, or remove this filtered dataset from the graph."
+                    (
+                        "Drag to change plot order. Select and remove to hide this data from the graph."
+                        if filter_id == "all"
+                        else "Select to copy, move, or remove this filtered dataset from the graph."
+                    )
+                    + "\n"
+                    + describe_uncertainty(dataset)
                 )
                 self.dataset_list.addItem(item)
                 if series.id in selected:
@@ -1609,9 +1645,8 @@ class MainWindow(QMainWindow):
         except OSError as exc:
             QMessageBox.critical(self, "Save package", str(exc))
             return False
-        lock, acquired = self._try_lock_workspace(target)
+        lock, acquired = self._lock_or_ask(target)
         if lock is None:
-            QMessageBox.warning(self, "Workspace already open", self._workspace_locked_message(target))
             return False
         try:
             previews, renderer_data = self._collect_artifacts()
@@ -1752,7 +1787,9 @@ class MainWindow(QMainWindow):
         )
         if path:
             try:
-                page.export_itx(path)
+                page.export_itx(
+                    path, uncertainty_notes=self.controller.estimated_uncertainty_notes(page.graph_id)
+                )
             except Exception as exc:
                 QMessageBox.critical(self, "Export data", str(exc))
 
@@ -1817,7 +1854,15 @@ class MainWindow(QMainWindow):
         if not ok or not name.strip():
             return
         safe = "".join(char if char.isalnum() or char in "-_ " else "_" for char in name).strip()
-        save_template(self._template_folder() / safe, graph, name.strip())
+        destination = self._template_folder() / f"{safe}.bernardyn-template.json"
+        # Different names can map to one file name; never replace one silently.
+        if destination.exists() and QMessageBox.question(
+            self,
+            "Save template",
+            f"A template saved as {destination.name} already exists. Replace it?",
+        ) != QMessageBox.StandardButton.Yes:
+            return
+        save_template(destination, graph, name.strip())
 
     def _choose_template(self, title: str) -> Path | None:
         templates = sorted(self._template_folder().glob("*.bernardyn-template.json"))

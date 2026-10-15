@@ -65,6 +65,22 @@ behavior changes.
   numerical warnings; they were already hidden.
 - Reading saved results is faster: each file is read once per import rather
   than once per curve kind.
+- Estimated uncertainties are now recorded. Text files without an
+  uncertainty column (errors set to a percentage of I) are marked "estimated"
+  in saved packages. The dataset tooltip shows this, the graph warns while
+  such error bars are shown, and ITX and H5XP exports note it.
+- I₀ and Rg for the dimensionless Kratky view are taken only from top-level
+  dataset metadata (as written for pyIrena Simple Fits Guinier results), never
+  from nested values such as a second Unified Fit level. The graph notes when
+  values came from the data.
+- A package lock held by Bernardyn on another computer no longer expires after
+  30 seconds. Opening or saving over a locked package names the lock's owner
+  and offers **Break lock** for a lock left by a crash.
+- Closing a graph tab activates its neighbour, and new graphs never repeat an
+  existing "Scattering plot N" title.
+- Saving a template whose file name already exists asks before replacing it.
+- CSV and ITX exports are written atomically, so a failed export cannot leave
+  a truncated file.
 
 ## 0.0.1b7 — 2026-10-02
 

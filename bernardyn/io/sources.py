@@ -19,7 +19,13 @@ from uuid import NAMESPACE_URL, uuid5
 import h5py
 import numpy as np
 
-from bernardyn.core.models import Dataset, json_value
+from bernardyn.core.models import (
+    UNCERTAINTY_ESTIMATED,
+    UNCERTAINTY_MEASURED,
+    UNCERTAINTY_PARTLY_ESTIMATED,
+    Dataset,
+    json_value,
+)
 from bernardyn.core.registry import Registry
 
 log = logging.getLogger(__name__)
@@ -158,6 +164,8 @@ class ScatteringRecord:
     metadata: Mapping[str, Any] = field(default_factory=dict)
     provenance: Mapping[str, Any] = field(default_factory=dict)
     source_fingerprint: str | None = None
+    # See Dataset.uncertainty_kind.  Each adapter states it explicitly.
+    uncertainty_kind: str | None = None
 
     def to_dataset(self) -> Dataset:
         original_unit = str(self.q_unit).strip()
@@ -182,7 +190,13 @@ class ScatteringRecord:
             metadata=metadata,
             provenance=self.provenance,
             source_fingerprint=self.source_fingerprint,
+            uncertainty_kind=None if self.uncertainty is None else self.uncertainty_kind,
         )
+
+
+def _stored_uncertainty_kind(uncertainty: Any) -> str | None:
+    """HDF5 uncertainties are read as stored, never synthesised."""
+    return None if uncertainty is None else UNCERTAINTY_MEASURED
 
 
 class SourceAdapter(Protocol):
@@ -398,6 +412,7 @@ class HDF5SourceAdapter:
                 metadata=metadata,
                 provenance=provenance,
                 source_fingerprint=record.source_fingerprint,
+                uncertainty_kind=_stored_uncertainty_kind(record.uncertainty),
             )
         except (ImportError, ValueError):
             pass
@@ -457,6 +472,7 @@ class HDF5SourceAdapter:
                 **({"q_unit_assumed": q_unit} if missing_q_unit else {}),
             },
             source_fingerprint=_fingerprint(location.path),
+            uncertainty_kind=_stored_uncertainty_kind(result.get("Error")),
         )
 
     def _load_direct(self, location: ScatteringLocation, *, q_unit: str) -> ScatteringRecord:
@@ -512,6 +528,7 @@ class HDF5SourceAdapter:
                     **({"q_unit_assumed": q_unit} if missing_q_unit else {}),
                 },
                 source_fingerprint=_fingerprint(location.path),
+                uncertainty_kind=_stored_uncertainty_kind(uncertainty),
             )
 
 
@@ -539,6 +556,7 @@ class TextSourceAdapter:
             from pyirena.io import ScatteringLocation as PyIrenaLocation
             from pyirena.io import load_scattering
 
+            measured = self._numeric_columns(location.path) >= 3
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", UserWarning)
                 record = load_scattering(
@@ -558,9 +576,15 @@ class TextSourceAdapter:
                 q_unit=record.q_unit,
                 intensity_unit=record.intensity_unit,
                 label=record.label,
-                metadata=record.metadata,
+                metadata={
+                    **dict(record.metadata),
+                    # pyIrena fills a missing third column with
+                    # error_fraction x I and does not say so.
+                    "uncertainties_synthesized": 0 if measured else len(record.q),
+                },
                 provenance=record.provenance,
                 source_fingerprint=record.source_fingerprint,
+                uncertainty_kind=UNCERTAINTY_MEASURED if measured else UNCERTAINTY_ESTIMATED,
             )
         except (ImportError, ValueError):
             pass
@@ -616,7 +640,31 @@ class TextSourceAdapter:
                 "q_unit_assumed": q_unit,
             },
             source_fingerprint=_fingerprint(location.path),
+            uncertainty_kind=(
+                UNCERTAINTY_MEASURED
+                if not np.any(bad_error)
+                else UNCERTAINTY_ESTIMATED
+                if np.all(bad_error)
+                else UNCERTAINTY_PARTLY_ESTIMATED
+            ),
         )
+
+    @classmethod
+    def _numeric_columns(cls, path: Path) -> int:
+        """Return the column count of the first numeric data row (0 if none)."""
+        text = cls._read_text(path)
+        delimiter = cls._delimiter(text)
+        for raw_line in text.splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith(("#", ";", "//")):
+                continue
+            fields = line.split(delimiter) if delimiter is not None else line.split()
+            try:
+                [float(item.strip().replace("D", "E").replace("d", "e")) for item in fields]
+            except ValueError:
+                continue
+            return len(fields)
+        return 0
 
     @staticmethod
     def _read_text(path: Path) -> str:

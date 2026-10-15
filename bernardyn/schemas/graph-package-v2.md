@@ -29,8 +29,10 @@ Each `/datasets/<dataset-uuid>` has a `dataset_sha256` attribute and UTF-8 JSON
 
 Arrays in each payload are one-dimensional, non-empty, float-compatible, and
 aligned. Every numeric array has a SHA-256 checksum over dtype, shape, and
-C-order bytes. The dataset checksum includes canonical type, every present
-array, and the absence of optional arrays.
+C-order bytes. The dataset checksum covers every canonical array by name
+(`Q`/`I`/`Idev`/`Qdev` or `x`/`y`/`dx`/`dy`, which also distinguishes the two
+canonical types), each present array's checksum, and the absence of optional
+arrays. Metadata such as labels and units is not part of the checksum.
 
 Generic curves preserve scientific meaning independently of presentation. The
 R2 roles are `residual` and `distribution`. A generic curve does not use a

@@ -47,6 +47,7 @@ def export_datasets_to_h5xp(
                     "BernardynDatasetUUID": dataset.id,
                     "QUnit": dataset.q_unit,
                     "IntensityUnit": dataset.intensity_unit,
+                    "UncertaintyKind": dataset.uncertainty_kind or "not recorded",
                 },
             )
         if not used:

@@ -343,8 +343,10 @@ class GraphPage(QWidget):
     def export_csv(self, path: str | Path) -> Path:
         return export_displayed_csv(path, self._graph, self._snapshots)
 
-    def export_itx(self, path: str | Path) -> Path:
-        return export_displayed_itx(path, self._graph, self._snapshots)
+    def export_itx(self, path: str | Path, uncertainty_notes=None) -> Path:
+        return export_displayed_itx(
+            path, self._graph, self._snapshots, uncertainty_notes=uncertainty_notes
+        )
 
     def renderer_data(self) -> dict[str, np.ndarray]:
         if hasattr(self.renderer, "renderer_data"):

@@ -3,11 +3,34 @@
 from __future__ import annotations
 
 import csv
+import os
 import re
-from collections.abc import Mapping
+import tempfile
+from collections.abc import Callable, Mapping
 from pathlib import Path
+from typing import TextIO
 
 from bernardyn.core.models import GraphDocument, PlotSeries
+
+
+def _write_atomically(destination: Path, newline: str | None, write: Callable[[TextIO], None]) -> Path:
+    """Write a text export beside its destination, then replace it in one step.
+
+    A failed export never leaves a truncated file in place of a good one.
+    """
+    handle = tempfile.NamedTemporaryFile(
+        "w", encoding="utf-8", newline=newline, prefix=f".{destination.name}.",
+        suffix=".tmp", dir=destination.parent, delete=False,
+    )
+    temporary = Path(handle.name)
+    try:
+        with handle:
+            write(handle)
+        os.replace(temporary, destination)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
+    return destination
 
 
 def export_displayed_csv(
@@ -18,7 +41,8 @@ def export_displayed_csv(
     include_hidden: bool = False,
 ) -> Path:
     destination = Path(path)
-    with destination.open("w", newline="", encoding="utf-8") as handle:
+
+    def write(handle: TextIO) -> None:
         writer = csv.writer(handle)
         writer.writerow(["series", "x", "y", "dx", "dy", "source_index"])
         for view in graph.series:
@@ -38,7 +62,8 @@ def export_displayed_csv(
                         int(snapshot.source_indices[index]),
                     ]
                 )
-    return destination
+
+    return _write_atomically(destination, "", write)
 
 
 def _wave_name(label: str, suffix: str, used: set[str]) -> str:
@@ -62,11 +87,18 @@ def export_displayed_itx(
     snapshots: Mapping[str, PlotSeries],
     *,
     include_hidden: bool = False,
+    uncertainty_notes: Mapping[str, str] | None = None,
 ) -> Path:
-    """Write resolved x/y/error arrays as an Igor Text (ITX) data file."""
+    """Write resolved x/y/error arrays as an Igor Text (ITX) data file.
+
+    ``uncertainty_notes`` maps series IDs to a description of uncertainties
+    that were not measured; it is written as the note of that series' dy wave.
+    """
     destination = Path(path)
-    used: set[str] = set()
-    with destination.open("w", encoding="utf-8", newline="\n") as handle:
+    notes = uncertainty_notes or {}
+
+    def write(handle: TextIO) -> None:
+        used: set[str] = set()
         handle.write("IGOR\n")
         handle.write('#pragma TextEncoding = "UTF-8"\n')
         for view in graph.series:
@@ -88,4 +120,8 @@ def export_displayed_itx(
             handle.write("END\n")
             escaped_label = snapshot.label.replace('"', "'")
             handle.write(f'X Note {names[1]}, "Bernardyn series: {escaped_label}"\n')
-    return destination
+            if snapshot.dy is not None and view.id in notes:
+                escaped_note = notes[view.id].replace('"', "'")
+                handle.write(f'X Note {names[-1]}, "Bernardyn: {escaped_note}"\n')
+
+    return _write_atomically(destination, "\n", write)

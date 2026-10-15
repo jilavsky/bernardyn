@@ -226,6 +226,36 @@ def test_workspace_lock_prevents_a_second_editor(qapp, tmp_path):
     second.close()
 
 
+def test_lock_from_another_computer_is_only_broken_when_asked(qapp, tmp_path, monkeypatch):
+    import os
+
+    package_path = tmp_path / "shared.bernardyn.h5"
+    writer = MainWindow()
+    writer.user_state = UserState(tmp_path / "writer-preferences.json")
+    assert writer._save_to(package_path)
+    writer._release_workspace_lock()
+    writer.controller.workspace.dirty = False
+    writer.close()
+    # A live-looking lock from a process on another host, an hour old.
+    lock_path = Path(f"{package_path.resolve()}.lock")
+    lock_path.write_text("4242\nbernardyn\nbeamline-pc\n")
+    os.utime(lock_path, (lock_path.stat().st_atime - 3600, lock_path.stat().st_mtime - 3600))
+
+    window = MainWindow()
+    window.user_state = UserState(tmp_path / "preferences.json")
+    owners = []
+    monkeypatch.setattr(window, "_ask_break_lock", lambda target, owner: owners.append(owner) or False)
+    assert not window.open_workspace(package_path)
+    assert owners == ["bernardyn (process 4242) on beamline-pc"]
+    assert lock_path.read_text().startswith("4242")
+
+    monkeypatch.setattr(window, "_ask_break_lock", lambda target, owner: True)
+    assert window.open_workspace(package_path)
+    assert lock_path.read_text().startswith(str(os.getpid()))
+    window.controller.workspace.dirty = False
+    window.close()
+
+
 def test_documentation_button_is_present(qapp):
     window = MainWindow()
     assert "#c62828" in window.documentation_button.styleSheet()

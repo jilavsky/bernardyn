@@ -106,6 +106,11 @@ Reset panel layout** to recover a closed or misplaced panel immediately.
   (**Y**) and Q resolution (**X**) independently. Enable **Caps** to draw
   conventional end caps on the selected error bars; **Size** controls their
   length as a percentage of the relevant axis span (0.5% by default).
+- Text files without an uncertainty column get an estimated uncertainty
+  (5% of I by default, set in the data selector). Bernardyn records this:
+  hovering over a dataset shows whether its uncertainty is measured or
+  estimated, the graph lists a warning while estimated error bars are shown,
+  and Igor ITX and H5XP exports note it beside the data.
 
 ## Edit a graph
 
@@ -184,6 +189,12 @@ package for the lifetime of its editing window, including across separate app
 processes, so the same package cannot be silently edited and saved from two
 places. If a package is already open, switch to that window or use **Save As**
 to create a distinct editable copy.
+
+The lock does not expire while its owner may still be running, even on a disk
+shared between computers. If Bernardyn quit unexpectedly on another computer,
+the next attempt to open the package says which program, process and computer
+hold the lock and offers **Break lock**. Break it only when that program is no
+longer running; otherwise whichever copy is saved last overwrites the other.
 
 **Copy graph image** (Edit menu or Cmd/Ctrl+C) places a raster graph image on
 the system clipboard for pasting into other applications. **File → Print

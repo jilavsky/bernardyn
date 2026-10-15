@@ -83,6 +83,12 @@ def merge_extras(model: Any, document: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+UNCERTAINTY_MEASURED = "measured"
+UNCERTAINTY_ESTIMATED = "estimated"
+UNCERTAINTY_PARTLY_ESTIMATED = "partly_estimated"
+ESTIMATED_UNCERTAINTY_KINDS = frozenset({UNCERTAINTY_ESTIMATED, UNCERTAINTY_PARTLY_ESTIMATED})
+
+
 # WARNING -- these are ``str``-based enums, and that has one sharp edge.
 #
 # Qt stores widget item data as a QVariant, and a str subclass is convertible
@@ -142,6 +148,10 @@ class Dataset:
     metadata: Mapping[str, Any] = field(default_factory=dict)
     provenance: Mapping[str, Any] = field(default_factory=dict)
     source_fingerprint: str | None = None
+    # How ``uncertainty`` was obtained: UNCERTAINTY_MEASURED, _ESTIMATED (all
+    # synthesised, e.g. a percentage of I for a two-column text file), or
+    # _PARTLY_ESTIMATED.  None means not recorded (packages before 0.0.1b8).
+    uncertainty_kind: str | None = None
     # Metadata keys written by a newer Bernardyn; kept and written back.
     extras: Mapping[str, Any] = field(default_factory=dict)
 
@@ -174,6 +184,7 @@ class Dataset:
             "label": self.label,
             "q_unit": self.q_unit,
             "intensity_unit": self.intensity_unit,
+            "uncertainty_kind": self.uncertainty_kind,
             "metadata": json_value(self.metadata),
             "provenance": json_value(self.provenance),
             "source_fingerprint": self.source_fingerprint,
