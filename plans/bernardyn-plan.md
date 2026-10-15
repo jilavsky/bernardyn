@@ -256,7 +256,7 @@ Merged from the old roadmap (R3, M3, R4, §6, §12), `docs/TODO.md`, and
 | 5 | ~~F5 + I6, F4~~ — done; Modeling residuals and number-distribution units need pyIrena | — | — |
 | 6 | ~~F9–F12~~ — done; synthetic-error default left unchanged | — | — |
 | 7 | ~~I1–I5, I7~~ — done | — | — |
-| 8 | Usability pass with beamline data (§2.6), then release **1.0.0rc1** | — | Gate |
+| 8 | Usability pass with beamline data (§2.6) using [release-1.0-checklist.md](release-1.0-checklist.md), then release **1.0.0rc1** | ~1.5 h | Gate |
 | 9 | After 1.0: M3 Aida checks → pyIrena hand-off → distribution bars (when edges exist) → R4 tables → 2-D detector images | — | Feature growth on a stable format |
 
 Update `CHANGELOG.md` and the user guide as each step ships, not when it is
