@@ -64,7 +64,8 @@ def test_label_edit_refreshes_presentation_without_recomputing_arrays(tmp_path):
     np.testing.assert_array_equal(snapshot.y, old_snapshot.y)
     csv_path = export_displayed_csv(tmp_path / "data.csv", controller.workspace.graph(graph.id), controller.snapshots[graph.id])
     itx_path = export_displayed_itx(tmp_path / "data.itx", controller.workspace.graph(graph.id), controller.snapshots[graph.id])
-    assert csv_path.read_text(encoding="utf-8").splitlines()[1].startswith("new,")
+    rows = [line for line in csv_path.read_text(encoding="utf-8").splitlines() if not line.startswith("#")]
+    assert rows[1].startswith("new,")
     assert "Bernardyn series: new" in itx_path.read_text(encoding="utf-8")
 
 

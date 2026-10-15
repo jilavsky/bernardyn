@@ -8,6 +8,16 @@ behavior changes.
 
 ### Added
 
+- **Templates → Rename graph template…**. The template list shows each
+  template's view, output size, and number of series styles.
+- **Graph → Duplicate graph** copies the active graph into a new, independent
+  tab without rereading data.
+- **Edit → Remove unused data from workspace…** drops loaded datasets that no
+  graph uses (undoable; source files are untouched).
+- **Add from workspace…** can add several loaded datasets at once.
+- `bernardyn-doctor` checks that the installed pyIrena meets Bernardyn's
+  minimum version and that PySide6 is not an excluded release, and reports
+  whether the optional MCP server is installed.
 - The `bernardyn` launcher accepts `--version`, `-version`, `--v`, and `-V`.
   The desktop app shows its version in the status bar and in **About Bernardyn**.
 - A graph warns when its curves have different units (for example arbitrary
@@ -36,6 +46,11 @@ behavior changes.
 - Size distribution curves are labelled with the stored units, e.g. volume
   distributions show `vol. fraction·Å⁻¹`.
 - PySide6 6.10.x is excluded, matching pyIrena's Qt plotting extra.
+- Displayed-data CSV exports begin with `#` comment lines describing the graph,
+  its axes and units, and each series' view (format
+  `bernardyn-displayed-data-csv v1`). The columns are unchanged. Readers that
+  do not skip comment lines need `comment="#"` (pandas) or equivalent.
+- Igor ITX exports set each wave's data units.
 
 ### Fixed
 

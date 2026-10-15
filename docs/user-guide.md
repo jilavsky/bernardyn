@@ -44,9 +44,12 @@ does not hide or remove a curve from the graph. Drag rows within the unfiltered
 list to change drawing order, or select rows and use **Remove selected from
 graph** to hide them from that graph. Removing a row does not delete the
 canonical dataset from the workspace.
-Use **Add from workspace…** to place another loaded catalog dataset in the
-active graph without reading its source file again. These changes, along with
-removal and reordering, can be undone and redone.
+Use **Add from workspace…** to tick one or more loaded catalog datasets and
+place them in the active graph without reading their source files again. These
+changes, along with removal and reordering, can be undone and redone.
+**Edit → Remove unused data from workspace…** drops loaded datasets that no
+graph uses, after listing them; source files are never changed and the step
+can be undone.
 
 Right-click selected rows in the active-graph list to **Copy selected to…** or
 **Move selected to…** an existing graph, or choose **Create new 2D graph** in
@@ -146,6 +149,12 @@ Use the **Graph** tab in the right-side inspector for graph-wide settings.
 
 Graphs keep their own configuration, so editing one graph does not alter
 another graph tab unless you deliberately apply a graph template.
+**Graph → Duplicate graph** copies the active graph, with its curves, styles,
+and annotations, into a new tab that can then be edited independently.
+
+The **Templates** menu saves, applies, renames, and deletes graph templates.
+The template list shows each template's view, output size, and number of
+series styles.
 
 ## Add and refine annotations
 
@@ -222,6 +231,10 @@ Use the export actions for images (PNG/JPEG/SVG), displayed data (CSV/Igor
 ITX), or canonical datasets (Igor H5XP). These exports serve different
 purposes and do not replace a Bernardyn workspace package. CSV and ITX export
 the visible curves by default; hide a curve to omit it from a displayed-data
-export.
+export. Both contain the values as plotted, after the view transform and any
+point removed for a logarithmic axis. CSV files begin with `#` lines giving
+the graph title, axis labels with units, and each series' view and units;
+read them with `pandas.read_csv(path, comment="#")` or skip lines starting
+with `#`. ITX waves carry their data units.
 
 For format details, see [Data flow and file formats](data-flow-and-formats.md).

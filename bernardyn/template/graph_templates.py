@@ -37,10 +37,19 @@ def template_document(graph: GraphDocument, name: str) -> dict[str, Any]:
     }
 
 
-def save_template(path: str | Path, graph: GraphDocument, name: str) -> Path:
+TEMPLATE_SUFFIX = ".bernardyn-template.json"
+
+
+def template_file_name(name: str) -> str:
+    """Return the file name a template called ``name`` is stored under."""
+    safe = "".join(char if char.isalnum() or char in "-_ " else "_" for char in name).strip()
+    return f"{safe or 'template'}{TEMPLATE_SUFFIX}"
+
+
+def _write_document(path: str | Path, document: dict[str, Any]) -> Path:
     destination = Path(path).expanduser().resolve()
-    if not destination.name.endswith(".bernardyn-template.json"):
-        destination = destination.with_name(destination.name + ".bernardyn-template.json")
+    if not destination.name.endswith(TEMPLATE_SUFFIX):
+        destination = destination.with_name(destination.name + TEMPLATE_SUFFIX)
     destination.parent.mkdir(parents=True, exist_ok=True)
     handle = tempfile.NamedTemporaryFile(
         mode="w",
@@ -52,7 +61,7 @@ def save_template(path: str | Path, graph: GraphDocument, name: str) -> Path:
     )
     temp_path = Path(handle.name)
     try:
-        json.dump(template_document(graph, name), handle, indent=2, ensure_ascii=False)
+        json.dump(document, handle, indent=2, ensure_ascii=False)
         handle.write("\n")
         handle.flush()
         os.fsync(handle.fileno())
@@ -63,6 +72,46 @@ def save_template(path: str | Path, graph: GraphDocument, name: str) -> Path:
         temp_path.unlink(missing_ok=True)
         raise
     return destination
+
+
+def save_template(path: str | Path, graph: GraphDocument, name: str) -> Path:
+    return _write_document(path, template_document(graph, name))
+
+
+def rename_template(path: str | Path, new_name: str) -> Path:
+    """Rename a stored template, moving it to the file name for ``new_name``.
+
+    Raises FileExistsError if a different template already uses that file.
+    """
+    source = Path(path).expanduser().resolve()
+    name = new_name.strip()
+    if not name:
+        raise ValueError("a template name cannot be empty")
+    document = load_template(source)
+    destination = source.with_name(template_file_name(name))
+    if destination != source and destination.exists():
+        raise FileExistsError(f"a template is already saved as {destination.name}")
+    document["name"] = name
+    written = _write_document(destination, document)
+    if written != source:
+        source.unlink()
+    return written
+
+
+def template_summary(document: dict[str, Any]) -> str:
+    """One line describing what applying a template changes."""
+    graph = document.get("graph", {})
+    view = str(document.get("transform_id", "raw"))
+    parts = [
+        "General I(Q) view" if view == "raw" else f"{view.replace('_', ' ').capitalize()} view",
+        f"{graph.get('width_px', '?')}×{graph.get('height_px', '?')} px at {graph.get('dpi', '?')} dpi",
+    ]
+    styles = len(document.get("series_styles", []))
+    if styles:
+        parts.append(f"{styles} series style{'s' if styles != 1 else ''}")
+    if graph.get("box_axes"):
+        parts.append("boxed axes")
+    return " · ".join(parts)
 
 
 def load_template(path: str | Path) -> dict[str, Any]:

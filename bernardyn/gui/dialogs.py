@@ -350,6 +350,47 @@ class LocationDialog(QDialog):
         ]
 
 
+class ChecklistDialog(QDialog):
+    """Pick any number of items from a checkable list."""
+
+    def __init__(
+        self,
+        title: str,
+        prompt: str,
+        items: list[tuple[str, str]],
+        *,
+        checked: bool = False,
+        parent=None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.list = QListWidget(self)
+        for item_id, label in items:
+            item = QListWidgetItem(label)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked)
+            item.setData(Qt.ItemDataRole.UserRole, item_id)
+            self.list.addItem(item)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
+            parent=self,
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel(prompt))
+        layout.addWidget(self.list)
+        layout.addWidget(buttons)
+        self.resize(520, 360)
+
+    def selected_ids(self) -> list[str]:
+        return [
+            str(self.list.item(index).data(Qt.ItemDataRole.UserRole))
+            for index in range(self.list.count())
+            if self.list.item(index).checkState() == Qt.CheckState.Checked
+        ]
+
+
 class GraphSelectionDialog(QDialog):
     def __init__(self, graphs: list[tuple[str, str]], parent=None) -> None:
         super().__init__(parent)

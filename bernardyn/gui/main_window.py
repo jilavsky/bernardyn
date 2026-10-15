@@ -61,6 +61,7 @@ from bernardyn.core.models import AxisSpec, GenericCurve, GraphDocument
 from bernardyn.core.units import axis_label
 from bernardyn.gui.dataset_filters import DATASET_FILTERS, matches_dataset_filter
 from bernardyn.gui.dialogs import (
+    ChecklistDialog,
     DataFileSelectorDialog,
     GraphSelectionDialog,
     HDFMappingDialog,
@@ -75,7 +76,15 @@ from bernardyn.io.igor import export_datasets_to_h5xp
 from bernardyn.io.result_batch import ResultBatch, load_result_batch, survey_results
 from bernardyn.renderers import builtin_renderers
 from bernardyn.state import UserState
-from bernardyn.template.graph_templates import apply_template, load_template, save_template
+from bernardyn.template.graph_templates import (
+    TEMPLATE_SUFFIX,
+    apply_template,
+    load_template,
+    rename_template,
+    save_template,
+    template_file_name,
+    template_summary,
+)
 
 log = logging.getLogger(__name__)
 
@@ -458,6 +467,10 @@ class MainWindow(QMainWindow):
         )
         self.new_waterfall_action = self._action("New 3D waterfall", lambda: self._new_graph("opengl_waterfall"))
         self.new_surface_action = self._action("New 3D surface", lambda: self._new_graph("opengl_surface"))
+        self.duplicate_graph_action = self._action("Duplicate graph", self._duplicate_graph)
+        self.remove_unused_data_action = self._action(
+            "Remove unused data from workspace…", self._remove_unused_data
+        )
         self.recompute_action = self._action("Recompute with current version", self._recompute_graph)
         self.reset_graph_action = self._action("Reset graph to defaults…", self._reset_graph_defaults)
         self.color_preset_action = self._action(
@@ -471,6 +484,7 @@ class MainWindow(QMainWindow):
         )
         self.save_template_action = self._action("Save graph template…", self._save_template)
         self.apply_template_action = self._action("Apply graph template…", self._apply_template)
+        self.rename_template_action = self._action("Rename graph template…", self._rename_template)
         self.delete_template_action = self._action("Delete graph template…", self._delete_template)
         self.undo_action = self.undo_stack.createUndoAction(self, "Undo")
         self.undo_action.setShortcut(QKeySequence.StandardKey.Undo)
@@ -506,12 +520,15 @@ class MainWindow(QMainWindow):
             file_menu.addSeparator() if action is None else file_menu.addAction(action)
         edit_menu = self.menuBar().addMenu("&Edit")
         edit_menu.addActions([self.undo_action, self.redo_action, self.copy_action])
+        edit_menu.addSeparator()
+        edit_menu.addAction(self.remove_unused_data_action)
         graph_menu = self.menuBar().addMenu("&Graph")
         graph_menu.addActions(
             [
                 self.new_2d_action,
                 self.new_waterfall_action,
                 self.new_surface_action,
+                self.duplicate_graph_action,
                 self.recompute_action,
                 self.output_preview_action,
                 self.reset_graph_action,
@@ -523,7 +540,12 @@ class MainWindow(QMainWindow):
         )
         template_menu = self.menuBar().addMenu("&Templates")
         template_menu.addActions(
-            [self.save_template_action, self.apply_template_action, self.delete_template_action]
+            [
+                self.save_template_action,
+                self.apply_template_action,
+                self.rename_template_action,
+                self.delete_template_action,
+            ]
         )
         view_menu = self.menuBar().addMenu("&View")
         view_menu.addActions(
@@ -1094,25 +1116,59 @@ class MainWindow(QMainWindow):
         if graph is None:
             return
         present = {view.dataset_id for view in graph.series}
+        catalog = self.controller.workspace.datasets
         choices = [
-            (f"{dataset.label} ({dataset.id[:8]})", dataset)
-            for dataset in self.controller.workspace.datasets.values()
+            (dataset.id, f"{dataset.label}  ({dataset.point_count:,} points, {dataset.id[:8]})")
+            for dataset in catalog.values()
             if dataset.id not in present
         ]
         if not choices:
             self.statusBar().showMessage("All loaded datasets are already in this graph.", 3000)
             return
-        label, accepted = QInputDialog.getItem(
-            self, "Add from workspace", "Loaded dataset:", [item[0] for item in choices], 0, False
+        dialog = ChecklistDialog(
+            "Add from workspace", "Loaded data to add to this graph:", choices, parent=self
         )
-        if not accepted:
+        if dialog.exec() != dialog.DialogCode.Accepted or not dialog.selected_ids():
             return
-        dataset = next(dataset for item, dataset in choices if item == label)
+        datasets = tuple(catalog[dataset_id] for dataset_id in dialog.selected_ids())
         try:
-            self.controller.validate_add_datasets((dataset,), graph_id=graph.id)
-            self.undo_stack.push(DatasetImportCommand(self, (dataset,), graph.id))
+            self.controller.validate_add_datasets(datasets, graph_id=graph.id)
+            self.undo_stack.push(DatasetImportCommand(self, datasets, graph.id))
         except Exception as exc:
-            QMessageBox.warning(self, "Add from workspace", str(exc))
+            QMessageBox.warning(self, "Add from workspace", _edit_error_text(exc))
+
+    def _duplicate_graph(self) -> None:
+        graph = self._current_graph()
+        if graph is None:
+            return
+        self._push_edit(
+            WorkspaceEditCommand(
+                self, "Duplicate graph", lambda: self.controller.duplicate_graph(graph.id)
+            ),
+            "Duplicate graph",
+        )
+
+    def _remove_unused_data(self) -> None:
+        unused = self.controller.unused_dataset_ids()
+        if not unused:
+            self.statusBar().showMessage("Every loaded dataset is used by a graph.", 4000)
+            return
+        catalog = self.controller.workspace.datasets
+        names = "\n".join(catalog[dataset_id].label for dataset_id in unused[:15])
+        if len(unused) > 15:
+            names += f"\n… and {len(unused) - 15} more"
+        answer = QMessageBox.question(
+            self,
+            "Remove unused data",
+            f"Remove {len(unused)} loaded dataset(s) that no graph uses from this workspace?\n\n"
+            f"{names}\n\nSource files are not changed, and this can be undone.",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self._push_edit(
+            WorkspaceEditCommand(self, "Remove unused data", self.controller.remove_unused_datasets),
+            "Remove unused data",
+        )
 
     def _dataset_context_menu(self, position) -> None:
         item = self.dataset_list.itemAt(position)
@@ -1774,7 +1830,9 @@ class MainWindow(QMainWindow):
         path, _ = QFileDialog.getSaveFileName(self, "Export displayed data", "graph.csv", "CSV (*.csv)")
         if path:
             try:
-                page.export_csv(path)
+                page.export_csv(
+                    path, uncertainty_notes=self.controller.estimated_uncertainty_notes(page.graph_id)
+                )
             except Exception as exc:
                 QMessageBox.critical(self, "Export data", str(exc))
 
@@ -1853,8 +1911,7 @@ class MainWindow(QMainWindow):
         name, ok = QInputDialog.getText(self, "Save template", "Template name:", text=graph.title)
         if not ok or not name.strip():
             return
-        safe = "".join(char if char.isalnum() or char in "-_ " else "_" for char in name).strip()
-        destination = self._template_folder() / f"{safe}.bernardyn-template.json"
+        destination = self._template_folder() / template_file_name(name)
         # Different names can map to one file name; never replace one silently.
         if destination.exists() and QMessageBox.question(
             self,
@@ -1865,11 +1922,17 @@ class MainWindow(QMainWindow):
         save_template(destination, graph, name.strip())
 
     def _choose_template(self, title: str) -> Path | None:
-        templates = sorted(self._template_folder().glob("*.bernardyn-template.json"))
+        templates = sorted(self._template_folder().glob(f"*{TEMPLATE_SUFFIX}"))
         if not templates:
             QMessageBox.information(self, title, "No saved templates are available.")
             return None
-        labels = [path.stem.replace(".bernardyn-template", "") for path in templates]
+        labels = []
+        for path in templates:
+            try:
+                document = load_template(path)
+                labels.append(f"{document.get('name') or path.name} — {template_summary(document)}")
+            except Exception as exc:
+                labels.append(f"{path.name} — unreadable ({exc})")
         selected, ok = QInputDialog.getItem(self, title, "Template:", labels, 0, False)
         if not ok:
             return None
@@ -1886,6 +1949,23 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Apply template", f"{path.name}: {exc}")
             return
         self._push_edit(GraphEditCommand(self, graph, after, True, "Apply graph template"), "Apply template")
+
+    def _rename_template(self) -> None:
+        path = self._choose_template("Rename template")
+        if path is None:
+            return
+        try:
+            current = str(load_template(path).get("name") or path.name)
+        except Exception as exc:
+            QMessageBox.warning(self, "Rename template", f"{path.name}: {exc}")
+            return
+        name, ok = QInputDialog.getText(self, "Rename template", "New name:", text=current)
+        if not ok or not name.strip() or name.strip() == current:
+            return
+        try:
+            rename_template(path, name)
+        except Exception as exc:
+            QMessageBox.warning(self, "Rename template", str(exc))
 
     def _delete_template(self) -> None:
         path = self._choose_template("Delete template")

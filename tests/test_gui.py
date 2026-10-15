@@ -513,7 +513,7 @@ def test_2d_page_renders_and_exports_png_and_svg(qapp, tmp_path):
     assert page.output_preview_image().size().width() == 640
     assert page.output_preview_image().size().height() == 480
     assert b"<svg" in svg.read_bytes()[:500]
-    assert csv.read_text().startswith("series,x,y,dx,dy,source_index")
+    assert "\nseries,x,y,dx,dy,source_index\n" in csv.read_text(encoding="utf-8")
     assert itx.read_text().startswith("IGOR\n")
     assert len(page.capture_preview()) > 100
     window.controller.workspace.dirty = False
@@ -1250,3 +1250,30 @@ def test_result_import_dialog_previews_targets_and_skips(qapp, tmp_path):
     assert "Residuals: 1 file → new graph “Unified Fit residuals”" in text
     assert "Skipped 1 file: waxs.h5" in text
     dialog.close()
+
+
+def test_duplicate_graph_and_remove_unused_data_are_undoable(qapp, monkeypatch):
+    window = MainWindow()
+    graph_id = window.controller.workspace.active_graph_id
+    window.controller.add_datasets(
+        (Dataset(q=[0.01, 0.02], intensity=[2.0, 1.0], label="kept"),
+         Dataset(q=[0.01, 0.02], intensity=[3.0, 1.0], label="dropped")),
+        graph_id=graph_id,
+    )
+    window._rebuild_tabs()
+    window._duplicate_graph()
+    assert window.tabs.count() == 2
+    window.undo_stack.undo()
+    assert window.tabs.count() == 1
+
+    graph = window.controller.workspace.graph(graph_id)
+    window.controller.remove_series(graph_id, graph.series[1].id)
+    monkeypatch.setattr(
+        main_window.QMessageBox, "question", lambda *args: main_window.QMessageBox.StandardButton.Yes
+    )
+    window._remove_unused_data()
+    assert [item.label for item in window.controller.workspace.datasets.values()] == ["kept"]
+    window.undo_stack.undo()
+    assert len(window.controller.workspace.datasets) == 2
+    window.controller.workspace.dirty = False
+    window.close()

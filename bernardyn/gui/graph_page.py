@@ -340,8 +340,10 @@ class GraphPage(QWidget):
         finally:
             painter.end()
 
-    def export_csv(self, path: str | Path) -> Path:
-        return export_displayed_csv(path, self._graph, self._snapshots)
+    def export_csv(self, path: str | Path, uncertainty_notes=None) -> Path:
+        return export_displayed_csv(
+            path, self._graph, self._snapshots, uncertainty_notes=uncertainty_notes
+        )
 
     def export_itx(self, path: str | Path, uncertainty_notes=None) -> Path:
         return export_displayed_itx(

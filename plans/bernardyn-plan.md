@@ -159,31 +159,24 @@ simulated lock from another host. Not yet tried on the real beamline share.
 - `docs/releasing.md` reminds you to check the default branch.
 
 Still open:
-- Reinstall the local editable pyIrena so its metadata reports ≥ 1.2.0b2.
 - Optional: a `gui/_qt.py` import shim. That is a mechanical refactor of every
   GUI module, left for its own change.
 
 ## 4. Simple, valuable improvements to do now
 
-Each is small (≤ ½ day) and independent:
+All done (unreleased):
+- I1: template rename and template summaries in the chooser.
+- I2: multi-select **Add from workspace**.
+- I3: **Duplicate graph**.
+- I4: **Remove unused data from workspace**, undoable.
+- I5: CSV `#` header (`bernardyn-displayed-data-csv v1`) and ITX `SetScale d`
+  units. Exports are atomic.
+- I6: cached result reads.
+- I7: doctor checks the pyIrena floor (a code constant, tested against
+  `pyproject.toml`), excluded PySide6 releases, and the MCP extra.
 
-- **I1 Template management.** The spec asks for delete *and rename*. Add
-  **Rename template…**, an overwrite warning (F12), and a list showing each
-  template's view and output size.
-- **I2 Multi-select "Add from workspace".** It is a single-item `QInputDialog`
-  today. Use a checkable list, so comparisons don't re-read files.
-- **I3 Duplicate graph.** One command that copies a graph with fresh series IDs
-  and the same catalog datasets. It was planned in old §7.
-- **I4 Remove unused data from workspace…** Today the catalog only grows. Purge
-  datasets that no graph references, with confirmation. This is the "remove vs
-  permanently delete" distinction from old R0.
-- **I5 Self-describing exports.** CSV: add a `# bernardyn-export v1` header with
-  the graph title, axis labels and units, and transform id/version. ITX: add
-  `SetScale d` units per wave. Use `zip(strict=True)`.
-- ~~**I6 Cheaper result reading.**~~ Done: results and units are cached per
-  file identity, and the provenance code is shared.
-- **I7 Doctor checks.** Report a pyIrena version below the floor, a missing
-  `mcp` extra, and the PySide6 build in use.
+The local environment now has pyIrena 1.2.0b3 reinstalled, and the doctor
+reports it as ready.
 
 ## 5. Planned features not yet implemented
 
@@ -259,10 +252,10 @@ Merged from the old roadmap (R3, M3, R4, §6, §12), `docs/TODO.md`, and
 | 1 | ~~F1 + F2 + F3~~ — done; pyIrena `I_model` unit fix remains upstream | — | — |
 | 2 | ~~F7~~ — done | — | — |
 | 3 | ~~F6, F8~~ — done | — | — |
-| 4 | ~~F13–F15~~ — done (default branch is `main`); local pyIrena reinstall remains | — | — |
+| 4 | ~~F13–F15~~ — done (default branch is `main`; pyIrena reinstalled) | — | — |
 | 5 | ~~F5 + I6, F4~~ — done; Modeling residuals and number-distribution units need pyIrena | — | — |
 | 6 | ~~F9–F12~~ — done; synthetic-error default left unchanged | — | — |
-| 7 | **I1–I5, I7** quick improvements | 1–2 d | Visible polish, low risk |
+| 7 | ~~I1–I5, I7~~ — done | — | — |
 | 8 | Usability pass with beamline data (§2.6), then release **1.0.0rc1** | — | Gate |
 | 9 | After 1.0: M3 Aida checks → pyIrena hand-off → distribution bars (when edges exist) → R4 tables → 2-D detector images | — | Feature growth on a stable format |
 

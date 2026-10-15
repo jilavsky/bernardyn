@@ -174,6 +174,61 @@ class ApplicationController:
             ].id
         self.workspace.dirty = True
 
+    def duplicate_graph(self, graph_id: str) -> GraphDocument:
+        """Copy a graph and its resolved snapshots, sharing the same catalog data.
+
+        Series and annotations get new IDs so the copy can be edited
+        independently; no data are reread or recomputed.
+        """
+        source = self.workspace.graph(graph_id)
+        series_ids = {view.id: new_id() for view in source.series}
+        config = dict(source.renderer_config)
+        if isinstance(config.get("series_positions"), Mapping):
+            config["series_positions"] = {
+                series_ids.get(key, key): value for key, value in config["series_positions"].items()
+            }
+        copy = replace(
+            source,
+            id=new_id(),
+            title=f"{source.title} (copy)",
+            series=tuple(replace(view, id=series_ids[view.id]) for view in source.series),
+            annotations=tuple(replace(item, id=new_id()) for item in source.annotations),
+            renderer_config=config,
+        )
+        self.workspace.add_graph(copy)
+        self.snapshots[copy.id] = {
+            series_ids[old]: replace(snapshot, series_id=series_ids[old])
+            for old, snapshot in self.snapshots.get(graph_id, {}).items()
+            if old in series_ids
+        }
+        if graph_id in self.renderer_data:
+            self.renderer_data[copy.id] = dict(self.renderer_data[graph_id])
+        if graph_id in self.read_only_graphs:
+            self.read_only_graphs.add(copy.id)
+        if graph_id in self.preview_only_graphs:
+            self.preview_only_graphs.add(copy.id)
+            if graph_id in self.previews:
+                self.previews[copy.id] = self.previews[graph_id]
+        self._graph_warnings[copy.id] = list(self._graph_warnings.get(graph_id, []))
+        return copy
+
+    def unused_dataset_ids(self) -> list[str]:
+        """Catalog datasets that no graph plots, in catalog order."""
+        used = {view.dataset_id for graph in self.workspace.graphs for view in graph.series}
+        return [dataset_id for dataset_id in self.workspace.datasets if dataset_id not in used]
+
+    def remove_unused_datasets(self) -> int:
+        """Drop unreferenced datasets from the workspace catalog.
+
+        Source files are never touched; the data can be loaded again.
+        """
+        unused = self.unused_dataset_ids()
+        for dataset_id in unused:
+            del self.workspace.datasets[dataset_id]
+        if unused:
+            self.workspace.dirty = True
+        return len(unused)
+
     def _default_parameters(self, dataset: Dataset | GenericCurve, transform_id: str) -> dict[str, float]:
         """Resolve only parameters carried by this dataset's own metadata."""
         if isinstance(dataset, GenericCurve):
