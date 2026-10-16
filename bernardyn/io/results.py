@@ -181,6 +181,22 @@ def _read_result(descriptor: ResultDescriptor) -> Mapping[str, Any]:
     return result
 
 
+def _stored_modeling_residuals(descriptor: ResultDescriptor) -> np.ndarray | None:
+    """Modeling residuals, for pyIrena releases whose loader does not return them.
+
+    pyIrena writes ``entry/modeling_results/residuals`` (unitless, on the
+    ``model_q`` points) from commit 8a54ee8, after the 1.2.0b3 release.  Files
+    written earlier have no such dataset, and the released 1.2.0b3 loader does
+    not return it, so it is read here when the loader leaves it out.
+    """
+    from pyirena.io.schema import TOOL_REGISTRY
+
+    with h5py.File(descriptor.path, "r") as handle:
+        group = handle.get(TOOL_REGISTRY["modeling"]["group"])
+        dataset = group.get("residuals") if isinstance(group, h5py.Group) else None
+        return np.asarray(dataset[()], dtype=np.float64) if isinstance(dataset, h5py.Dataset) else None
+
+
 def _read_result_raw(descriptor: ResultDescriptor) -> Mapping[str, Any]:
     if descriptor.analysis in _EXTRA_READERS:
         from importlib import import_module
@@ -194,6 +210,8 @@ def _read_result_raw(descriptor: ResultDescriptor) -> Mapping[str, Any]:
         if descriptor.analysis == "modeling":
             result["Q"] = result.get("model_q")
             result["intensity_model"] = result.get("model_I")
+            if result.get("residuals") is None:
+                result["residuals"] = _stored_modeling_residuals(descriptor)
         else:
             result["intensity_model"] = result.get({
                 "simple_fits": "I_model",

@@ -238,7 +238,21 @@ def test_survey_records_unreadable_files_instead_of_failing(tmp_path):
     assert [path.name for path, _ in batch.skipped] == ["broken.h5"]
 
 
-def test_modeling_residuals_are_offered_when_the_file_stores_them(tmp_path):
+@pytest.mark.parametrize("loader_reads_residuals", [True, False])
+def test_modeling_residuals_are_offered_when_the_file_stores_them(tmp_path, monkeypatch, loader_reads_residuals):
+    from pyirena.io import nxcansas_modeling
+
+    if not loader_reads_residuals:
+        # Released pyIrena 1.2.0b3 returns no "residuals" key.
+        original = nxcansas_modeling.load_modeling_results
+
+        def older_loader(*args, **kwargs):
+            result = original(*args, **kwargs)
+            if result is not None:
+                result.pop("residuals", None)
+            return result
+
+        monkeypatch.setattr(nxcansas_modeling, "load_modeling_results", older_loader)
     source = tmp_path / "with-residuals.h5"
     copy2(RESULT_FIXTURES / "pyirena_1_2_Modeling_PP15.h5", source)
     with h5py.File(source, "r+") as handle:
