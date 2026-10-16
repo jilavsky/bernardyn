@@ -492,7 +492,7 @@ def test_2d_page_renders_and_exports_png_and_svg(qapp, tmp_path):
     assert page.output_preview_image().size().height() == 480
     assert b"<svg" in svg.read_bytes()[:500]
     assert "\nseries,x,y,dx,dy,source_index\n" in csv.read_text(encoding="utf-8")
-    assert itx.read_text().startswith("IGOR\n")
+    assert itx.read_text(encoding="utf-8").startswith("IGOR\n")
     assert len(page.capture_preview()) > 100
     window.controller.workspace.dirty = False
     window.close()

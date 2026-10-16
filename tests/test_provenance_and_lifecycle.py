@@ -60,7 +60,7 @@ def test_visible_estimated_error_bars_are_reported_and_noted_in_itx(tmp_path):
         controller.workspace.graph(graph_id),
         controller.snapshots[graph_id],
         uncertainty_notes=notes,
-    ).read_text()
+    ).read_text(encoding="utf-8")
     assert 'X Note two_dy, "Bernardyn: two error bars: estimated as 5% of I, not measured"' in itx
 
 

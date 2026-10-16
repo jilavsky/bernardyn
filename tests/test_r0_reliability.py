@@ -78,7 +78,7 @@ def test_displayed_exports_skip_hidden_series_by_default(tmp_path):
         (graph.series[0], replace(graph.series[1], visible=False))
     )
     controller.update_graph(graph)
-    contents = export_displayed_csv(tmp_path / "displayed.csv", graph, controller.snapshots[graph.id]).read_text()
+    contents = export_displayed_csv(tmp_path / "displayed.csv", graph, controller.snapshots[graph.id]).read_text(encoding="utf-8")
     assert "visible" in contents
     assert "hidden" not in contents
 
