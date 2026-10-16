@@ -243,7 +243,7 @@ def test_modeling_residuals_are_offered_when_the_file_stores_them(tmp_path, monk
     from pyirena.io import nxcansas_modeling
 
     if not loader_reads_residuals:
-        # Released pyIrena 1.2.0b3 returns no "residuals" key.
+        # pyIrena builds before 1.2.0 returned no "residuals" key.
         original = nxcansas_modeling.load_modeling_results
 
         def older_loader(*args, **kwargs):

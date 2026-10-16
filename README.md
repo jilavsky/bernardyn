@@ -8,6 +8,10 @@ packages.
 ## Current capabilities
 
 - Browse all discoverable NXcanSAS/simple-HDF5 entries and 2–4 column text data.
+- Add saved pyIrena results (Unified Fit, Size Distribution, Modeling, Simple
+  Fits, WAXS Peak Fit, Carbon fitting) from the same data selector as I(Q)
+  data: measured data with fits and components, residuals, and size
+  distributions, with units read from the files.
 - Keep a workspace-wide dataset catalog and independent graph tabs.
 - Plot General I(Q), Guinier, rod/sheet Guinier, Kratky, dimensionless Kratky,
   Porod, modified Porod, Zimm, and Debye–Bueche views.
@@ -21,7 +25,9 @@ packages.
   writer. H5XP export is data interoperability, not Bernardyn graph persistence.
 
 The native schema is documented in
-[`bernardyn/schemas/graph-package-v2.md`](bernardyn/schemas/graph-package-v2.md).
+[`bernardyn/schemas/graph-package-v3.md`](bernardyn/schemas/graph-package-v3.md);
+packages written by any Bernardyn release since the betas remain readable, and
+settings written by newer releases are preserved when an older one resaves.
 User-facing workflow and file-format documentation is in
 [`docs/`](docs/README.md).
 Scripts and automation can use the typed Python facade or `bernardyn-plot` CLI;
@@ -32,6 +38,15 @@ server for the same recipe workflow.
 User-visible changes are recorded in [`CHANGELOG.md`](CHANGELOG.md).
 
 ## Install and run
+
+From PyPI (Python 3.10–3.13):
+
+```bash
+python -m pip install bernardyn
+python -m pip install "bernardyn[mcp]"   # optional: local MCP server for agents
+bernardyn-doctor
+bernardyn
+```
 
 Bernardyn targets Python 3.10–3.13 and shares its Qt plotting dependencies with
 PyIrena. For development, keep the `Bernardyn` and `pyirena` repositories next

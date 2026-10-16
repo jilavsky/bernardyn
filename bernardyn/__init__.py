@@ -1,6 +1,6 @@
 """Bernardyn scientific plotting workbench."""
 
-__version__ = "0.0.1b7"
+__version__ = "1.0.0"
 
 from bernardyn.api import (
     PlotRequest,

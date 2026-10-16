@@ -28,7 +28,7 @@ def _version(name: str) -> str | None:
 
 # The pyIrena floor from pyproject.toml (a test keeps the two equal).  It is
 # not read from installed metadata, which an old editable install leaves stale.
-MINIMUM_PYIRENA = "1.2.0b2"
+MINIMUM_PYIRENA = "1.2.0"
 _PRE_RELEASE_ORDER = {"a": 0, "b": 1, "rc": 2}
 
 

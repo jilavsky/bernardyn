@@ -56,7 +56,10 @@ exact workflow file, `release.yml`.
    `bernardyn/__init__.py`, `recipe/meta.yaml`, the schema status line, and
    `CHANGELOG.md`. Raise `bernardyn/io/container.py`'s
    `MIN_READER_VERSION` only when the release writes package content an older
-   reader cannot understand.
+   reader cannot understand. When the pyIrena minimum changes, update it in
+   `pyproject.toml`, `recipe/meta.yaml`, `requirements.txt`, and
+   `MINIMUM_PYIRENA` in `bernardyn/diagnostics.py` (a test checks the last one
+   against `pyproject.toml`).
 2. Run `pytest`, `ruff check bernardyn tests`, `python -m build`, and
    `python -m twine check dist/*` locally.
 3. Merge to `main`, create the matching `v<version>` GitHub Release, and

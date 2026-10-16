@@ -4,7 +4,12 @@ This file records user-visible changes in Bernardyn. Update it, together with
 the relevant user documentation, whenever a feature is added or an existing
 behavior changes.
 
-## Unreleased
+## 1.0.0 — 2026-10-15
+
+First stable release. The graph-package format (schema v3) is now stable.
+Settings added by later 1.x releases are preserved: this version opens such
+packages and keeps those settings when it saves. Requires pyIrena 1.2.0 or
+later.
 
 ### Added
 
@@ -58,6 +63,7 @@ behavior changes.
   from workspace…** below. The separate **Add pyIrena results…** command and
   its dialog are replaced by the results list in the data selector.
 - PySide6 6.10.x is excluded, matching pyIrena's Qt plotting extra.
+- Requires pyIrena 1.2.0 (stable) or later, instead of 1.2.0b2.
 - Displayed-data CSV exports begin with `#` comment lines describing the graph,
   its axes and units, and each series' view (format
   `bernardyn-displayed-data-csv v1`). The columns are unchanged. Readers that

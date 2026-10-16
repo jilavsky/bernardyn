@@ -85,7 +85,7 @@ def _reader():
     try:
         from pyirena.io.results import load_result
     except ImportError as exc:  # pragma: no cover - covered in dependency diagnostics
-        raise RuntimeError("pyIrena 1.2.0b2+ is required to read saved results") from exc
+        raise RuntimeError("pyIrena 1.2.0 or later is required to read saved results") from exc
     return load_result
 
 
@@ -185,8 +185,8 @@ def _stored_modeling_residuals(descriptor: ResultDescriptor) -> np.ndarray | Non
     """Modeling residuals, for pyIrena releases whose loader does not return them.
 
     pyIrena writes ``entry/modeling_results/residuals`` (unitless, on the
-    ``model_q`` points) from commit 8a54ee8, after the 1.2.0b3 release.  Files
-    written earlier have no such dataset, and the released 1.2.0b3 loader does
+    ``model_q`` points) since pyIrena 1.2.0, whose loader returns them.  Files
+    written earlier have no such dataset.  Development builds before 1.2.0 did
     not return it, so it is read here when the loader leaves it out.
     """
     from pyirena.io.schema import TOOL_REGISTRY

@@ -45,8 +45,8 @@ the version moves from `0.0.1bN` to `1.0.0`:
    crashes on them.
 3. Every axis in a saved or exported figure shows its quantity and its unit
    (F1, F2).
-4. A stable pyIrena release meets the dependency floor. `pyirena[qtplot]>=1.2.0b2`
-   is a pre-release pin, so the 1.0 wheel should depend on a stable `1.2.x`.
+4. A stable pyIrena release meets the dependency floor. Done: Bernardyn 1.0.0
+   requires `pyirena[qtplot]>=1.2.0,<2`.
 5. CI runs the MCP tests (F13). Release docs match the real default branch (F14).
 6. A short manual usability pass with real beamline data, from the old
    §7 gate:
@@ -269,6 +269,7 @@ Merged from the old roadmap (R3, M3, R4, §6, §12), `docs/TODO.md`, and
 | 6 | ~~F9–F12~~ — done; synthetic-error default left unchanged | — | — |
 | 7 | ~~I1–I5, I7~~ — done | — | — |
 | 8 | ~~Usability pass~~ — done 2026-10-15: A, C–G passed; B worked but felt cumbersome, so the data selector now lists I(Q) data and pyIrena results side by side with one **Add selected**. Re-check B, then release **1.0.0rc1** | — | Gate |
+| 8b | ~~Release 1.0.0~~ — prepared 2026-10-15 against pyIrena 1.2.0 (no rc; the usability pass and CI were green) | — | — |
 | 9 | After 1.0: M3 Aida checks → pyIrena hand-off → distribution bars (when edges exist) → R4 tables → 2-D detector images | — | Feature growth on a stable format |
 
 Update `CHANGELOG.md` and the user guide as each step ships, not when it is

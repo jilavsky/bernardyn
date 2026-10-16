@@ -137,7 +137,11 @@ Expected: a package plus a PNG preview in the output root, with labels in Å⁻�
 - Anything that felt like one decision too many. That counts as a finding,
   even if nothing is broken.
 
-## After the pass: cutting 1.0.0rc1
+## After the pass: releasing 1.0
+
+*2026-10-15:* released directly as 1.0.0 (no rc) once pyIrena 1.2.0 was
+published. Version, classifier, pyIrena floor (pyproject, recipe,
+requirements, `MINIMUM_PYIRENA`) and changelog were updated together.
 
 These are done once A–E pass and the findings are fixed:
 
