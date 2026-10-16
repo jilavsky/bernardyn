@@ -38,9 +38,18 @@ def pytest_unconfigure(config):
     widget deletion first is not safe (Python still holds references), so
     nothing is deleted.  Set BERNARDYN_TEST_NORMAL_EXIT=1 for the normal
     interpreter shutdown, e.g. when investigating such a crash.
+
+    Not used on Windows: the crash was never seen there, and on the Windows
+    runners this early exit itself ended passing runs with status 1 (cause
+    not identified), so Windows keeps the normal shutdown.
     """
-    if os.environ.get("BERNARDYN_TEST_NORMAL_EXIT") or "PySide6.QtWidgets" not in sys.modules:
+    if (
+        sys.platform == "win32"
+        or os.environ.get("BERNARDYN_TEST_NORMAL_EXIT")
+        or "PySide6.QtWidgets" not in sys.modules
+    ):
         return
+    print(f"conftest: ending the test process with status {_EXIT_STATUS}", file=sys.stderr)
     sys.stdout.flush()
     sys.stderr.flush()
     os._exit(_EXIT_STATUS)
