@@ -45,16 +45,17 @@ from bernardyn.io.file_browser import (
     make_file_matcher,
     sort_paths,
 )
-from bernardyn.io.result_batch import IQ_KIND, ResultSurvey, kind_label
+from bernardyn.io.result_batch import IQ_KIND, kind_label
 from bernardyn.io.sources import ScatteringLocation
 
 
 class DataFileSelectorDialog(QDialog):
-    """Choose files, then add their I(Q) data or their saved pyIrena results.
+    """Choose files, then the I(Q) data and saved pyIrena results to add.
 
-    ``mode`` tells the caller which button accepted the dialog: ``"iq"`` for
-    the checked 1-D data, ``"results"`` for the saved results of the selected
-    files (chosen afterwards in ResultImportDialog).
+    The right-hand side lists both kinds of data in the current file with the
+    same prominence.  I(Q) choices are remembered per file layout; a checked
+    result kind (say "Unified Fit · Residuals") applies to every selected file
+    that stores it.  One button adds everything that is checked.
     """
 
     def __init__(
@@ -65,20 +66,26 @@ class DataFileSelectorDialog(QDialog):
         paths: list[Path] | None = None,
         parent=None,
         *,
-        discover_results: Callable[[Path], list[str]] | None = None,
+        discover_results: Callable[[Path], Mapping[str, tuple[str, tuple[str, ...]]]] | None = None,
+        iq_results_allowed: bool = True,
     ) -> None:
         super().__init__(parent)
         self.folder = Path(folder)
         self._discover = discover
+        # path -> {analysis: (title, available curve kinds)}
         self._discover_results = discover_results
-        self._result_titles: dict[Path, list[str]] = {}
-        self.mode = "iq"
+        self._results: dict[Path, Mapping[str, tuple[str, tuple[str, ...]]]] = {}
+        self._iq_results_allowed = iq_results_allowed
         self._fixed_paths = [Path(path) for path in paths] if paths is not None else None
         stored = dict(preferences or {})
         self._profiles: dict[str, list[int]] = {
             str(key): [int(index) for index in value]
             for key, value in dict(stored.get("dataset_profiles", {})).items()
             if isinstance(value, list)
+        }
+        # "analysis/kind" keys of the result curves to add.
+        self._checked_results: set[str] = {
+            str(item) for item in stored.get("result_kinds", []) if isinstance(item, str)
         }
         self._locations: dict[Path, list[ScatteringLocation]] = {}
         self._errors: dict[Path, str] = {}
@@ -106,6 +113,14 @@ class DataFileSelectorDialog(QDialog):
         self.data_list.setToolTip("Check one or more 1-D data sets to load from the selected file.")
         self.data_status = QLabel("Select a file to inspect its 1-D data.", self)
         self.data_status.setWordWrap(True)
+        self.results_list = QListWidget(self)
+        self.results_list.itemChanged.connect(self._result_selection_changed)
+        self.results_list.setToolTip(
+            "Check saved results to add. A checked kind is added from every selected file "
+            "that stores it."
+        )
+        self.results_status = QLabel(self)
+        self.results_status.setWordWrap(True)
         self.q_unit = QComboBox(self)
         self.q_unit.addItems(["1/A", "1/nm", "1/pm", "1/um", "1/mm"])
         self.error_fraction = QDoubleSpinBox(self)
@@ -124,26 +139,19 @@ class DataFileSelectorDialog(QDialog):
         select_all.clicked.connect(self._select_all_visible)
         filter_row.addWidget(select_all)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel, parent=self)
-        self.add_iq_button = buttons.addButton("Add I(Q) data", QDialogButtonBox.ButtonRole.AcceptRole)
-        self.add_iq_button.setDefault(True)
-        self.add_iq_button.setToolTip("Add the checked 1-D data of every selected file.")
-        self.add_results_button = buttons.addButton(
-            "Add pyIrena results…", QDialogButtonBox.ButtonRole.ActionRole
+        self.add_button = buttons.addButton("Add selected", QDialogButtonBox.ButtonRole.AcceptRole)
+        self.add_button.setDefault(True)
+        self.add_button.setToolTip(
+            "Add the checked I(Q) data and saved results of every selected file."
         )
-        self.add_results_button.setToolTip(
-            "Choose saved fits, residuals, or distributions from the selected files."
-        )
-        self.add_results_button.setVisible(discover_results is not None)
-        self.add_iq_button.clicked.connect(self._accept_selection)
-        self.add_results_button.clicked.connect(self._accept_results)
+        self.add_button.clicked.connect(self._accept_selection)
         buttons.rejected.connect(self.reject)
         layout = QVBoxLayout(self)
         layout.addWidget(
             QLabel(
                 f"Folder: {self.folder}\n"
-                "Select files on the left. Add I(Q) data loads the 1-D data checked on the "
-                "right (choices are reused for files with the same layout); Add pyIrena "
-                "results offers the fits saved in the selected files."
+                "Select files on the left, then check what to add on the right: I(Q) data, "
+                "saved pyIrena results, or both. Choices are reused for every selected file."
             )
         )
         layout.addLayout(controls)
@@ -153,9 +161,16 @@ class DataFileSelectorDialog(QDialog):
         left.addWidget(QLabel("Files"))
         left.addWidget(self.file_list, 1)
         right = QVBoxLayout()
-        right.addWidget(QLabel("1-D data in selected file"))
+        right.addWidget(QLabel("<b>I(Q) data</b> in the current file"))
         right.addWidget(self.data_list, 1)
         right.addWidget(self.data_status)
+        if discover_results is not None:
+            right.addWidget(QLabel("<b>Saved pyIrena results</b> in the current file"))
+            right.addWidget(self.results_list, 1)
+            right.addWidget(self.results_status)
+        else:
+            self.results_list.hide()
+            self.results_status.hide()
         lists.addLayout(left, 1)
         lists.addLayout(right, 1)
         layout.addLayout(lists, 1)
@@ -238,6 +253,7 @@ class DataFileSelectorDialog(QDialog):
     def _file_selected(self, current: QListWidgetItem | None, previous=None) -> None:
         self._current_path = None if current is None else Path(current.data(Qt.ItemDataRole.UserRole))
         self._populate_data_list()
+        self._populate_results_list()
 
     def _populate_data_list(self) -> None:
         self._syncing = True
@@ -249,9 +265,7 @@ class DataFileSelectorDialog(QDialog):
             return
         locations = self._locations_for(path)
         if not locations:
-            self.data_status.setText(
-                self._errors.get(path, "No plottable 1-D data was found.") + self._results_note(path)
-            )
+            self.data_status.setText(self._errors.get(path, "No plottable 1-D data was found."))
             self._syncing = False
             return
         profile_key = self._profile_key(locations)
@@ -277,27 +291,75 @@ class DataFileSelectorDialog(QDialog):
             instruction += " Reused from a previous file with this layout."
         elif len(locations) > 1:
             instruction += " No automatic choice is made for a multi-data file."
-        self.data_status.setText(instruction + self._results_note(path))
+        self.data_status.setText(instruction)
         self._syncing = False
 
-    def _results_note(self, path: Path) -> str:
-        """Name the saved pyIrena results in this file, if any."""
+    def _results_for(self, path: Path) -> Mapping[str, tuple[str, tuple[str, ...]]]:
+        """Saved pyIrena results in one file: {analysis: (title, kinds)}."""
         if self._discover_results is None or path.suffix.lower() not in (".h5", ".hdf5", ".hdf", ".nxs"):
-            return ""
-        if path not in self._result_titles:
+            return {}
+        if path not in self._results:
             try:
-                self._result_titles[path] = list(self._discover_results(path))
+                self._results[path] = dict(self._discover_results(path))
             except Exception:
-                self._result_titles[path] = []
-        titles = self._result_titles[path]
-        return f"\nSaved pyIrena results: {', '.join(titles)}." if titles else ""
+                self._results[path] = {}
+        return self._results[path]
 
-    def _accept_results(self) -> None:
-        if not self.selected_paths():
-            QMessageBox.information(self, "Add pyIrena results", "Select one or more files first.")
+    def _populate_results_list(self) -> None:
+        if self._discover_results is None:
             return
-        self.mode = "results"
-        self.accept()
+        self._syncing = True
+        self.results_list.clear()
+        path = self._current_path
+        results = {} if path is None else self._results_for(path)
+        for analysis, (title, kinds) in results.items():
+            for kind in kinds:
+                key = f"{analysis}/{kind}"
+                item = QListWidgetItem(f"{title} · {kind_label(kind)}")
+                item.setData(Qt.ItemDataRole.UserRole, key)
+                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                enabled = kind != IQ_KIND or self._iq_results_allowed
+                if not enabled:
+                    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEnabled)
+                    item.setToolTip(
+                        "Data + fit uses the General I(Q) view; select an I(Q) graph first."
+                    )
+                checked = enabled and key in self._checked_results
+                item.setCheckState(Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked)
+                self.results_list.addItem(item)
+        if path is None:
+            self.results_status.setText("Select a file to see its saved results.")
+        elif not results:
+            self.results_status.setText("No saved pyIrena results in this file.")
+        else:
+            self.results_status.setText(
+                "Data + fit joins the current graph; every other kind gets one graph "
+                "for all selected files."
+            )
+        self._syncing = False
+
+    def _result_selection_changed(self, item: QListWidgetItem) -> None:
+        if self._syncing:
+            return
+        key = str(item.data(Qt.ItemDataRole.UserRole))
+        if item.checkState() == Qt.CheckState.Checked:
+            self._checked_results.add(key)
+        else:
+            self._checked_results.discard(key)
+
+    def selected_results(self) -> dict[str, tuple[str, ...]]:
+        """Checked result kinds, by analysis, that some selected file stores."""
+        offered: set[str] = set()
+        for path in self.selected_paths():
+            for analysis, (_, kinds) in self._results_for(path).items():
+                offered.update(f"{analysis}/{kind}" for kind in kinds)
+        selection: dict[str, list[str]] = {}
+        for key in sorted(self._checked_results & offered):
+            analysis, kind = key.split("/", 1)
+            if kind == IQ_KIND and not self._iq_results_allowed:
+                continue
+            selection.setdefault(analysis, []).append(kind)
+        return {analysis: tuple(kinds) for analysis, kinds in selection.items()}
 
     def _data_selection_changed(self, item: QListWidgetItem) -> None:
         if self._syncing or self._current_path is None:
@@ -338,12 +400,17 @@ class DataFileSelectorDialog(QDialog):
             "q_unit": self.q_unit.currentText(),
             "error_percent": self.error_fraction.value(),
             "dataset_profiles": self._profiles,
+            "result_kinds": sorted(self._checked_results),
         }
 
     def _accept_selection(self) -> None:
-        self.mode = "iq"
         if not self.selected_paths():
-            QMessageBox.information(self, "Select scattering data", "Select one or more files to load.")
+            QMessageBox.information(self, "Select data", "Select one or more files to load.")
+            return
+        if self.selected_results():
+            # Results alone are a complete request; a multi-curve file with no
+            # I(Q) choice then simply contributes its results.
+            self.accept()
             return
         unresolved = self.unresolved_paths()
         if unresolved:
@@ -355,7 +422,9 @@ class DataFileSelectorDialog(QDialog):
             )
             return
         if not self.selected_locations():
-            QMessageBox.information(self, "Choose 1-D data", "No data sets are selected for loading.")
+            QMessageBox.information(
+                self, "Choose data", "Check I(Q) data or saved results to add, then press Add selected."
+            )
             return
         self.accept()
 
@@ -461,96 +530,6 @@ class GraphSelectionDialog(QDialog):
             for index in range(self.list.count())
             if self.list.item(index).checkState() == Qt.CheckState.Checked
         ]
-
-
-def _files(count: int) -> str:
-    return f"{count} file" if count == 1 else f"{count} files"
-
-
-class ResultImportDialog(QDialog):
-    """Choose one analysis and its curve kinds for a whole batch of files.
-
-    Each chosen kind becomes one graph holding every file's curve, so a batch
-    of files gives a comparison rather than a tab per file.
-    """
-
-    def __init__(self, survey: ResultSurvey, *, iq_allowed: bool, parent=None) -> None:
-        super().__init__(parent)
-        self.setWindowTitle("Add saved pyIrena results")
-        self.survey = survey
-        self.iq_allowed = iq_allowed
-        total = len(survey.files)
-        self.analysis = QComboBox(self)
-        for analysis, title, count in survey.analyses():
-            self.analysis.addItem(f"{title} — {count} of {_files(total)}", analysis)
-        self.kinds = QListWidget(self)
-        self.preview = QLabel(self)
-        self.preview.setWordWrap(True)
-        self.preview.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self.buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
-            parent=self,
-        )
-        self.buttons.accepted.connect(self.accept)
-        self.buttons.rejected.connect(self.reject)
-        layout = QVBoxLayout(self)
-        form = QFormLayout()
-        form.addRow("Analysis:", self.analysis)
-        layout.addLayout(form)
-        layout.addWidget(QLabel("Curves to add:"))
-        layout.addWidget(self.kinds)
-        layout.addWidget(self.preview)
-        layout.addWidget(self.buttons)
-        self.analysis.currentIndexChanged.connect(self._fill_kinds)
-        self.kinds.itemChanged.connect(lambda _item: self._update_preview())
-        self._fill_kinds()
-        self.resize(560, 420)
-
-    def _fill_kinds(self) -> None:
-        self.kinds.blockSignals(True)
-        self.kinds.clear()
-        analysis = self.analysis.currentData()
-        first_checked = False
-        for kind, count in self.survey.kinds(analysis) if analysis else ():
-            item = QListWidgetItem(f"{kind_label(kind)} ({_files(count)})")
-            item.setData(Qt.ItemDataRole.UserRole, kind)
-            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-            if kind == IQ_KIND and not self.iq_allowed:
-                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEnabled)
-                item.setToolTip("Data + fit uses the General I(Q) view. Select an I(Q) graph first.")
-                item.setCheckState(Qt.CheckState.Unchecked)
-            elif not first_checked:
-                item.setCheckState(Qt.CheckState.Checked)
-                first_checked = True
-            else:
-                item.setCheckState(Qt.CheckState.Unchecked)
-            self.kinds.addItem(item)
-        self.kinds.blockSignals(False)
-        self._update_preview()
-
-    def selection(self) -> tuple[str, tuple[str, ...]]:
-        kinds = tuple(
-            str(self.kinds.item(index).data(Qt.ItemDataRole.UserRole))
-            for index in range(self.kinds.count())
-            if self.kinds.item(index).checkState() == Qt.CheckState.Checked
-        )
-        return str(self.analysis.currentData() or ""), kinds
-
-    def _update_preview(self) -> None:
-        analysis, kinds = self.selection()
-        title = next((name for key, name, _ in self.survey.analyses() if key == analysis), "")
-        counts = dict(self.survey.kinds(analysis)) if analysis else {}
-        lines = []
-        for kind in kinds:
-            target = "the current graph" if kind == IQ_KIND else f"new graph “{title} {kind_label(kind).lower()}”"
-            lines.append(f"{kind_label(kind)}: {_files(counts.get(kind, 0))} → {target}")
-        skipped = self.survey.skipped(analysis, kinds) if analysis else []
-        if skipped:
-            names = ", ".join(path.name for path, _ in skipped[:6])
-            more = f" and {len(skipped) - 6} more" if len(skipped) > 6 else ""
-            lines.append(f"Skipped {_files(len(skipped))}: {names}{more}")
-        self.preview.setText("\n".join(lines) or "Choose at least one kind of curve.")
-        self.buttons.button(QDialogButtonBox.StandardButton.Ok).setEnabled(bool(kinds))
 
 
 class HDFMappingDialog(QDialog):

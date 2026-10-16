@@ -70,7 +70,6 @@ from bernardyn.gui.dialogs import (
     GraphSelectionDialog,
     HDFMappingDialog,
     LocationDialog,
-    ResultImportDialog,
     SeriesTransformParameterDialog,
 )
 from bernardyn.gui.graph_page import GraphPage, OutputPreviewDialog, PreviewPage
@@ -118,11 +117,15 @@ def _edit_error_text(exc: BaseException) -> str:
     return _UNDO_OVERRIDE_PREFIX.sub("", str(exc))
 
 
-def _result_titles(path: Path) -> list[str]:
-    """Titles of saved pyIrena results in one file, for the folder browser."""
-    from bernardyn.io.results import discover_results
-
-    return [item.title for item in discover_results(path)]
+def _results_in_file(path: Path) -> dict[str, tuple[str, tuple[str, ...]]]:
+    """Saved pyIrena results in one file, {analysis: (title, kinds)}, for the selector."""
+    (found,) = survey_results([path]).files
+    if found.error is not None:
+        raise ValueError(found.error)
+    return {
+        analysis: (descriptor.title, found.kinds[analysis])
+        for analysis, descriptor in found.descriptors.items()
+    }
 
 
 def _skipped_text(skipped) -> str:
@@ -393,20 +396,15 @@ class MainWindow(QMainWindow):
         self.dataset_filter.currentIndexChanged.connect(self._refresh_dataset_list)
         filter_row.addWidget(self.dataset_filter, 1)
         layout.addLayout(filter_row)
-        # The two ways to add data sit side by side; the folder browser below
-        # offers both for a whole folder, and the workspace catalog reuses
-        # anything already loaded.
-        open_button = QPushButton("Add I(Q) data…", data_widget)
-        open_button.setToolTip("Choose files and add their scattering I(Q) curves to this graph.")
+        # Both entry points open the same data selector, which lists I(Q) data
+        # and saved pyIrena results side by side; the catalog reuses anything
+        # already loaded.
+        open_button = QPushButton("Add data…", data_widget)
+        open_button.setToolTip("Choose files, then add their I(Q) data, saved pyIrena results, or both.")
         open_button.clicked.connect(self._open_data)
-        add_results_button = QPushButton("Add pyIrena results…", data_widget)
-        add_results_button.setToolTip(
-            "Choose files and add their saved pyIrena fits, residuals, or distributions."
-        )
-        add_results_button.clicked.connect(self._add_pyirena_results)
         open_folder_button = QPushButton("Open folder…", data_widget)
         open_folder_button.setToolTip(
-            "Browse, sort, and filter a folder, then add I(Q) data or pyIrena results."
+            "Browse, sort, and filter a folder, then add I(Q) data, saved pyIrena results, or both."
         )
         open_folder_button.clicked.connect(self._open_folder)
         add_catalog_button = QPushButton("Add from workspace…", data_widget)
@@ -418,9 +416,8 @@ class MainWindow(QMainWindow):
         cancel_button.clicked.connect(self._cancel_loading)
         button_grid = QGridLayout()
         button_grid.addWidget(open_button, 0, 0)
-        button_grid.addWidget(add_results_button, 0, 1)
-        button_grid.addWidget(open_folder_button, 1, 0)
-        button_grid.addWidget(add_catalog_button, 1, 1)
+        button_grid.addWidget(open_folder_button, 0, 1)
+        button_grid.addWidget(add_catalog_button, 1, 0, 1, 2)
         layout.addLayout(button_grid)
         layout.addWidget(self.dataset_list, 1)
         action_grid = QGridLayout()
@@ -463,8 +460,7 @@ class MainWindow(QMainWindow):
     def _build_actions(self) -> None:
         self.new_workspace_action = self._action("New workspace", self._new_workspace, QKeySequence.StandardKey.New)
         self.new_window_action = self._action("New window", self.newWindowRequested.emit)
-        self.open_data_action = self._action("Add I(Q) data…", self._open_data, QKeySequence.StandardKey.Open)
-        self.add_results_action = self._action("Add pyIrena results…", self._add_pyirena_results)
+        self.open_data_action = self._action("Add data…", self._open_data, QKeySequence.StandardKey.Open)
         self.open_folder_action = self._action("Open folder…", self._open_folder, "Ctrl+Shift+F")
         self.browse_datasets_action = self._action("Browse data sets…", self._browse_datasets)
         self.workspace_properties_action = self._action(
@@ -527,8 +523,7 @@ class MainWindow(QMainWindow):
         file_menu = self.menuBar().addMenu("&File")
         for action in (
             self.new_workspace_action, self.new_window_action, self.workspace_properties_action,
-            self.open_data_action, self.add_results_action, self.open_folder_action,
-            self.browse_datasets_action,
+            self.open_data_action, self.open_folder_action, self.browse_datasets_action,
             self.open_package_action, self.open_package_new_window_action,
         ):
             file_menu.addAction(action)
@@ -1108,7 +1103,7 @@ class MainWindow(QMainWindow):
     def _open_data(self) -> None:
         paths, _ = QFileDialog.getOpenFileNames(
             self,
-            "Add I(Q) data",
+            "Add data",
             str(self.user_state.get("last_data_folder", "")),
             "Scattering data (*.h5 *.hdf5 *.hdf *.nxs *.dat *.txt *.csv);;All files (*)",
         )
@@ -1269,58 +1264,59 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             QMessageBox.warning(self, f"{verb} datasets", _edit_error_text(exc))
 
-    def _add_pyirena_results(self) -> None:
-        graph = self._current_graph()
-        if graph is None:
-            return
-        paths, _ = QFileDialog.getOpenFileNames(
-            self,
-            "Add saved pyIrena results",
-            str(self.user_state.get("last_data_folder", "")),
-            "HDF5 / NeXus files (*.h5 *.hdf5 *.hdf *.nxs)",
-        )
-        if not paths:
-            return
-        self._import_results_from_paths([Path(value) for value in paths])
+    def _import_result_selection(
+        self, paths: list[Path], selection: dict[str, tuple[str, ...]]
+    ) -> None:
+        """Load the checked result kinds from every file that stores them.
 
-    def _import_results_from_paths(self, paths: list[Path]) -> None:
-        """Offer the saved results in these files, then add the chosen curves."""
+        All analyses arrive as one Undo step; a file that contributes nothing
+        is reported afterwards.
+        """
         graph = self._current_graph()
-        if graph is None or not paths:
+        if graph is None or not paths or not selection:
             return
         survey = survey_results(paths)
-        if not survey.analyses():
-            QMessageBox.information(
-                self,
-                "pyIrena results",
-                "No supported saved results in the selected files.\n\n"
-                + _skipped_text(survey.skipped("", ())),
-            )
-            return
-        dialog = ResultImportDialog(survey, iq_allowed=graph.view_transform_id == "raw", parent=self)
-        if dialog.exec() != dialog.DialogCode.Accepted:
-            return
-        analysis, kinds = dialog.selection()
-        batch = load_result_batch(survey, analysis, kinds)
-        if not batch.iq and not batch.curves:
+        batches = [load_result_batch(survey, analysis, kinds) for analysis, kinds in selection.items()]
+        batches = [batch for batch in batches if batch.iq or batch.curves]
+        contributed = {
+            bundle.descriptor.path
+            for batch in batches
+            for bundle in [item for _, item in batch.iq]
+            + [item for items in batch.curves.values() for _, item in items]
+        }
+        reasons: dict[Path, str] = {}
+        for analysis, kinds in selection.items():
+            for path, reason in survey.skipped(analysis, kinds):
+                reasons.setdefault(path, reason)
+        skipped = [
+            (path, reasons.get(path, "none of the checked results are stored"))
+            for path in (Path(value).expanduser().resolve() for value in paths)
+            if path not in contributed
+        ]
+        if not batches:
             QMessageBox.warning(
-                self, "pyIrena results", "Nothing could be imported.\n\n" + _skipped_text(batch.skipped)
+                self, "pyIrena results", "No checked results could be added.\n\n" + _skipped_text(skipped)
             )
             return
         graph_id = graph.id
-        if not self._push_edit(
-            WorkspaceEditCommand(self, "Import pyIrena results", lambda: self._add_result_batch(graph_id, batch)),
-            "pyIrena results",
-        ):
+
+        def action() -> None:
+            new_graph_ids: list[str] = []
+            for batch in batches:
+                new_graph_ids.extend(self._add_result_batch(graph_id, batch))
+            # Stay on the I(Q) graph that received data + fit; otherwise show
+            # the first comparison graph the import created.
+            any_iq = any(batch.iq for batch in batches)
+            self.controller.workspace.active_graph_id = graph_id if any_iq else new_graph_ids[0]
+
+        if not self._push_edit(WorkspaceEditCommand(self, "Import pyIrena results", action), "pyIrena results"):
             return
-        self.user_state.set("last_data_folder", str(Path(paths[0]).parent))
-        self.user_state.save()
-        if batch.skipped:
+        if skipped:
             QMessageBox.information(
-                self, "pyIrena results", "Some files were skipped:\n\n" + _skipped_text(batch.skipped)
+                self, "pyIrena results", "No checked results were found in:\n\n" + _skipped_text(skipped)
             )
 
-    def _add_result_batch(self, graph_id: str, batch: ResultBatch) -> None:
+    def _add_result_batch(self, graph_id: str, batch: ResultBatch) -> list[str]:
         """Add a loaded result batch: I(Q) to the graph, one new graph per other kind.
 
         Across several files each file keeps one colour; within one file,
@@ -1376,9 +1372,7 @@ class MainWindow(QMainWindow):
                     for position, (file_index, bundle) in enumerate(items)
                 ),
             )
-        # Stay on the I(Q) graph that received data + fit; otherwise show the
-        # first comparison graph the import created.
-        self.controller.workspace.active_graph_id = graph.id if batch.iq else new_graph_ids[0]
+        return new_graph_ids
 
     def _dropped_data_paths(self, dropped: list[Path]) -> None:
         """Open dropped files/folders through the normal profile-aware importer."""
@@ -1408,24 +1402,29 @@ class MainWindow(QMainWindow):
             self.user_state.get("data_selector", {}),
             paths,
             self,
-            discover_results=_result_titles,
+            discover_results=_results_in_file,
+            iq_results_allowed=(graph := self._current_graph()) is not None
+            and graph.view_transform_id == "raw",
         )
         if dialog.exec() != dialog.DialogCode.Accepted:
             return
         self.user_state.set("last_data_folder", str(folder))
         self.user_state.set("data_selector", dialog.preferences())
         self.user_state.save()
-        if dialog.mode == "results":
-            self._import_results_from_paths(dialog.selected_paths())
-            return
         graph = self._current_graph()
-        if graph is not None:
+        if graph is None:
+            return
+        locations = dialog.selected_locations()
+        if locations:
             self._queue_locations(
-                dialog.selected_locations(),
+                locations,
                 graph.id,
                 dialog.q_unit.currentText(),
                 dialog.error_fraction.value() / 100.0,
             )
+        results = dialog.selected_results()
+        if results:
+            self._import_result_selection(dialog.selected_paths(), results)
 
     def _open_data_paths(self, paths: list[Path], *, use_preferred: bool) -> None:
         graph = self._current_graph()

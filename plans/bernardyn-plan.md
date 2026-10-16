@@ -105,8 +105,9 @@ Open, upstream:
   integrates the cumulative number.
 
 **F5 — done (unreleased).** A Qt-free planner, `bernardyn/io/result_batch.py`,
-surveys the files, loads the selection, and groups the curves. One dialog,
-`ResultImportDialog`, covers the whole batch:
+surveys the files, loads the selection, and groups the curves. Since
+2026-10-15 the data selector lists saved results beside I(Q) data, so there is
+no separate result dialog:
 - Each chosen kind makes one graph, with one colour per file; components are
   dashed when there are several files.
 - Skipped files are reported.
@@ -267,7 +268,7 @@ Merged from the old roadmap (R3, M3, R4, §6, §12), `docs/TODO.md`, and
 | 5 | ~~F5 + I6, F4~~ — done, including Modeling residuals and number distributions | — | — |
 | 6 | ~~F9–F12~~ — done; synthetic-error default left unchanged | — | — |
 | 7 | ~~I1–I5, I7~~ — done | — | — |
-| 8 | ~~Usability pass~~ — done 2026-10-15: A, C–G passed; B worked but felt cumbersome, so adding data was regrouped (two Add buttons; Open folder also adds results). Next: release **1.0.0rc1** | — | Gate |
+| 8 | ~~Usability pass~~ — done 2026-10-15: A, C–G passed; B worked but felt cumbersome, so the data selector now lists I(Q) data and pyIrena results side by side with one **Add selected**. Re-check B, then release **1.0.0rc1** | — | Gate |
 | 9 | After 1.0: M3 Aida checks → pyIrena hand-off → distribution bars (when edges exist) → R4 tables → 2-D detector images | — | Feature growth on a stable format |
 
 Update `CHANGELOG.md` and the user guide as each step ships, not when it is

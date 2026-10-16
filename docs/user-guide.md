@@ -19,15 +19,24 @@ On Windows, use `python -m bernardyn --version` to print it in the terminal.
 The top of the left **Data browser** holds the ways to add data to the active
 graph; the same commands are in the **File** menu:
 
-- **Add I(Q) data…** adds the scattering curves of one or more chosen files.
-- **Add pyIrena results…** adds saved fits, residuals, or distributions from
-  one or more chosen files (see below).
-- **Open folder…** browses, sorts, and filters a whole folder. Select files,
-  then press **Add I(Q) data** for their curves or **Add pyIrena results…** for
-  their saved fits. Selecting a file lists the pyIrena results it contains.
+- **Add data…** opens the data selector for one or more chosen files.
+- **Open folder…** opens the data selector for a whole folder, which can be
+  sorted and filtered.
 - **Add from workspace…** reuses anything already loaded, including results.
 - Drag files or folders from the system file browser onto the **Data browser**
-  list, even when that list is empty; this opens the same folder browser.
+  list, even when that list is empty; this opens the data selector too.
+
+In the data selector, select files on the left. The right side shows what the
+current file contains, in two lists of equal standing:
+
+- **I(Q) data**: the scattering curves in the file.
+- **Saved pyIrena results**: each saved fit and the curves it offers, such as
+  "Unified Fit · Data + fit I(Q)" or "Size Distribution · Volume distribution".
+
+Check what you want in either list, or both, and press **Add selected**. The
+checked choices apply to every selected file: I(Q) choices to files with the
+same layout, and a checked result kind to every file that stores it. Both
+kinds of choice are remembered for next time.
 
 The selector recognises HDF5/NXcanSAS (`.h5`, `.hdf5`, `.hdf`, `.nxs`) and
 two-to-four-column text data (`.dat`, `.txt`, `.csv`). For HDF5 files, choose
@@ -67,13 +76,11 @@ workspace. Each target graph applies its own selected view, so moving a curve
 to an I(Q) graph restores I(Q) rather than retaining a transform intended for
 the source graph. All transfers can be undone or redone.
 
-Use **Add pyIrena results…** to select one or more HDF5 files with saved
-**Unified Fit**, **Size Distribution**, **Modeling**, **Simple Fits**, **WAXS
-Peak Fit**, or **Carbon fitting** results. Bernardyn uses pyIrena's HDF5 schema
-to find saved results and its result readers to load them. One dialog applies
-to the whole selection: choose the analysis, then tick the curves to add. The
-dialog shows how many files offer each choice, where the curves will go, and
-which files will be skipped and why.
+Saved **Unified Fit**, **Size Distribution**, **Modeling**, **Simple Fits**,
+**WAXS Peak Fit**, and **Carbon fitting** results appear in the selector's
+**Saved pyIrena results** list. Bernardyn uses pyIrena's HDF5 schema to find
+them and its result readers to load them. Files without the checked results
+are named after the import.
 
 **Data + fit I(Q)** adds the measured data, total fit, and components to the
 current graph, which must use the General I(Q) view. With several files, each

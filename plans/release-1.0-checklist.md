@@ -2,9 +2,9 @@
 
 **Result, 2026-10-15:** A, C, D, E, F (fresh conda install from GitHub) and G
 (MCP) passed. B worked as described but felt cumbersome, so it was changed:
-- **Add I(Q) data…** and **Add pyIrena results…** now sit side by side, with
-  **Open folder…** and **Add from workspace…** below.
-- The folder browser adds results as well as I(Q) data.
+- One data selector (**Add data…** or **Open folder…**) now lists each file's
+  I(Q) data and saved pyIrena results side by side. One **Add selected**
+  button adds both, replacing the separate result dialog.
 - **Add from workspace…** labels result curves.
 - New graphs now become the current tab.
 
@@ -53,8 +53,8 @@ most.
 
 ## B. Data + fit: no manual paths
 
-1. **Add pyIrena results…**, choose one Unified Fit file, then **Data + fit
-   I(Q)**.
+1. **Add data…**, choose one Unified Fit file, then check **Unified Fit · Data
+   + fit I(Q)** under Saved pyIrena results.
 2. Expected:
    - Measured symbols and a fit line, both in cm⁻¹.
    - The fit is within the data's Q range.
@@ -67,8 +67,8 @@ most.
 
 ## C. Distributions: correct axes
 
-1. **Add pyIrena results…** on a Size Distribution file, then tick **Volume
-   distribution** and **Residuals**.
+1. **Add data…** on a Size Distribution file, then check **Size Distribution ·
+   Volume distribution** and **· Residuals**.
 2. Expected: two new graphs.
    - The volume distribution is labelled `Radius [Å]` and
      `Volume fraction density [vol. fraction·Å⁻¹]`.
@@ -83,10 +83,10 @@ most.
 
 ## D. Multi-file batch with one Undo
 
-1. **Add pyIrena results…**, select all the Unified Fit files plus one file
-   *without* results, then tick **Data + fit I(Q)** and **Residuals**.
+1. **Open folder…**, select all the Unified Fit files plus one file
+   *without* results. Check **Unified Fit · Data + fit I(Q)** and **Unified
+   Fit · Residuals**, then **Add selected**.
 2. Expected:
-   - The dialog preview lists the targets and names the skipped file.
    - The data + fit curves land in the current graph, with **one colour per
      sample**, and one new "Unified Fit residuals" graph holds all the samples.
    - Afterwards a message names the skipped file.

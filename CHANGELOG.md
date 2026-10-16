@@ -8,9 +8,15 @@ behavior changes.
 
 ### Added
 
-- **Open folder…** can now add pyIrena results as well as I(Q) data: select
-  files and press **Add pyIrena results…**. Selecting a file lists the saved
-  results it contains.
+- The data selector (**Add data…**, **Open folder…**, or a drag-and-drop)
+  lists a file's **I(Q) data** and its **saved pyIrena results** side by side.
+  Check either or both and press **Add selected**; no further dialog follows.
+  - A checked result kind, e.g. "Unified Fit · Residuals", is added from every
+    selected file that stores it, and is remembered like I(Q) choices.
+  - Each result kind other than Data + fit becomes one comparison graph
+    holding every file's curve, with one colour per file.
+  - All results from one selection arrive as one Undo step, and files without
+    the checked results are named afterwards.
 - **Add from workspace…** names each entry's kind (e.g. "Unified Fit
   residuals") and offers only data that fit the graph's view.
 - Data-browser filters for Modeling measured data, residuals, and volume and
@@ -30,13 +36,6 @@ behavior changes.
 - A graph warns when its curves have different units (for example arbitrary
   and absolute intensity) and so are not on a common scale. Mixing is still
   allowed.
-- **Add pyIrena results…** now handles many files at once with a single
-  dialog. Choose the analysis and the curves you want; the dialog shows how
-  many files offer each choice, where the curves will go, and which files will
-  be skipped and why.
-  - Each chosen curve kind becomes one comparison graph holding every file's
-    curve, with one colour per file.
-  - The whole import is one Undo step.
 - Modeling imports include the file's primary scattering curve as the measured
   data, when the file has one.
 - Modeling residuals (pyIrena files that store them) and each population's
@@ -55,9 +54,9 @@ behavior changes.
   model or component shares the units of the measured data it was fitted to.
 - Size distribution curves are labelled with the stored units, e.g. volume
   distributions show `vol. fraction·Å⁻¹`.
-- **Open data…** is now **Add I(Q) data…**, and sits beside **Add pyIrena
-  results…** at the top of the Data browser, with **Open folder…** and **Add
-  from workspace…** below.
+- **Open data…** is now **Add data…**, beside **Open folder…**, with **Add
+  from workspace…** below. The separate **Add pyIrena results…** command and
+  its dialog are replaced by the results list in the data selector.
 - PySide6 6.10.x is excluded, matching pyIrena's Qt plotting extra.
 - Displayed-data CSV exports begin with `#` comment lines describing the graph,
   its axes and units, and each series' view (format

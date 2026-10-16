@@ -15,8 +15,8 @@ the original data files are not needed after saving.
 ## Normal use
 
 1. Start Bernardyn. It opens a new, unsaved workspace with one graph tab.
-2. Use **Add I(Q) data…**, **Add pyIrena results…**, or **Open folder…** (which
-   offers both) to select source data.
+2. Use **Add data…** or **Open folder…** to select source files, then check
+   their I(Q) data, saved pyIrena results, or both.
    Imported curves join the dataset catalog and are added to the active graph.
 3. Create additional graph tabs with **Graph → New 2D graph**, **New 3D
    waterfall**, or **New 3D surface**. A dataset may be used in more than one

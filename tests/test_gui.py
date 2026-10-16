@@ -74,26 +74,6 @@ def test_new_2d_graph_has_a_portable_shortcut(qapp):
     window.close()
 
 
-def _accept_results(monkeypatch, analysis, kinds):
-    """Replace the batch result dialog with one that accepts a fixed choice."""
-    from PySide6.QtWidgets import QDialog
-
-    class AcceptingDialog:
-        DialogCode = QDialog.DialogCode
-
-        def __init__(self, survey, *, iq_allowed, parent=None):
-            self.survey = survey
-            self.iq_allowed = iq_allowed
-
-        def exec(self):
-            return QDialog.DialogCode.Accepted
-
-        def selection(self):
-            return analysis, kinds
-
-    monkeypatch.setattr(main_window, "ResultImportDialog", AcceptingDialog)
-
-
 def test_pyirena_distribution_import_creates_a_typed_linear_graph(qapp, monkeypatch):
     fixture = Path(__file__).parents[1] / "testData" / "Al_Mg_Si__40C_0min_0498.h5"
     window = MainWindow()
@@ -102,8 +82,7 @@ def test_pyirena_distribution_import_creates_a_typed_linear_graph(qapp, monkeypa
         "getOpenFileNames",
         lambda *args: ([str(fixture)], ""),
     )
-    _accept_results(monkeypatch, "size_distribution", ("volume_distribution",))
-    window._add_pyirena_results()
+    window._import_result_selection([fixture], {"size_distribution": ("volume_distribution",)})
     assert len(window.controller.workspace.graphs) == 2
     graph = window.controller.workspace.graphs[-1]
     assert graph.x_axis.label == "Radius [Å]"
@@ -125,8 +104,7 @@ def test_pyirena_waxs_import_uses_linear_axes_and_includes_peaks(qapp, monkeypat
         "getOpenFileNames",
         lambda *args: ([str(fixture)], ""),
     )
-    _accept_results(monkeypatch, "waxs_peakfit", ("iq",))
-    window._add_pyirena_results()
+    window._import_result_selection([fixture], {"waxs_peakfit": ("iq",)})
     graph = window.controller.workspace.graphs[0]
     assert not graph.x_axis.log and not graph.y_axis.log
     assert len(graph.series) == 10
@@ -1202,15 +1180,11 @@ def test_batch_result_import_groups_each_kind_into_one_graph(qapp, monkeypatch, 
         copy2(source / "pyirena_1_2_SimpleFits_Porod.h5", tmp_path / "other.h5"),
     ]
     window = MainWindow()
-    monkeypatch.setattr(
-        main_window.QFileDialog, "getOpenFileNames", lambda *args: ([str(item) for item in files], "")
-    )
-    _accept_results(monkeypatch, "unified_fit", ("iq", "residuals"))
     skipped = []
     monkeypatch.setattr(main_window.QMessageBox, "information", lambda *args: skipped.append(args[2]))
     count = window.undo_stack.count()
 
-    window._add_pyirena_results()
+    window._import_result_selection(files, {"unified_fit": ("iq", "residuals")})
 
     iq_graph, residual_graph = window.controller.workspace.graphs
     assert len(iq_graph.series) == 4  # data + fit for each of two files
@@ -1230,26 +1204,25 @@ def test_batch_result_import_groups_each_kind_into_one_graph(qapp, monkeypatch, 
     window.close()
 
 
-def test_result_import_dialog_previews_targets_and_skips(qapp, tmp_path):
-    from shutil import copy2
-
-    from bernardyn.gui.dialogs import ResultImportDialog
-    from bernardyn.io.result_batch import survey_results
-
-    source = Path(__file__).parents[1] / "testData"
-    files = [
-        copy2(source / "Al_Mg_Si__40C_0min_0498.h5", tmp_path / "sample.h5"),
-        copy2(source / "pyirena_1_2_WAXS_Al_7075.h5", tmp_path / "waxs.h5"),
+def test_several_analyses_arrive_in_one_undo_step(qapp, monkeypatch):
+    fixture = Path(__file__).parents[1] / "testData" / "Al_Mg_Si__40C_0min_0498.h5"
+    window = MainWindow()
+    count = window.undo_stack.count()
+    window._import_result_selection(
+        [fixture],
+        {"unified_fit": ("residuals",), "size_distribution": ("residuals", "volume_distribution")},
+    )
+    titles = [graph.title for graph in window.controller.workspace.graphs[1:]]
+    assert titles == [
+        "Unified Fit residuals", "Size Distribution residuals", "Size Distribution volume distribution"
     ]
-    survey = survey_results(files)
-    dialog = ResultImportDialog(survey, iq_allowed=False)
-    assert dialog.analysis.currentData() == "unified_fit"
-    # Data + fit is disabled outside an I(Q) view, so the next kind is chosen.
-    assert dialog.selection() == ("unified_fit", ("residuals",))
-    text = dialog.preview.text()
-    assert "Residuals: 1 file → new graph “Unified Fit residuals”" in text
-    assert "Skipped 1 file: waxs.h5" in text
-    dialog.close()
+    # No data + fit: the first new graph is shown.
+    assert window._current_graph().title == "Unified Fit residuals"
+    assert window.undo_stack.count() == count + 1
+    window.undo_stack.undo()
+    assert len(window.controller.workspace.graphs) == 1
+    window.controller.workspace.dirty = False
+    window.close()
 
 
 def test_duplicate_graph_and_remove_unused_data_are_undoable(qapp, monkeypatch):
@@ -1279,32 +1252,57 @@ def test_duplicate_graph_and_remove_unused_data_are_undoable(qapp, monkeypatch):
     window.close()
 
 
-def test_folder_browser_can_hand_selected_files_to_the_result_import(qapp, monkeypatch, tmp_path):
+def test_data_selector_lists_iq_data_and_results_side_by_side(qapp, tmp_path):
     from shutil import copy2
 
     source = Path(__file__).parents[1] / "testData"
-    files = [
-        copy2(source / "Al_Mg_Si__40C_0min_0498.h5", tmp_path / "sample.h5"),
-        copy2(source / "Rh1_0085.h5", tmp_path / "plain.h5"),
-    ]
+    for name, target in (
+        ("Al_Mg_Si__40C_0min_0498.h5", "a_sample.h5"),
+        ("Al_Mg_Si__40C_0min_0498.h5", "b_sample.h5"),
+        ("Rh1_0085.h5", "c_plain.h5"),
+    ):
+        copy2(source / name, tmp_path / target)
     controller = ApplicationController()
     dialog = DataFileSelectorDialog(
-        tmp_path, controller.sources.discover_path, discover_results=main_window._result_titles
+        tmp_path,
+        controller.sources.discover_path,
+        discover_results=main_window._results_in_file,
+        iq_results_allowed=False,
     )
-    assert not dialog.add_results_button.isHidden()
-    item = dialog.file_list.findItems("sample.h5", Qt.MatchFlag.MatchExactly)[0]
-    dialog.file_list.setCurrentItem(item)
-    item.setSelected(True)
-    assert "Saved pyIrena results: Unified Fit, Size Distribution, Modeling." in dialog.data_status.text()
-    dialog.add_results_button.click()
-    assert dialog.mode == "results" and dialog.result() == dialog.DialogCode.Accepted
-    assert dialog.selected_paths() == [files[0]]
+    first = dialog.file_list.findItems("a_sample.h5", Qt.MatchFlag.MatchExactly)[0]
+    dialog.file_list.setCurrentItem(first)
+    labels = [dialog.results_list.item(i).text() for i in range(dialog.results_list.count())]
+    assert "Unified Fit · Residuals" in labels
+    assert "Size Distribution · Volume distribution" in labels
+    data_fit = dialog.results_list.findItems("Unified Fit · Data + fit I(Q)", Qt.MatchFlag.MatchExactly)[0]
+    assert not data_fit.flags() & Qt.ItemFlag.ItemIsEnabled  # graph is not in the I(Q) view
+    residuals = dialog.results_list.findItems("Unified Fit · Residuals", Qt.MatchFlag.MatchExactly)[0]
+    residuals.setCheckState(Qt.CheckState.Checked)
+    # The checked kind applies to every selected file; files without it add nothing.
+    dialog._select_all_visible()
+    assert dialog.selected_results() == {"unified_fit": ("residuals",)}
+    # Results alone are enough to accept, although these files hold two I(Q)
+    # curves each and none is checked.
+    dialog._accept_selection()
+    assert dialog.result() == dialog.DialogCode.Accepted
+    assert dialog.preferences()["result_kinds"] == ["unified_fit/residuals"]
+    plain = dialog.file_list.findItems("c_plain.h5", Qt.MatchFlag.MatchExactly)[0]
+    dialog.file_list.setCurrentItem(plain)
+    assert dialog.results_list.count() == 0
+    assert dialog.results_status.text() == "No saved pyIrena results in this file."
+    dialog.close()
 
-    class ResultsChoice:
-        DialogCode = dialog.DialogCode
+
+def test_data_selector_hands_iq_and_results_to_their_loaders(qapp, monkeypatch, tmp_path):
+    selected = [tmp_path / "sample.h5"]
+
+    class Choice:
+        DialogCode = DataFileSelectorDialog.DialogCode
+        q_unit = type("Unit", (), {"currentText": staticmethod(lambda: "1/A")})()
+        error_fraction = type("Fraction", (), {"value": staticmethod(lambda: 5.0)})()
 
         def __init__(self, *args, **kwargs):
-            self.mode = "results"
+            pass
 
         def exec(self):
             return self.DialogCode.Accepted
@@ -1313,15 +1311,23 @@ def test_folder_browser_can_hand_selected_files_to_the_result_import(qapp, monke
             return {}
 
         def selected_paths(self):
-            return [files[0]]
+            return selected
+
+        def selected_locations(self):
+            return ["location"]
+
+        def selected_results(self):
+            return {"unified_fit": ("residuals",)}
 
     window = MainWindow()
     window.user_state = UserState(tmp_path / "preferences.json")
-    imported = []
-    monkeypatch.setattr(main_window, "DataFileSelectorDialog", ResultsChoice)
-    monkeypatch.setattr(window, "_import_results_from_paths", lambda paths: imported.append(paths))
+    queued, imported = [], []
+    monkeypatch.setattr(main_window, "DataFileSelectorDialog", Choice)
+    monkeypatch.setattr(window, "_queue_locations", lambda locations, *args: queued.append(locations))
+    monkeypatch.setattr(window, "_import_result_selection", lambda paths, results: imported.append((paths, results)))
     window._open_file_selector(tmp_path)
-    assert imported == [[files[0]]]
+    assert queued == [["location"]]
+    assert imported == [(selected, {"unified_fit": ("residuals",)})]
     window.controller.workspace.dirty = False
     window.close()
 
@@ -1329,9 +1335,7 @@ def test_folder_browser_can_hand_selected_files_to_the_result_import(qapp, monke
 def test_add_from_workspace_offers_loaded_results_that_fit_the_view(qapp, monkeypatch):
     fixture = Path(__file__).parents[1] / "testData" / "Al_Mg_Si__40C_0min_0498.h5"
     window = MainWindow()
-    monkeypatch.setattr(main_window.QFileDialog, "getOpenFileNames", lambda *args: ([str(fixture)], ""))
-    _accept_results(monkeypatch, "unified_fit", ("iq", "residuals"))
-    window._add_pyirena_results()
+    window._import_result_selection([fixture], {"unified_fit": ("iq", "residuals")})
     # A new, empty I(Q) graph can take every loaded result curve.
     window._new_graph("plot2d")
     offered = []
