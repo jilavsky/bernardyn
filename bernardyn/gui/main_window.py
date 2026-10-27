@@ -51,6 +51,7 @@ from PySide6.QtWidgets import (
 )
 
 from bernardyn import __version__
+from bernardyn.core.colorscales import COLOR_SCALES, sample_scale
 from bernardyn.core.controller import (
     PALETTE,
     ApplicationController,
@@ -498,9 +499,10 @@ class MainWindow(QMainWindow):
         self.bw_preset_action = self._action(
             "Black and white preset", lambda: self._apply_series_preset("bw")
         )
-        self.rainbow_preset_action = self._action(
-            "Rainbow preset", lambda: self._apply_series_preset("rainbow")
-        )
+        self.scale_preset_actions = {
+            key: self._action(label, lambda _=False, k=key: self._apply_series_preset(k))
+            for key, label in COLOR_SCALES.items()
+        }
         self.save_template_action = self._action("Save graph template…", self._save_template)
         self.apply_template_action = self._action("Apply graph template…", self._apply_template)
         self.rename_template_action = self._action("Rename graph template…", self._rename_template)
@@ -554,9 +556,9 @@ class MainWindow(QMainWindow):
             ]
         )
         preset_menu = graph_menu.addMenu("Series presets")
-        preset_menu.addActions(
-            [self.color_preset_action, self.bw_preset_action, self.rainbow_preset_action]
-        )
+        preset_menu.addActions([self.color_preset_action, self.bw_preset_action])
+        preset_menu.addSeparator()
+        preset_menu.addActions(list(self.scale_preset_actions.values()))
         template_menu = self.menuBar().addMenu("&Templates")
         template_menu.addActions(
             [
@@ -1928,16 +1930,11 @@ class MainWindow(QMainWindow):
         graph = self._current_graph()
         if graph is None:
             return
-        rainbow = (
-            (230, 25, 75, 255),
-            (245, 130, 48, 255),
-            (255, 225, 25, 255),
-            (60, 180, 75, 255),
-            (0, 130, 200, 255),
-            (145, 30, 180, 255),
-        )
         bw_lines = ("solid", "dash", "dot", "dash-dot")
         changed = []
+        # Continuous scales span first to last series, so sample them for the
+        # current series count (re-apply the preset after adding data).
+        scale = sample_scale(preset, len(graph.series)) if preset in COLOR_SCALES else None
         for index, series in enumerate(graph.series):
             if preset == "bw":
                 style = replace(
@@ -1946,8 +1943,8 @@ class MainWindow(QMainWindow):
                     line_style=bw_lines[index % len(bw_lines)],
                 )
             else:
-                colors = rainbow if preset == "rainbow" else PALETTE
-                style = replace(series.style, color=colors[index % len(colors)])
+                color = scale[index] if scale else PALETTE[index % len(PALETTE)]
+                style = replace(series.style, color=color)
             changed.append(replace(series, style=style))
         after = graph.replace_series(changed)
         self.undo_stack.push(GraphEditCommand(self, graph, after, False, "Apply series preset"))

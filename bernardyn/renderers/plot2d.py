@@ -490,6 +490,11 @@ class Plot2DWidget(pg.PlotWidget):
                 error.setOpts(
                     pen=pg.mkPen(_color(style.error_color), width=style.error_width)
                 )
+        # Legend swatches read the curve's pen/symbol when painted, but nothing
+        # tells them the curve was restyled in place.
+        if self._legend is not None:
+            for sample, _ in self._legend.items:
+                sample.update()
 
     def _can_update_style_only(
         self, graph: GraphDocument, snapshots: Mapping[str, PlotSeries]

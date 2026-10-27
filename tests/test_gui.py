@@ -656,6 +656,25 @@ def test_legend_uses_graph_typography_axis_colour_and_own_symbol_size(qapp):
     widget.close()
 
 
+def test_restyling_a_curve_in_place_repaints_the_legend_swatch(qapp):
+    controller = ApplicationController()
+    controller.add_dataset(Dataset(q=[1, 2, 3], intensity=[3, 2, 1], label="sample"))
+    original = controller.workspace.graphs[0]
+    graph = replace(original, legend=LegendSpec(visible=True))
+    snapshots = controller.snapshots[original.id]
+    widget = Plot2DWidget()
+    widget.render(graph, snapshots)
+    sample, _ = widget._legend.items[0]
+    repaints = []
+    sample.update = lambda *args: repaints.append(1)
+    series = graph.series[0]
+    recolored = graph.replace_series([replace(series, style=replace(series.style, color=(1, 2, 3, 255)))])
+    widget.apply_graph(recolored, snapshots)
+    assert widget._legend.items[0][0] is sample  # restyled in place, not rebuilt
+    assert repaints
+    widget.close()
+
+
 def test_presentation_change_does_not_reset_the_interactive_view_range(qapp):
     controller = ApplicationController()
     controller.add_dataset(Dataset(q=[1, 2, 3, 4], intensity=[1, 4, 9, 16]))
@@ -841,6 +860,13 @@ def test_dataset_visibility_toggle_preserves_inspector_list_scroll_position(qapp
 
     assert series_list.verticalScrollBar().value() == scroll_position
     assert series_list.item(32).checkState() == Qt.CheckState.Unchecked
+    # The view must also stay put once pending layout/paint events are handled,
+    # and when a second dataset is toggled right afterwards.
+    qapp.processEvents()
+    assert series_list.verticalScrollBar().value() == scroll_position
+    series_list.item(33).setCheckState(Qt.CheckState.Unchecked)
+    qapp.processEvents()
+    assert series_list.verticalScrollBar().value() == scroll_position
     window.controller.workspace.dirty = False
     window.close()
 

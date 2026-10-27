@@ -4,6 +4,22 @@ This file records user-visible changes in Bernardyn. Update it, together with
 the relevant user documentation, whenever a feature is added or an existing
 behavior changes.
 
+## Unreleased
+
+### Changed
+
+- **Graph ▸ Series presets** now offers four continuous color scales (Rainbow,
+  Turbo, Spectral, Viridis) in place of the six-color recycling Rainbow preset.
+  Each scale spans its full range from the first to the last series, so a
+  100-curve time sequence changes color smoothly instead of repeating. The
+  scale is computed when you choose it; choose it again after adding data.
+
+### Fixed
+
+- The legend swatches now change color immediately when a curve is restyled
+  (series presets, color edits), instead of waiting for the legend to be
+  toggled off and on.
+
 ## 1.0.0 — 2026-10-15
 
 First stable release. The graph-package format (schema v3) is now stable.
