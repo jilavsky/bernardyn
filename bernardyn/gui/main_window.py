@@ -335,7 +335,12 @@ class MainWindow(QMainWindow):
         self.resize(1500, 900)
         self.controller = ApplicationController()
         self.renderers = builtin_renderers()
-        self.thread_pool = QThreadPool.globalInstance()
+        # Source files load one at a time.  h5py already serializes HDF5 calls,
+        # so parallel loads gain nothing, and opening a whole series at once
+        # over an SSHFS-Win network drive makes every file after the first
+        # fail with a spurious "HDF5 group not found".
+        self.thread_pool = QThreadPool(self)
+        self.thread_pool.setMaxThreadCount(1)
         self._workers: set[SourceLoadWorker] = set()
         self._load_batches: dict[int, dict] = {}
         self._next_load_batch_id = 0

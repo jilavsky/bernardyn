@@ -32,6 +32,9 @@ behavior changes.
 
 ### Fixed
 
+- Loading a series of HDF5 files from a network drive (SSHFS-Win) no longer
+  fails for every file after the first with "HDF5 group not found". The GUI
+  now loads selected files one at a time instead of all at once.
 - The legend swatches now change color immediately when a curve is restyled
   (series presets, color edits), instead of waiting for the legend to be
   toggled off and on.
