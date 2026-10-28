@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 from bernardyn.api import (
+    SERIES_PRESETS,
     PlotRequest,
     Presentation,
     ResultInput,
@@ -36,6 +37,11 @@ def build_parser() -> argparse.ArgumentParser:
     create.add_argument("--dpi", type=int)
     create.add_argument("--parameter", action="append", default=[], metavar="NAME=VALUE")
     create.add_argument("--template", type=Path)
+    create.add_argument("--label", action="append", default=[], help="Legend text per scattering --input")
+    create.add_argument("--series-preset", choices=SERIES_PRESETS, help="Series colouring, as Graph > Series presets")
+    create.add_argument("--no-legend", action="store_true", help="Hide the legend")
+    create.add_argument("--x-range", type=float, nargs=2, metavar=("MIN", "MAX"))
+    create.add_argument("--y-range", type=float, nargs=2, metavar=("MIN", "MAX"))
     create.add_argument("--overwrite", action="store_true")
     return parser
 
@@ -72,24 +78,32 @@ def _request_from_args(args: argparse.Namespace) -> PlotRequest:
     parameters = _parameters(args.parameter)
     recipe = next(item for item in list_recipes() if item.id == args.recipe)
     if recipe.result_analysis is not None:
-        if len(args.input) != 1:
-            raise ValueError("saved-result recipes require exactly one --input file")
-        result = ResultInput(args.input[0], recipe.result_analysis)
+        if not args.input:
+            raise ValueError("saved-result recipes require at least one --input file")
+        if args.label:
+            raise ValueError("--label applies to scattering recipes only")
+        results = tuple(ResultInput(path, recipe.result_analysis) for path in args.input)
         inputs = ()
         parameter_rows = ()
     else:
         if len(args.internal_path) > len(args.input):
             raise ValueError("provide no more --internal-path values than --input files")
+        if len(args.label) > len(args.input):
+            raise ValueError("provide no more --label values than --input files")
         inputs = tuple(
-            ScatteringInput(path, internal_path=args.internal_path[index] if index < len(args.internal_path) else None)
+            ScatteringInput(
+                path,
+                internal_path=args.internal_path[index] if index < len(args.internal_path) else None,
+                label=args.label[index] if index < len(args.label) else None,
+            )
             for index, path in enumerate(args.input)
         )
-        result = None
+        results = ()
         parameter_rows = tuple(parameters for _ in inputs) if parameters else ()
     return PlotRequest(
         recipe_id=args.recipe,
         inputs=inputs,
-        result=result,
+        results=results,
         series_parameters=parameter_rows,
         presentation=Presentation(
             title=args.title,
@@ -97,6 +111,10 @@ def _request_from_args(args: argparse.Namespace) -> PlotRequest:
             height_px=args.height_px,
             dpi=args.dpi,
             template_path=args.template,
+            series_preset=args.series_preset,
+            show_legend=False if args.no_legend else None,
+            x_range=tuple(args.x_range) if args.x_range else None,
+            y_range=tuple(args.y_range) if args.y_range else None,
         ),
         package_path=args.package,
         image_path=args.image,

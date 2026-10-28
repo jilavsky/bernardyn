@@ -6,6 +6,22 @@ behavior changes.
 
 ## Unreleased
 
+### Added
+
+- The Python API, `bernardyn-plot`, and the MCP server can now color curves
+  with any **Series presets** choice (`color`, `bw`, `rainbow`, `turbo`,
+  `spectral`, `viridis`), hide the legend, fix the X/Y axis range, and set
+  each scattering curve's legend text. In Python these are `Presentation`
+  fields (`series_preset`, `show_legend`, `x_range`, `y_range`) and
+  `ScatteringInput.label`.
+- Result recipes for residuals and distributions accept several files and put
+  one curve per file on one comparison graph, as the GUI import does
+  (`PlotRequest.results`, repeated `--input`, or MCP `result_paths`).
+- `inspect_data` (and MCP `bernardyn_inspect_data`) lists, for each saved
+  result, its stored curve kinds and the recipes that can plot it.
+- MCP `bernardyn_describe_package` reports each curve's color, line style,
+  and symbol, the legend visibility, and fixed axis ranges.
+
 ### Changed
 
 - **Graph ▸ Series presets** now offers four continuous color scales (Rainbow,

@@ -59,6 +59,23 @@ it accepts scattering `input_paths` for scattering recipes, or `result_path`
 for saved-result recipes. It returns package and preview paths plus loaded,
 plotted, and masked point counts.
 
+Several `input_paths` go on one graph, in the order given; `labels` sets
+their legend text. Result recipes for residuals and distributions also accept
+`result_paths` to compare one curve kind across files, one color per file.
+`bernardyn_inspect_data` lists, for each saved result, the recipes that can
+plot it.
+
+Appearance options on `bernardyn_create_plot`:
+
+| Option | Use |
+|---|---|
+| `series_preset` | Same choices as **Graph ▸ Series presets**: `color` (eight cycling colors), `bw` (black, varied line styles), or a continuous scale `rainbow`, `turbo`, `spectral`, `viridis` that runs from the first curve to the last. Use a scale for an ordered series (time, temperature, concentration), with the files passed in that order. |
+| `show_legend` | `false` hides the legend, e.g. for many curves. |
+| `x_range`, `y_range` | `[min, max]` in plotted units (Q in Å⁻¹ for I(Q)); fixes the axis instead of autoscaling. A log axis needs a positive range. |
+
+`bernardyn_describe_package` reports each curve's color, line style and
+symbol, so an agent can check the result without opening the image.
+
 `output_name` is a filename stem, not a path. Existing generated artifacts are
 rejected unless `overwrite: true` is explicit. This avoids accidental output
 replacement during retries. Large canonical arrays remain in the package;

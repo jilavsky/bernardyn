@@ -3,6 +3,7 @@
 __version__ = "1.0.0"
 
 from bernardyn.api import (
+    SERIES_PRESETS,
     PlotRequest,
     PlotResult,
     PlotService,
@@ -39,6 +40,7 @@ __all__ = [
     "PlotResult",
     "PlotService",
     "Presentation",
+    "SERIES_PRESETS",
     "ResultInput",
     "ScatteringInput",
     "create_plot",

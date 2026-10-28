@@ -212,3 +212,78 @@ def test_dimensionless_kratky_falls_back_to_each_datasets_own_metadata(tmp_path,
     assert [series.transform_parameters for series in result.graph.series] == [
         {"I0": 2.0, "Rg": 10.0}, {"I0": 5.0, "Rg": 20.0},
     ]
+
+
+def test_series_preset_spans_a_continuous_scale_and_sets_legend_and_ranges(tmp_path):
+    from bernardyn.core.colorscales import sample_scale
+
+    result = create_plot(PlotRequest(
+        "raw_iq",
+        inputs=tuple(ScatteringInput(DATA, label=f"t = {minute} min") for minute in (0, 10, 20)),
+        presentation=Presentation(
+            series_preset="rainbow", show_legend=False, x_range=(0.002, 0.3), y_range=(1e-2, 1e5)
+        ),
+        package_path=tmp_path / "series",
+    ))
+    graph = load_package(result.package_path).workspace.graphs[0]
+    assert [view.style.color for view in graph.series] == sample_scale("rainbow", 3)
+    assert [view.legend_label for view in graph.series] == ["t = 0 min", "t = 10 min", "t = 20 min"]
+    assert not graph.legend.visible
+    assert (graph.x_axis.minimum, graph.x_axis.maximum, graph.x_axis.auto_range) == (0.002, 0.3, False)
+
+
+def test_presentation_rejects_unknown_preset_and_bad_ranges(tmp_path):
+    with pytest.raises(ValueError, match="series_preset"):
+        Presentation(series_preset="jet")
+    with pytest.raises(ValueError, match="min < max"):
+        Presentation(x_range=(1.0, 0.1))
+    with pytest.raises(ValueError, match="logarithmic"):
+        create_plot(PlotRequest(
+            "raw_iq",
+            inputs=(ScatteringInput(DATA),),
+            presentation=Presentation(x_range=(0.0, 0.3)),
+            package_path=tmp_path / "bad",
+        ))
+
+
+def test_result_recipe_compares_one_curve_kind_across_files(tmp_path):
+    from shutil import copy2
+
+    from bernardyn.core.controller import PALETTE
+
+    second = tmp_path / "second.h5"
+    copy2(RESULT, second)
+    result = create_plot(PlotRequest(
+        "unified_fit_residuals",
+        results=(ResultInput(RESULT, "unified_fit"), ResultInput(second, "unified_fit")),
+        package_path=tmp_path / "compare",
+    ))
+    assert [view.style.color for view in result.graph.series] == [PALETTE[0], PALETTE[1]]
+    with pytest.raises(ValueError, match="one result file"):
+        create_plot(PlotRequest(
+            "unified_fit_data_fit",
+            results=(ResultInput(RESULT, "unified_fit"), ResultInput(second, "unified_fit")),
+            package_path=tmp_path / "fits",
+        ))
+
+
+def test_inspection_lists_the_recipes_each_saved_result_supports():
+    (unified,) = [item for item in inspect_data(RESULT)["results"] if item["analysis"] == "unified_fit"]
+    assert "residuals" in unified["curve_kinds"]
+    assert {"unified_fit_data_fit", "unified_fit_residuals"} <= set(unified["recipes"])
+
+
+def test_cli_accepts_series_preset_labels_and_several_result_files(tmp_path, capsys):
+    assert cli_main([
+        "create", "--recipe", "raw_iq", "--input", str(DATA), "--input", str(DATA),
+        "--label", "first", "--label", "second", "--series-preset", "bw", "--no-legend",
+        "--package", str(tmp_path / "bw"),
+    ]) == 0
+    graph = load_package(tmp_path / "bw.bernardyn.h5").workspace.graphs[0]
+    assert [view.style.line_style for view in graph.series] == ["solid", "dash"]
+    assert not graph.legend.visible
+    assert cli_main([
+        "create", "--recipe", "unified_fit_residuals", "--input", str(RESULT), "--input", str(RESULT),
+        "--package", str(tmp_path / "two"),
+    ]) == 0
+    assert len(load_package(tmp_path / "two.bernardyn.h5").workspace.graphs[0].series) == 2

@@ -44,6 +44,26 @@ result = create_plot(
 )
 ```
 
+To compare residuals or a distribution across several files on one graph,
+pass `results=(ResultInput(a, "unified_fit"), ResultInput(b, "unified_fit"))`
+instead of `result`. Each file gets its own color. Data + fit recipes take one
+file.
+
+`Presentation` also takes the **Graph ▸ Series presets** choices and a few
+layout options:
+
+```python
+Presentation(
+    series_preset="rainbow",  # color, bw, rainbow, turbo, spectral, viridis
+    show_legend=False,
+    x_range=(0.003, 0.3),     # plotted units; fixes the axis
+)
+```
+
+A continuous scale (`rainbow`, `turbo`, `spectral`, `viridis`) runs from the
+first input to the last, so pass an ordered series in that order.
+`ScatteringInput(..., label="40 °C")` sets one curve's legend text.
+
 Use `list_recipes()` to enumerate stable recipe IDs and `inspect_data(path)` to
 discover scattering selections and available saved-result analyses before making
 a request.
@@ -65,6 +85,11 @@ For a public pyIrena result curve:
 bernardyn-plot create --recipe unified_fit_residuals --input saved-result.h5 \
   --package residuals
 ```
+
+Repeat `--input` (and `--label`) for several curves, or for several result
+files on a residual/distribution recipe. `--series-preset rainbow`,
+`--no-legend`, `--x-range MIN MAX`, and `--y-range MIN MAX` match the Python
+`Presentation` options.
 
 Existing output paths are rejected unless `--overwrite` (or `overwrite=True` in
 Python) is supplied. The CLI emits a compact JSON result containing artifact

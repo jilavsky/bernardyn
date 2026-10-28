@@ -21,7 +21,9 @@ mcp = FastMCP(
     instructions=(
         "Create portable Bernardyn scientific-plot packages through a small local tool surface. "
         "Start with bernardyn_inspect_data, then bernardyn_list_plot_recipes, and use "
-        "bernardyn_create_plot for all graph creation. The five tools are grouped as discovery "
+        "bernardyn_create_plot for all graph creation. Several files go on one graph in the "
+        "order given; for an ordered series (time, temperature) use series_preset 'rainbow', "
+        "'turbo', 'spectral' or 'viridis'. The five tools are grouped as discovery "
         "(inspect/list), create, and package (describe/export). Inputs are read-only; outputs are "
         "confined to BERNARDYN_OUTPUT_ROOT or the temporary Bernardyn MCP cache."
     ),
@@ -54,8 +56,23 @@ def bernardyn_create_plot(
     height_px: int = 1000,
     dpi: int = 250,
     overwrite: bool = False,
+    result_paths: list[str] | None = None,
+    labels: list[str] | None = None,
+    series_preset: str | None = None,
+    show_legend: bool | None = None,
+    x_range: list[float] | None = None,
+    y_range: list[float] | None = None,
 ) -> dict[str, Any]:
-    """Create: write one portable package and matching 2-D preview image."""
+    """Create: write one portable package and matching 2-D preview image.
+
+    Scattering recipes take input_paths (one graph, curves in the order given;
+    labels sets their legend text). Result recipes take result_path, or
+    result_paths to compare residuals/distributions across files.
+    series_preset: 'color' (8 cycling colours), 'bw', or a continuous scale
+    'rainbow', 'turbo', 'spectral', 'viridis' spanning first to last curve.
+    show_legend: false hides the legend (useful for many curves).
+    x_range/y_range: [min, max] in plotted units (Q in 1/angstrom); fixes the axis.
+    """
     return tools.create_plot_artifact(
         recipe_id,
         input_paths=input_paths,
@@ -69,12 +86,18 @@ def bernardyn_create_plot(
         height_px=height_px,
         dpi=dpi,
         overwrite=overwrite,
+        result_paths=result_paths,
+        labels=labels,
+        series_preset=series_preset,
+        show_legend=show_legend,
+        x_range=x_range,
+        y_range=y_range,
     )
 
 
 @mcp.tool()
 def bernardyn_describe_package(path: str) -> dict[str, Any]:
-    """Package: inspect graphs, curve semantics, recipes, and warnings without arrays."""
+    """Package: inspect graphs, curve semantics and styles, recipes, and warnings without arrays."""
     return tools.describe_package(path)
 
 

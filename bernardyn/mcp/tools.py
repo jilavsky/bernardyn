@@ -20,7 +20,9 @@ from bernardyn.api import (
 from bernardyn.api import (
     list_recipes as _list_recipes,
 )
+from bernardyn.core.colorscales import SERIES_PRESETS
 from bernardyn.core.controller import ApplicationController
+from bernardyn.core.models import AxisSpec
 from bernardyn.io.container import load_package
 from bernardyn.mcp.paths import output_path, resolve_input
 
@@ -42,9 +44,18 @@ def list_plot_recipes() -> dict[str, Any]:
     return {
         "tool_groups": TOOL_GROUPS,
         "recipes": recipes,
+        "series_presets": SERIES_PRESETS,
         "guidance": (
-            "Call bernardyn_inspect_data first. Use bernardyn_create_plot for all graph "
-            "creation; result recipes need result_path, scattering recipes need input_paths."
+            "Call bernardyn_inspect_data first; each saved result lists the recipes it supports. "
+            "Use bernardyn_create_plot for all graph creation. Scattering recipes take "
+            "input_paths (several files go on one graph, in the order given; labels sets their "
+            "legend text). Result recipes take result_path, or result_paths to compare one "
+            "curve kind (residuals, distributions) across files; data_fit recipes take one file. "
+            "For an ordered series (time, temperature, concentration) pass the files in that "
+            "order with series_preset 'rainbow', 'turbo', 'spectral' or 'viridis' so colour "
+            "runs smoothly from first to last; 'color' cycles 8 distinct colours, 'bw' is black "
+            "with varied line styles. Hide the legend for many curves. x_range/y_range are "
+            "(min, max) in plotted units, e.g. Q in 1/angstrom."
         ),
     }
 
@@ -62,6 +73,12 @@ def create_plot_artifact(
     height_px: int = 1000,
     dpi: int = 250,
     overwrite: bool = False,
+    result_paths: list[str] | None = None,
+    labels: list[str] | None = None,
+    series_preset: str | None = None,
+    show_legend: bool | None = None,
+    x_range: list[float] | None = None,
+    y_range: list[float] | None = None,
 ) -> dict[str, Any]:
     """Create group: make one validated package plus PNG/JPEG/SVG preview.
 
@@ -77,9 +94,14 @@ def create_plot_artifact(
     package_path = output_path(output_name, ".bernardyn.h5")
     image_path = output_path(output_name, f".{extension}")
     if recipe.result_analysis is not None:
-        if result_path is None:
-            raise ValueError(f"{recipe_id} requires result_path")
-        result = ResultInput(resolve_input(result_path), recipe.result_analysis)
+        if labels:
+            raise ValueError("labels apply to scattering input_paths only")
+        if (result_path is None) == (not result_paths):
+            raise ValueError(f"{recipe_id} requires result_path or result_paths (not both)")
+        results = tuple(
+            ResultInput(resolve_input(path), recipe.result_analysis)
+            for path in (result_paths or [result_path])
+        )
         inputs = ()
     else:
         if not input_paths:
@@ -87,17 +109,33 @@ def create_plot_artifact(
         internal = internal_paths or []
         if len(internal) > len(input_paths):
             raise ValueError("internal_paths cannot contain more items than input_paths")
+        names = labels or []
+        if len(names) > len(input_paths):
+            raise ValueError("labels cannot contain more items than input_paths")
         inputs = tuple(
-            ScatteringInput(resolve_input(path), internal_path=internal[index] if index < len(internal) else None)
+            ScatteringInput(
+                resolve_input(path),
+                internal_path=internal[index] if index < len(internal) else None,
+                label=names[index] if index < len(names) else None,
+            )
             for index, path in enumerate(input_paths)
         )
-        result = None
+        results = ()
     request = PlotRequest(
         recipe_id=recipe_id,
         inputs=inputs,
-        result=result,
+        results=results,
         series_parameters=tuple(series_parameters or ()),
-        presentation=Presentation(title=title, width_px=width_px, height_px=height_px, dpi=dpi),
+        presentation=Presentation(
+            title=title,
+            width_px=width_px,
+            height_px=height_px,
+            dpi=dpi,
+            series_preset=series_preset,
+            show_legend=show_legend,
+            x_range=_axis_range("x_range", x_range),
+            y_range=_axis_range("y_range", y_range),
+        ),
         package_path=package_path,
         image_path=image_path,
         overwrite=overwrite,
@@ -141,9 +179,12 @@ def describe_package(path: str) -> dict[str, Any]:
                 {
                     "series_id": view.id,
                     "dataset_id": dataset.id,
-                    "label": dataset.label,
+                    "label": view.legend_label or dataset.label,
                     "transform_id": view.transform_id,
                     "visible": view.visible,
+                    "color": "#{:02x}{:02x}{:02x}".format(*view.style.color[:3]),
+                    "line_style": view.style.line_style,
+                    "symbol": view.style.symbol,
                     "points": dataset.point_count,
                     **semantic,
                 }
@@ -154,8 +195,9 @@ def describe_package(path: str) -> dict[str, Any]:
                 "title": graph.title,
                 "renderer_id": graph.renderer_id,
                 "recipe": graph.renderer_config.get("recipe"),
-                "x_axis": {"label": graph.x_axis.label, "log": graph.x_axis.log},
-                "y_axis": {"label": graph.y_axis.label, "log": graph.y_axis.log},
+                "x_axis": _describe_axis(graph.x_axis),
+                "y_axis": _describe_axis(graph.y_axis),
+                "legend_visible": graph.legend.visible,
                 "series": series,
             }
         )
@@ -210,3 +252,18 @@ def export_plot(
         "dpi": graph.dpi,
         "warnings": loaded.warnings,
     }
+
+
+def _axis_range(name: str, value: list[float] | None) -> tuple[float, float] | None:
+    if value is None:
+        return None
+    if len(value) != 2:
+        raise ValueError(f"{name} must be [min, max]")
+    return float(value[0]), float(value[1])
+
+
+def _describe_axis(axis: AxisSpec) -> dict[str, Any]:
+    described: dict[str, Any] = {"label": axis.label, "log": axis.log}
+    if not axis.auto_range:
+        described["range"] = [axis.minimum, axis.maximum]
+    return described

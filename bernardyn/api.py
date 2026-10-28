@@ -12,6 +12,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+from bernardyn.core.colorscales import SERIES_PRESETS, apply_series_preset
 from bernardyn.core.controller import PALETTE, ApplicationController
 from bernardyn.core.models import AxisSpec, Dataset, GenericCurve, GraphDocument, PlotSeries
 from bernardyn.core.units import axis_label
@@ -19,6 +20,7 @@ from bernardyn.io.container import ensure_package_suffix
 from bernardyn.io.results import (
     ResultBundle,
     ResultDescriptor,
+    available_curve_kinds,
     discover_results,
     load_result_bundle,
     load_result_curves,
@@ -55,13 +57,24 @@ class ResultInput:
 
 @dataclass(frozen=True)
 class Presentation:
-    """Limited, recipe-safe appearance overrides."""
+    """Limited, recipe-safe appearance overrides.
+
+    ``series_preset`` is a Graph ▸ Series presets choice (see
+    ``SERIES_PRESETS``): ``color``, ``bw``, or a continuous scale such as
+    ``rainbow`` that runs from the first to the last series.  ``x_range`` and
+    ``y_range`` are (min, max) in the plotted axis units, e.g. Q in Å⁻¹ for
+    I(Q); they fix the axis instead of autoscaling.  None keeps the default.
+    """
 
     title: str | None = None
     width_px: int | None = None
     height_px: int | None = None
     dpi: int | None = None
     template_path: Path | None = None
+    series_preset: str | None = None
+    show_legend: bool | None = None
+    x_range: tuple[float, float] | None = None
+    y_range: tuple[float, float] | None = None
 
     def __post_init__(self) -> None:
         for name, value in (
@@ -73,20 +86,33 @@ class Presentation:
                 raise ValueError(f"{name} must be positive")
         if self.template_path is not None:
             object.__setattr__(self, "template_path", Path(self.template_path).expanduser().resolve())
+        if self.series_preset is not None and self.series_preset not in SERIES_PRESETS:
+            raise ValueError(f"series_preset must be one of {', '.join(SERIES_PRESETS)}")
+        for name in ("x_range", "y_range"):
+            value = getattr(self, name)
+            if value is None:
+                continue
+            low, high = (float(item) for item in value)
+            if not low < high:
+                raise ValueError(f"{name} must be (min, max) with min < max")
+            object.__setattr__(self, name, (low, high))
 
 
 @dataclass(frozen=True)
 class PlotRequest:
     """A complete reproducible request to create one recipe graph.
 
-    Source recipes use ``inputs``.  Saved-result recipes use ``result``.  A
-    parameter row corresponds to the same-position scattering input, making
+    Source recipes use ``inputs``.  Saved-result recipes use ``result``, or
+    ``results`` to compare one curve kind (residuals, distributions) across
+    several files on one graph, one colour per file, as the GUI import does.
+    A parameter row corresponds to the same-position scattering input, making
     parameters such as I0/Rg explicitly per series rather than inherited.
     """
 
     recipe_id: str
     inputs: tuple[ScatteringInput, ...] = ()
     result: ResultInput | None = None
+    results: tuple[ResultInput, ...] = ()
     series_parameters: tuple[Mapping[str, float], ...] = ()
     presentation: Presentation = Presentation()
     package_path: Path | None = None
@@ -95,6 +121,7 @@ class PlotRequest:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "inputs", tuple(self.inputs))
+        object.__setattr__(self, "results", tuple(self.results))
         object.__setattr__(self, "series_parameters", tuple(dict(row) for row in self.series_parameters))
         if self.package_path is not None:
             object.__setattr__(self, "package_path", Path(self.package_path).expanduser().resolve())
@@ -295,8 +322,27 @@ def inspect_data(path: str | Path) -> dict[str, object]:
             }
             for item in locations
         ),
-        "results": tuple({"analysis": item.analysis, "title": item.title} for item in results),
+        "results": tuple(_describe_result(item, warnings) for item in results),
         "warnings": tuple(warnings),
+    }
+
+
+def _describe_result(descriptor: ResultDescriptor, warnings: list[str]) -> dict[str, object]:
+    """Name a saved result's stored curve kinds and the recipes that can plot it."""
+    try:
+        kinds = ("data_fit", *available_curve_kinds(descriptor))
+    except Exception as exc:
+        warnings.append(f"{descriptor.analysis} curve discovery: {exc}")
+        kinds = ("data_fit",)
+    return {
+        "analysis": descriptor.analysis,
+        "title": descriptor.title,
+        "curve_kinds": kinds,
+        "recipes": tuple(
+            recipe.id
+            for recipe in RECIPES
+            if recipe.result_analysis == descriptor.analysis and recipe.result_kind in kinds
+        ),
     }
 
 
@@ -335,14 +381,18 @@ class PlotService:
 
     def _validate_request(self, request: PlotRequest, recipe: RecipeDescriptor) -> None:
         if recipe.transform_id is not None:
-            if not request.inputs or request.result is not None:
+            if not request.inputs or request.result is not None or request.results:
                 raise ValueError(f"{recipe.id} requires one or more scattering inputs")
             if request.series_parameters and len(request.series_parameters) != len(request.inputs):
                 raise ValueError("series_parameters must contain one row per scattering input")
-        elif request.result is None or request.inputs:
-            raise ValueError(f"{recipe.id} requires one saved result input")
-        elif request.result.analysis != recipe.result_analysis:
-            raise ValueError(f"{recipe.id} requires {recipe.result_analysis!r} results")
+        else:
+            selections = _result_selections(request)
+            if not selections or request.inputs or (request.result is not None and request.results):
+                raise ValueError(f"{recipe.id} requires saved result input (result or results, not both)")
+            if recipe.result_kind == "data_fit" and len(selections) > 1:
+                raise ValueError(f"{recipe.id} takes one result file; create one graph per file")
+            if any(item.analysis != recipe.result_analysis for item in selections):
+                raise ValueError(f"{recipe.id} requires {recipe.result_analysis!r} results")
         destinations = [
             item
             for item in (
@@ -402,8 +452,8 @@ class PlotService:
         recipe: RecipeDescriptor,
         request: PlotRequest,
     ) -> GraphDocument:
-        assert request.result is not None
-        descriptor = _result_descriptor(request.result)
+        selections = _result_selections(request)
+        descriptor = _result_descriptor(selections[0])
         if recipe.result_kind == "data_fit":
             bundle: ResultBundle = load_result_bundle(descriptor)
             has_measured = bundle.records[0].metadata["bernardyn_result"]["role"] == "measured"
@@ -425,9 +475,14 @@ class PlotService:
                 series_styles=styles,
             )
             return controller.workspace.graph(graph.id)
-        bundles = load_result_curves(descriptor, recipe.result_kind or "")
-        if not bundles:
-            raise ValueError(f"{recipe.name} found no stored curves in {descriptor.path.name}")
+        # Tagged with each file's position so one file keeps one colour.
+        tagged = []
+        for file_index, selection in enumerate(selections):
+            found = load_result_curves(_result_descriptor(selection), recipe.result_kind or "")
+            if not found:
+                raise ValueError(f"{recipe.name} found no stored curves in {selection.path.name}")
+            tagged.extend((file_index, item) for item in found)
+        bundles = tuple(item for _, item in tagged)
         bundle = bundles[0]
         graph = replace(
             graph,
@@ -436,12 +491,15 @@ class PlotService:
             y_axis=AxisSpec(label=axis_label(bundle.curve.y_label, bundle.curve.y_unit), log=bundle.y_log),
         )
         controller.update_graph(graph)
+        # One curve per file: colour by file.  Several per file (Modeling
+        # populations): colour each curve so they stay distinguishable.
+        by_file = len({file_index for file_index, _ in tagged}) == len(tagged)
         controller.add_datasets(
             tuple(item.curve for item in bundles),
             graph_id=graph.id,
             series_styles=tuple(
-                replace(item.style, color=PALETTE[index % len(PALETTE)])
-                for index, item in enumerate(bundles)
+                replace(item.style, color=PALETTE[(file_index if by_file else index) % len(PALETTE)])
+                for index, (file_index, item) in enumerate(tagged)
             ),
         )
         return controller.workspace.graph(graph.id)
@@ -466,6 +524,21 @@ class PlotService:
                 "name": str(template.get("name", presentation.template_path.stem)),
                 "schema_version": int(template.get("schema_version", 0)),
             }
+        if presentation.series_preset is not None:
+            graph = graph.replace_series(
+                apply_series_preset(graph.series, presentation.series_preset, PALETTE)
+            )
+        if presentation.show_legend is not None:
+            graph = replace(graph, legend=replace(graph.legend, visible=presentation.show_legend))
+        for name, value in (("x_axis", presentation.x_range), ("y_axis", presentation.y_range)):
+            if value is None:
+                continue
+            axis = getattr(graph, name)
+            if axis.log and value[0] <= 0:
+                raise ValueError(f"{name} is logarithmic; its range must be positive")
+            graph = replace(
+                graph, **{name: replace(axis, minimum=value[0], maximum=value[1], auto_range=False)}
+            )
         width_px = presentation.width_px or graph.width_px
         height_px = presentation.height_px or graph.height_px
         dpi = presentation.dpi or graph.dpi
@@ -537,6 +610,10 @@ def _recipe(recipe_id: str) -> RecipeDescriptor:
         if recipe.id == recipe_id:
             return recipe
     raise ValueError(f"unknown recipe {recipe_id!r}")
+
+
+def _result_selections(request: PlotRequest) -> tuple[ResultInput, ...]:
+    return request.results or ((request.result,) if request.result is not None else ())
 
 
 def _result_descriptor(selection: ResultInput) -> ResultDescriptor:

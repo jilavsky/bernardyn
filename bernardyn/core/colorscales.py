@@ -8,6 +8,10 @@ Pure Python: no numpy, Qt or matplotlib.
 from __future__ import annotations
 
 import colorsys
+from collections.abc import Sequence
+from dataclasses import replace
+
+from bernardyn.core.models import SeriesView
 
 Color = tuple[int, int, int, int]
 
@@ -64,3 +68,31 @@ def sample_scale(name: str, count: int) -> list[Color]:
     if count == 1:
         return [scale_color(name, 0.0)]
     return [scale_color(name, i / (count - 1)) for i in range(count)]
+
+
+# Every Graph ▸ Series presets choice: the fixed palette, black and white, and
+# each continuous scale.  Shared by the GUI menu and the headless recipes.
+SERIES_PRESETS: tuple[str, ...] = ("color", "bw", *COLOR_SCALES)
+
+_BW_LINES = ("solid", "dash", "dot", "dash-dot")
+
+
+def apply_series_preset(series: Sequence[SeriesView], preset: str, palette: Sequence[Color]) -> list[SeriesView]:
+    """Restyle ``series`` with one Series presets choice, in series order.
+
+    ``color`` cycles ``palette``; ``bw`` makes every curve black with cycling
+    line styles; a continuous scale is sampled for the current series count,
+    so it must be re-applied after series are added.
+    """
+    if preset not in SERIES_PRESETS:
+        raise ValueError(f"Unknown series preset {preset!r}; use one of {', '.join(SERIES_PRESETS)}")
+    scale = sample_scale(preset, len(series)) if preset in COLOR_SCALES else None
+    changed = []
+    for index, view in enumerate(series):
+        if preset == "bw":
+            style = replace(view.style, color=(0, 0, 0, 255), line_style=_BW_LINES[index % len(_BW_LINES)])
+        else:
+            color = scale[index] if scale else palette[index % len(palette)]
+            style = replace(view.style, color=color)
+        changed.append(replace(view, style=style))
+    return changed

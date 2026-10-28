@@ -69,3 +69,30 @@ def test_mcp_rejects_output_traversal(tmp_path, monkeypatch):
     monkeypatch.setenv("BERNARDYN_OUTPUT_ROOT", str(tmp_path / "out"))
     with pytest.raises(PathSecurityError, match="simple filename"):
         output_path("../outside", ".png")
+
+
+def test_mcp_create_accepts_series_preset_labels_and_reports_styles(qapp, tmp_path, monkeypatch):
+    source = tmp_path / FIXTURE.name
+    copy2(FIXTURE, source)
+    copy2(FIXTURE, tmp_path / "second.h5")
+    monkeypatch.setenv("BERNARDYN_DATA_ROOT", str(tmp_path))
+    monkeypatch.setenv("BERNARDYN_OUTPUT_ROOT", str(tmp_path / "artifacts"))
+
+    assert "rainbow" in tools.list_plot_recipes()["series_presets"]
+    created = tools.create_plot_artifact(
+        "unified_fit_residuals",
+        result_paths=[source.name, "second.h5"],
+        output_name="compare",
+        image_format="svg",
+        series_preset="viridis",
+        show_legend=False,
+        y_range=[-5, 5],
+    )
+    graph = tools.describe_package(created["package_path"])["graphs"][0]
+    assert [item["color"] for item in graph["series"]] == ["#440154", "#fde725"]
+    assert graph["legend_visible"] is False
+    assert graph["y_axis"]["range"] == [-5.0, 5.0]
+    with pytest.raises(ValueError, match="not both"):
+        tools.create_plot_artifact(
+            "unified_fit_residuals", result_path=source.name, result_paths=[source.name], output_name="x"
+        )

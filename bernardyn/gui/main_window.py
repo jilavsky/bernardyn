@@ -51,7 +51,7 @@ from PySide6.QtWidgets import (
 )
 
 from bernardyn import __version__
-from bernardyn.core.colorscales import COLOR_SCALES, sample_scale
+from bernardyn.core.colorscales import COLOR_SCALES, apply_series_preset
 from bernardyn.core.controller import (
     PALETTE,
     ApplicationController,
@@ -1930,22 +1930,9 @@ class MainWindow(QMainWindow):
         graph = self._current_graph()
         if graph is None:
             return
-        bw_lines = ("solid", "dash", "dot", "dash-dot")
-        changed = []
-        # Continuous scales span first to last series, so sample them for the
-        # current series count (re-apply the preset after adding data).
-        scale = sample_scale(preset, len(graph.series)) if preset in COLOR_SCALES else None
-        for index, series in enumerate(graph.series):
-            if preset == "bw":
-                style = replace(
-                    series.style,
-                    color=(0, 0, 0, 255),
-                    line_style=bw_lines[index % len(bw_lines)],
-                )
-            else:
-                color = scale[index] if scale else PALETTE[index % len(PALETTE)]
-                style = replace(series.style, color=color)
-            changed.append(replace(series, style=style))
+        # Continuous scales span first to last series, so they are sampled for
+        # the current series count (re-apply the preset after adding data).
+        changed = apply_series_preset(graph.series, preset, PALETTE)
         after = graph.replace_series(changed)
         self.undo_stack.push(GraphEditCommand(self, graph, after, False, "Apply series preset"))
 
