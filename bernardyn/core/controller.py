@@ -491,6 +491,96 @@ class ApplicationController:
             self.workspace.replace_graph(source)
             self.snapshots[source.id] = source_snapshots
 
+    def replace_series_datasets(
+        self,
+        graph_id: str,
+        series_ids: Iterable[str],
+        datasets_to_use: Iterable[Dataset | GenericCurve],
+        *,
+        transform_parameters: Iterable[Mapping[str, float] | None] | None = None,
+    ) -> tuple[SeriesView, ...]:
+        """Point existing series at new datasets, keeping their presentation.
+
+        Pairs ``series_ids`` with ``datasets_to_use`` in the given order.  Each
+        series keeps its id, plot order, style, multiplier, offset, Q range,
+        visibility, and view transform.  Its legend label becomes the new
+        dataset's label (the old one named another sample) and its transform
+        parameters are re-resolved, because values such as I0 and Rg are
+        sample-specific.  The replaced datasets stay in the catalog.  All or
+        nothing, like :meth:`add_datasets`.
+        """
+        series_ids = tuple(series_ids)
+        graph, candidate, additions, snapshots = self._prepare_series_replacement(
+            graph_id, series_ids, datasets_to_use, transform_parameters
+        )
+        self.workspace.datasets.update({dataset.id: dataset for dataset in additions})
+        self.workspace.replace_graph(candidate)
+        self.snapshots[graph.id] = snapshots
+        self._clear_recompute_warnings(graph.id)
+        chosen = set(series_ids)
+        return tuple(view for view in candidate.series if view.id in chosen)
+
+    def validate_series_replacement(
+        self,
+        graph_id: str,
+        series_ids: Iterable[str],
+        datasets_to_use: Iterable[Dataset | GenericCurve],
+        *,
+        transform_parameters: Iterable[Mapping[str, float] | None] | None = None,
+    ) -> None:
+        """Resolve a replacement without mutating document or catalog state."""
+        self._prepare_series_replacement(
+            graph_id, series_ids, datasets_to_use, transform_parameters
+        )
+
+    def _prepare_series_replacement(
+        self,
+        graph_id: str,
+        series_ids: Iterable[str],
+        datasets_to_use: Iterable[Dataset | GenericCurve],
+        transform_parameters: Iterable[Mapping[str, float] | None] | None,
+    ):
+        graph = self.workspace.graph(graph_id)
+        if graph.id in self.read_only_graphs:
+            raise PermissionError("this graph is read-only because its canonical data are invalid")
+        chosen_ids = tuple(series_ids)
+        additions = tuple(datasets_to_use)
+        given_parameters = tuple(transform_parameters or ())
+        if not chosen_ids:
+            raise ValueError("select one or more series to replace")
+        if len(set(chosen_ids)) != len(chosen_ids):
+            raise ValueError("a series can be replaced only once")
+        if len(additions) != len(chosen_ids):
+            raise ValueError(
+                f"{len(chosen_ids)} series are selected but {len(additions)} data sets were "
+                "chosen; replace needs one data set per selected series"
+            )
+        if given_parameters and len(given_parameters) != len(additions):
+            raise ValueError("transform parameter rows must match replacement datasets")
+        known = {view.id for view in graph.series}
+        if missing := [series_id for series_id in chosen_ids if series_id not in known]:
+            raise ValueError(f"series {missing[0]} is no longer in this graph")
+        updates: dict[str, SeriesView] = {}
+        views = {view.id: view for view in graph.series}
+        for index, (series_id, dataset) in enumerate(zip(chosen_ids, additions, strict=True)):
+            view = views[series_id]
+            supplied = given_parameters[index] if given_parameters else None
+            parameters = (
+                dict(supplied)
+                if supplied is not None
+                else self._default_parameters(dataset, view.transform_id)
+            )
+            updates[series_id] = replace(
+                view,
+                dataset_id=dataset.id,
+                legend_label=dataset.label,
+                transform_parameters=parameters,
+            )
+        candidate = graph.replace_series(updates.get(view.id, view) for view in graph.series)
+        datasets = {**self.workspace.datasets, **{dataset.id: dataset for dataset in additions}}
+        snapshots = self._resolve_graph(candidate, datasets)
+        return graph, candidate, additions, snapshots
+
     def update_graph(self, graph: GraphDocument, *, recompute: bool = False) -> None:
         snapshots = self.validate_graph_update(graph, recompute=recompute)
         # All potentially failing work happens above this line.  The document,

@@ -7,10 +7,20 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 
 import h5py
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import (
+    QItemSelectionModel,
+    QMimeData,
+    QObject,
+    QRunnable,
+    Qt,
+    QThreadPool,
+    QUrl,
+    Signal,
+)
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QCheckBox,
     QColorDialog,
     QComboBox,
     QDialog,
@@ -26,6 +36,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSpinBox,
+    QSplitter,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -41,6 +52,9 @@ from bernardyn.io.file_browser import (
     FILTER_TOOLTIP,
     SORT_LABELS,
     SORT_TOOLTIP,
+    SUBFOLDER_LIMIT,
+    child_folders,
+    display_name,
     files_in_folder,
     make_file_matcher,
     sort_paths,
@@ -48,15 +62,76 @@ from bernardyn.io.file_browser import (
 from bernardyn.io.result_batch import IQ_KIND, kind_label
 from bernardyn.io.sources import ScatteringLocation
 
+#: Marks a drag that started in the File browser, so a drop adds the files
+#: with the browser's current choices instead of opening the data dialog.
+FILE_BROWSER_MIME_TYPE = "application/x-bernardyn-file-browser"
 
-class DataFileSelectorDialog(QDialog):
-    """Choose files, then the I(Q) data and saved pyIrena results to add.
 
-    The right-hand side lists both kinds of data in the current file with the
-    same prominence.  I(Q) choices are remembered per file layout; a checked
-    result kind (say "Unified Fit · Residuals") applies to every selected file
-    that stores it.  One button adds everything that is checked.
+class _FileListWidget(QListWidget):
+    """File list whose drags carry the files themselves (as local URLs)."""
+
+    def mimeData(self, items) -> QMimeData:  # noqa: N802 - Qt API
+        data = QMimeData()
+        data.setUrls([QUrl.fromLocalFile(str(item.data(Qt.ItemDataRole.UserRole))) for item in items])
+        data.setData(FILE_BROWSER_MIME_TYPE, b"1")
+        return data
+
+
+class _SubfolderListingSignals(QObject):
+    # (generation, files of one subfolder)
+    listed = Signal(int, object)
+    # (generation, message; empty when every subfolder was listed)
+    finished = Signal(int, str)
+
+
+class _SubfolderListingWorker(QRunnable):
+    """Lists the files of each first-level subfolder, off the GUI thread.
+
+    Over a network drive each directory read can take a while; the file list
+    shows the folder's own files at once and grows as each subfolder arrives.
     """
+
+    def __init__(self, generation: int, folder: Path, file_type: str) -> None:
+        super().__init__()
+        self.generation = generation
+        self.folder = folder
+        self.file_type = file_type
+        self.cancelled = False
+        self.signals = _SubfolderListingSignals()
+
+    def run(self) -> None:
+        folders = child_folders(self.folder)
+        if len(folders) > SUBFOLDER_LIMIT:
+            self.signals.finished.emit(
+                self.generation,
+                f"{len(folders)} subfolders: more than {SUBFOLDER_LIMIT}, so none are listed. "
+                "Open one of them instead.",
+            )
+            return
+        for folder in folders:
+            if self.cancelled:
+                return
+            files = files_in_folder(folder, self.file_type)
+            if files:
+                self.signals.listed.emit(self.generation, files)
+        self.signals.finished.emit(self.generation, "")
+
+
+class DataSelectorWidget(QWidget):
+    """Files on one side, the I(Q) data and saved pyIrena results to add on the other.
+
+    Shared by :class:`DataFileSelectorDialog` and the File browser dock, so a
+    file layout taught in one is handled the same way by the other.  Both kinds
+    of data in the current file are listed with the same prominence.  I(Q)
+    choices are remembered per file layout; a checked result kind (say
+    "Unified Fit · Residuals") applies to every selected file that stores it.
+
+    ``orientation`` places the data lists beside (horizontal, dialog) or below
+    (vertical, dock) the file list.
+    """
+
+    #: Double-click or Enter on a file.
+    activated = Signal()
 
     def __init__(
         self,
@@ -68,6 +143,7 @@ class DataFileSelectorDialog(QDialog):
         *,
         discover_results: Callable[[Path], Mapping[str, tuple[str, tuple[str, ...]]]] | None = None,
         iq_results_allowed: bool = True,
+        orientation: Qt.Orientation = Qt.Orientation.Horizontal,
     ) -> None:
         super().__init__(parent)
         self.folder = Path(folder)
@@ -78,20 +154,22 @@ class DataFileSelectorDialog(QDialog):
         self._iq_results_allowed = iq_results_allowed
         self._fixed_paths = [Path(path) for path in paths] if paths is not None else None
         stored = dict(preferences or {})
-        self._profiles: dict[str, list[int]] = {
-            str(key): [int(index) for index in value]
-            for key, value in dict(stored.get("dataset_profiles", {})).items()
-            if isinstance(value, list)
-        }
+        self._profiles: dict[str, list[int]] = {}
         # "analysis/kind" keys of the result curves to add.
-        self._checked_results: set[str] = {
-            str(item) for item in stored.get("result_kinds", []) if isinstance(item, str)
-        }
+        self._checked_results: set[str] = set()
+        self._read_shared_preferences(stored)
         self._locations: dict[Path, list[ScatteringLocation]] = {}
         self._errors: dict[Path, str] = {}
         self._current_path: Path | None = None
         self._syncing = False
-        self.setWindowTitle(f"Select data — {self.folder.name}")
+        # Every listed file (the folder's own, then subfolders as they arrive).
+        self._all_paths: list[Path] = []
+        self._listing_generation = 0
+        self._listing_worker: _SubfolderListingWorker | None = None
+        self._listing_note = ""
+        self._listing_pool = QThreadPool(self)
+        self._listing_pool.setMaxThreadCount(1)
+        vertical = orientation == Qt.Orientation.Vertical
         self.file_type = QComboBox(self)
         for label, value in FILE_TYPE_CHOICES:
             self.file_type.addItem(label, value)
@@ -101,13 +179,13 @@ class DataFileSelectorDialog(QDialog):
         self.filter = QLineEdit(self)
         self.filter.setPlaceholderText(FILTER_PLACEHOLDER)
         self.filter.setToolTip(FILTER_TOOLTIP)
+        self.filter.setClearButtonEnabled(True)
         self.count = QLabel(self)
-        self.file_list = QListWidget(self)
+        self.file_list = _FileListWidget(self)
         self.file_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.file_list.currentItemChanged.connect(self._file_selected)
-        self.file_list.itemDoubleClicked.connect(self._accept_selection)
-        # Kept as an alias for small integrations written during beta development.
-        self.list = self.file_list
+        # itemActivated covers both double-click and Enter.
+        self.file_list.itemActivated.connect(lambda _item: self.activated.emit())
         self.data_list = QListWidget(self)
         self.data_list.itemChanged.connect(self._data_selection_changed)
         self.data_list.setToolTip("Check one or more 1-D data sets to load from the selected file.")
@@ -127,40 +205,48 @@ class DataFileSelectorDialog(QDialog):
         self.error_fraction.setRange(0.0001, 100.0)
         self.error_fraction.setDecimals(3)
         controls = QHBoxLayout()
-        controls.addWidget(QLabel("File type:"))
-        controls.addWidget(self.file_type)
+        controls.addWidget(QLabel("File type:" if not vertical else "Type:"))
+        controls.addWidget(self.file_type, int(vertical))
         controls.addWidget(QLabel("Sort:"))
-        controls.addWidget(self.sort)
-        controls.addStretch()
+        controls.addWidget(self.sort, int(vertical))
+        if not vertical:
+            controls.addStretch()
+        self.include_subfolders = QCheckBox("Include subfolders", self)
+        self.include_subfolders.setToolTip(
+            "Also list files in the folders directly inside this one (one level, e.g. the "
+            "USAXS, SAXS, and WAXS folders of a sample). They are shown as subfolder/file, "
+            "and the filter matches that text."
+        )
+        self.group_by_folder = QCheckBox("Group by folder", self)
+        self.group_by_folder.setToolTip(
+            "Keep each folder's files together and sort within each; otherwise files from "
+            "all folders are sorted together."
+        )
+        subfolder_row = QHBoxLayout()
+        subfolder_row.addWidget(self.include_subfolders)
+        subfolder_row.addWidget(self.group_by_folder)
+        subfolder_row.addStretch()
         filter_row = QHBoxLayout()
         filter_row.addWidget(QLabel("Filter:"))
         filter_row.addWidget(self.filter, 1)
         select_all = QPushButton("Select all visible", self)
         select_all.clicked.connect(self._select_all_visible)
         filter_row.addWidget(select_all)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel, parent=self)
-        self.add_button = buttons.addButton("Add selected", QDialogButtonBox.ButtonRole.AcceptRole)
-        self.add_button.setDefault(True)
-        self.add_button.setToolTip(
-            "Add the checked I(Q) data and saved results of every selected file."
-        )
-        self.add_button.clicked.connect(self._accept_selection)
-        buttons.rejected.connect(self.reject)
         layout = QVBoxLayout(self)
-        layout.addWidget(
-            QLabel(
-                f"Folder: {self.folder}\n"
-                "Select files on the left, then check what to add on the right: I(Q) data, "
-                "saved pyIrena results, or both. Choices are reused for every selected file."
-            )
-        )
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.addLayout(controls)
+        layout.addLayout(subfolder_row)
         layout.addLayout(filter_row)
-        lists = QHBoxLayout()
-        left = QVBoxLayout()
-        left.addWidget(QLabel("Files"))
+        files_box = QWidget(self)
+        left = QVBoxLayout(files_box)
+        left.setContentsMargins(0, 0, 0, 0)
+        if not vertical:
+            left.addWidget(QLabel("Files"))
         left.addWidget(self.file_list, 1)
-        right = QVBoxLayout()
+        left.addWidget(self.count)
+        data_box = QWidget(self)
+        right = QVBoxLayout(data_box)
+        right.setContentsMargins(0, 0, 0, 0)
         right.addWidget(QLabel("<b>I(Q) data</b> in the current file"))
         right.addWidget(self.data_list, 1)
         right.addWidget(self.data_status)
@@ -171,56 +257,181 @@ class DataFileSelectorDialog(QDialog):
         else:
             self.results_list.hide()
             self.results_status.hide()
-        lists.addLayout(left, 1)
-        lists.addLayout(right, 1)
-        layout.addLayout(lists, 1)
-        layout.addWidget(self.count)
-        options = QHBoxLayout()
-        options.addWidget(QLabel("Q unit when missing:"))
-        options.addWidget(self.q_unit)
-        options.addSpacing(12)
-        options.addWidget(QLabel("Missing intensity uncertainty (%):"))
-        options.addWidget(self.error_fraction)
-        options.addStretch()
-        layout.addLayout(options)
-        layout.addWidget(buttons)
+        self.splitter = QSplitter(orientation, self)
+        self.splitter.setChildrenCollapsible(False)
+        self.splitter.addWidget(files_box)
+        self.splitter.addWidget(data_box)
+        self.splitter.setStretchFactor(0, 3 if vertical else 1)
+        self.splitter.setStretchFactor(1, 2 if vertical else 1)
+        layout.addWidget(self.splitter, 1)
+        # The import options apply only when a file lacks them (text data); the
+        # dock tucks them away, the dialog shows them as before.
+        self.options_widget = QWidget(self)
+        if vertical:
+            options = QFormLayout(self.options_widget)
+            options.addRow("Q unit when missing:", self.q_unit)
+            options.addRow("Missing uncertainty (%):", self.error_fraction)
+        else:
+            options = QHBoxLayout(self.options_widget)
+            options.addWidget(QLabel("Q unit when missing:"))
+            options.addWidget(self.q_unit)
+            options.addSpacing(12)
+            options.addWidget(QLabel("Missing intensity uncertainty (%):"))
+            options.addWidget(self.error_fraction)
+            options.addStretch()
+        options.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.options_widget)
         self.file_type.setCurrentIndex(
             max(0, self.file_type.findData(stored.get("file_type", "all")))
         )
         self.sort.setCurrentIndex(int(stored.get("sort_index", DEFAULT_SORT_INDEX)))
+        self.include_subfolders.setChecked(bool(stored.get("include_subfolders", False)))
+        self.group_by_folder.setChecked(bool(stored.get("group_by_folder", False)))
         self.filter.setText(str(stored.get("filter", "")))
         self.q_unit.setCurrentIndex(max(0, self.q_unit.findText(str(stored.get("q_unit", "1/A")))))
         self.error_fraction.setValue(float(stored.get("error_percent", 5.0)))
-        self.file_type.currentIndexChanged.connect(self._refresh)
-        self.sort.currentIndexChanged.connect(self._refresh)
+        self.file_type.currentIndexChanged.connect(self.refresh)
+        self.include_subfolders.toggled.connect(self.refresh)
+        # A different order needs no new listing.
+        self.sort.currentIndexChanged.connect(self._rebuild_file_list)
+        self.group_by_folder.toggled.connect(self._rebuild_file_list)
         self.filter.textChanged.connect(self._apply_filter)
-        self.resize(1040, 580)
-        self._refresh()
+        self.refresh()
 
-    def _refresh(self) -> None:
-        paths = (
-            self._fixed_paths
-            if self._fixed_paths is not None
-            else files_in_folder(self.folder, str(self.file_type.currentData()))
+    def _read_shared_preferences(self, stored: Mapping[str, object]) -> None:
+        self._profiles = {
+            str(key): [int(index) for index in value]
+            for key, value in dict(stored.get("dataset_profiles", {})).items()
+            if isinstance(value, list)
+        }
+        self._checked_results = {
+            str(item) for item in stored.get("result_kinds", []) if isinstance(item, str)
+        }
+
+    def adopt_shared_preferences(self, preferences: Mapping[str, object]) -> None:
+        """Take over layout choices, result kinds, and import options learned elsewhere."""
+        stored = dict(preferences or {})
+        self._read_shared_preferences(stored)
+        if "q_unit" in stored:
+            self.q_unit.setCurrentIndex(max(0, self.q_unit.findText(str(stored["q_unit"]))))
+        if "error_percent" in stored:
+            self.error_fraction.setValue(float(stored["error_percent"]))
+        self._populate_data_list()
+        self._populate_results_list()
+
+    def set_folder(self, folder: Path) -> None:
+        """List another folder; learned layout choices are kept."""
+        self.folder = Path(folder)
+        self._fixed_paths = None
+        self.refresh()
+
+    def set_iq_results_allowed(self, allowed: bool) -> None:
+        """Data + fit joins only an I(Q) graph; follow the active graph's view."""
+        if allowed != self._iq_results_allowed:
+            self._iq_results_allowed = allowed
+            self._populate_results_list()
+
+    def forget_cached_contents(self) -> None:
+        """Re-read files on next use, e.g. ones still being written."""
+        self._locations.clear()
+        self._errors.clear()
+        self._results.clear()
+
+    def refresh(self) -> None:
+        """List the folder again: its own files now, first-level subfolders in the background."""
+        self._stop_listing()
+        listing_folder = self._fixed_paths is None
+        self.include_subfolders.setEnabled(listing_folder)
+        self.group_by_folder.setEnabled(listing_folder and self.include_subfolders.isChecked())
+        file_type = str(self.file_type.currentData())
+        self._all_paths = (
+            list(self._fixed_paths) if not listing_folder else files_in_folder(self.folder, file_type)
         )
-        paths = sort_paths(paths, self.sort.currentIndex())
-        self.file_list.clear()
-        for path in paths:
-            item = QListWidgetItem(path.name)
-            item.setData(Qt.ItemDataRole.UserRole, path)
-            item.setToolTip(str(path))
-            self.file_list.addItem(item)
+        self._listing_note = ""
+        if listing_folder and self.include_subfolders.isChecked():
+            worker = _SubfolderListingWorker(self._listing_generation, self.folder, file_type)
+            worker.signals.listed.connect(self._subfolder_listed)
+            worker.signals.finished.connect(self._subfolder_listing_finished)
+            self._listing_worker = worker
+            self._listing_note = "listing subfolders…"
+            self._listing_pool.start(worker)
+        self._rebuild_file_list()
+
+    def _stop_listing(self) -> None:
+        # Results of an older listing are recognised by generation and dropped.
+        self._listing_generation += 1
+        if self._listing_worker is not None:
+            self._listing_worker.cancelled = True
+            self._listing_worker = None
+
+    def wait_for_listing(self, msecs: int = 30000) -> bool:
+        """Block until background listing ends (tests and scripted use)."""
+        return self._listing_pool.waitForDone(msecs)
+
+    def _subfolder_listed(self, generation: int, paths: list[Path]) -> None:
+        if generation != self._listing_generation:
+            return
+        self._all_paths.extend(paths)
+        self._rebuild_file_list()
+
+    def _subfolder_listing_finished(self, generation: int, message: str) -> None:
+        if generation != self._listing_generation:
+            return
+        self._listing_worker = None
+        self._listing_note = message
         self._apply_filter()
+
+    def _rebuild_file_list(self, *_args) -> None:
+        """Show the listed files in the chosen order, keeping current file, selection, and scroll."""
+        self.group_by_folder.setEnabled(
+            self._fixed_paths is None and self.include_subfolders.isChecked()
+        )
+        grouped = self.include_subfolders.isChecked() and self.group_by_folder.isChecked()
+        paths = sort_paths(self._all_paths, self.sort.currentIndex(), group_by_folder=grouped)
+        current = self._current_path
+        selected = set(self.selected_paths())
+        scroll = self.file_list.verticalScrollBar().value()
+        current_item = None
+        # Rebuilding must not look like the user picking another file.
+        self.file_list.blockSignals(True)
+        try:
+            self.file_list.clear()
+            for path in paths:
+                item = QListWidgetItem(display_name(path, self.folder))
+                item.setData(Qt.ItemDataRole.UserRole, path)
+                item.setToolTip(str(path))
+                self.file_list.addItem(item)
+                if path in selected:
+                    item.setSelected(True)
+                if path == current:
+                    current_item = item
+            if current_item is not None:
+                self.file_list.setCurrentItem(
+                    current_item, QItemSelectionModel.SelectionFlag.NoUpdate
+                )
+        finally:
+            self.file_list.blockSignals(False)
+        self._apply_filter()
+        self.file_list.verticalScrollBar().setValue(scroll)
+        if current_item is None or current_item.isHidden():
+            if current is not None or self.file_list.currentItem() is None:
+                self._file_selected(None)
+
+    # Kept for small integrations written before the widget existed.
+    _refresh = refresh
 
     def _apply_filter(self) -> None:
         matches = make_file_matcher(self.filter.text())
         visible = 0
         for index in range(self.file_list.count()):
             item = self.file_list.item(index)
-            hidden = not matches(item.text())
+            # The file name alone also counts, so "^S12" works with subfolders listed.
+            name = Path(item.data(Qt.ItemDataRole.UserRole)).name
+            hidden = not (matches(item.text()) or matches(name))
             item.setHidden(hidden)
             visible += not hidden
-        self.count.setText(f"Showing {visible} of {self.file_list.count()} files")
+        text = f"Showing {visible} of {self.file_list.count()} files"
+        self.count.setText(f"{text}; {self._listing_note}" if self._listing_note else text)
 
     def _select_all_visible(self) -> None:
         self.file_list.clearSelection()
@@ -347,10 +558,10 @@ class DataFileSelectorDialog(QDialog):
         else:
             self._checked_results.discard(key)
 
-    def selected_results(self) -> dict[str, tuple[str, ...]]:
-        """Checked result kinds, by analysis, that some selected file stores."""
+    def selected_results(self, paths: list[Path] | None = None) -> dict[str, tuple[str, ...]]:
+        """Checked result kinds, by analysis, that some selected file (or *paths*) stores."""
         offered: set[str] = set()
-        for path in self.selected_paths():
+        for path in self.selected_paths() if paths is None else paths:
             for analysis, (_, kinds) in self._results_for(path).items():
                 offered.update(f"{analysis}/{kind}" for kind in kinds)
         selection: dict[str, list[str]] = {}
@@ -374,19 +585,24 @@ class DataFileSelectorDialog(QDialog):
         ]
         self._profiles[self._profile_key(locations)] = selected
 
-    def selected_locations(self) -> list[ScatteringLocation]:
+    def selected_locations(self, paths: list[Path] | None = None) -> list[ScatteringLocation]:
+        """Checked I(Q) data of the selected files (or *paths*), by file layout."""
         selected: list[ScatteringLocation] = []
-        for path in self.selected_paths():
+        for path in self.selected_paths() if paths is None else paths:
             locations = self._locations_for(path)
-            profile = self._profiles.get(self._profile_key(locations), [])
+            profile = self._profiles.get(self._profile_key(locations))
+            if profile is None:
+                # A file never shown in the I(Q) list (e.g. picked with "Select
+                # all visible") gets the same default it would show: its only curve.
+                profile = [0] if len(locations) == 1 else []
             selected.extend(
                 location for index, location in enumerate(locations) if index in profile
             )
         return selected
 
-    def unresolved_paths(self) -> list[Path]:
+    def unresolved_paths(self, paths: list[Path] | None = None) -> list[Path]:
         unresolved = []
-        for path in self.selected_paths():
+        for path in self.selected_paths() if paths is None else paths:
             locations = self._locations_for(path)
             if len(locations) > 1 and not self._profiles.get(self._profile_key(locations), []):
                 unresolved.append(path)
@@ -396,6 +612,8 @@ class DataFileSelectorDialog(QDialog):
         return {
             "file_type": self.file_type.currentData(),
             "sort_index": self.sort.currentIndex(),
+            "include_subfolders": self.include_subfolders.isChecked(),
+            "group_by_folder": self.group_by_folder.isChecked(),
             "filter": self.filter.text(),
             "q_unit": self.q_unit.currentText(),
             "error_percent": self.error_fraction.value(),
@@ -403,28 +621,114 @@ class DataFileSelectorDialog(QDialog):
             "result_kinds": sorted(self._checked_results),
         }
 
-    def _accept_selection(self) -> None:
-        if not self.selected_paths():
-            QMessageBox.information(self, "Select data", "Select one or more files to load.")
-            return
-        if self.selected_results():
+    def selection_problem(self, paths: list[Path] | None = None) -> tuple[str, str] | None:
+        """Why the selected files (or *paths*) cannot be added, as (title, message), or None."""
+        paths = self.selected_paths() if paths is None else list(paths)
+        if not paths:
+            return "Select data", "Select one or more files to load."
+        if self.selected_results(paths):
             # Results alone are a complete request; a multi-curve file with no
             # I(Q) choice then simply contributes its results.
-            self.accept()
-            return
-        unresolved = self.unresolved_paths()
+            return None
+        unresolved = self.unresolved_paths(paths)
         if unresolved:
-            QMessageBox.information(
-                self,
+            return (
                 "Choose 1-D data",
                 "Select a representative file and check the data sets to load before continuing.\n\n"
                 f"No selection has been made for: {unresolved[0].name}",
             )
-            return
-        if not self.selected_locations():
-            QMessageBox.information(
-                self, "Choose data", "Check I(Q) data or saved results to add, then press Add selected."
+        if not self.selected_locations(paths):
+            return "Choose data", "Check I(Q) data or saved results to add, then press Add selected."
+        return None
+
+
+class DataFileSelectorDialog(QDialog):
+    """Choose files, then the I(Q) data and saved pyIrena results to add.
+
+    A modal wrapper around :class:`DataSelectorWidget`; one button adds
+    everything that is checked.
+    """
+
+    def __init__(
+        self,
+        folder: Path,
+        discover: Callable[[Path], list[ScatteringLocation]],
+        preferences: Mapping[str, object] | None = None,
+        paths: list[Path] | None = None,
+        parent=None,
+        *,
+        discover_results: Callable[[Path], Mapping[str, tuple[str, tuple[str, ...]]]] | None = None,
+        iq_results_allowed: bool = True,
+    ) -> None:
+        super().__init__(parent)
+        self.folder = Path(folder)
+        self.selector = DataSelectorWidget(
+            folder,
+            discover,
+            preferences,
+            paths,
+            self,
+            discover_results=discover_results,
+            iq_results_allowed=iq_results_allowed,
+        )
+        self.selector.activated.connect(self._accept_selection)
+        # The dialog's long-standing attribute names stay available.
+        for name in (
+            "file_type", "sort", "filter", "count", "file_list", "data_list", "data_status",
+            "results_list", "results_status", "q_unit", "error_fraction",
+        ):
+            setattr(self, name, getattr(self.selector, name))
+        # Kept as an alias for small integrations written during beta development.
+        self.list = self.file_list
+        self.setWindowTitle(f"Select data — {self.folder.name}")
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel, parent=self)
+        self.add_button = buttons.addButton("Add selected", QDialogButtonBox.ButtonRole.AcceptRole)
+        self.add_button.setDefault(True)
+        self.add_button.setToolTip(
+            "Add the checked I(Q) data and saved results of every selected file."
+        )
+        self.add_button.clicked.connect(self._accept_selection)
+        buttons.rejected.connect(self.reject)
+        layout = QVBoxLayout(self)
+        layout.addWidget(
+            QLabel(
+                f"Folder: {self.folder}\n"
+                "Select files on the left, then check what to add on the right: I(Q) data, "
+                "saved pyIrena results, or both. Choices are reused for every selected file."
             )
+        )
+        layout.addWidget(self.selector, 1)
+        layout.addWidget(buttons)
+        self.resize(1040, 580)
+
+    def _refresh(self) -> None:
+        self.selector.refresh()
+
+    def _apply_filter(self) -> None:
+        self.selector._apply_filter()
+
+    def _select_all_visible(self) -> None:
+        self.selector._select_all_visible()
+
+    def selected_paths(self) -> list[Path]:
+        return self.selector.selected_paths()
+
+    def selected_results(self) -> dict[str, tuple[str, ...]]:
+        return self.selector.selected_results()
+
+    def selected_locations(self) -> list[ScatteringLocation]:
+        return self.selector.selected_locations()
+
+    def unresolved_paths(self) -> list[Path]:
+        return self.selector.unresolved_paths()
+
+    def preferences(self) -> dict[str, object]:
+        return self.selector.preferences()
+
+    def _accept_selection(self) -> None:
+        problem = self.selector.selection_problem()
+        if problem is not None:
+            QMessageBox.information(self, *problem)
             return
         self.accept()
 

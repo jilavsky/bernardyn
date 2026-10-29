@@ -49,6 +49,49 @@ For a standard NXcanSAS path such as
 stored in one HDF5 file. When no sample group can be identified, Bernardyn
 uses the filename.
 
+### File browser: pick, check, and correct without dialogs
+
+The **File browser** panel, at the left of the Data browser, stays open while
+you work. Use it when data come from several folders, or when you want to try
+one file after another.
+
+- **Find the folder.** Click a folder in the tree, type or paste a path into
+  the path field and press Enter, or use **Back** and **Up**. **☆** adds the
+  folder to Favorites; **Places** lists Favorites, recent folders, and Home.
+  Refresh (F5) re-reads a folder that is still being written to.
+- **Choose files and data.** Sort and filter the file list as in the data
+  selector, and check the I(Q) data or saved results below it. The panel and
+  the data selector share what they learn about file layouts.
+- **Include subfolders** also lists the files of the folders directly inside
+  the current one (one level only), shown as `subfolder/file`. Point at a
+  sample folder that holds `…_usaxs`, `…_saxs`, and `…_waxs` folders, type
+  the sample (say `CC1`) in the filter, press **Select all visible**, then
+  **Add to graph**: every technique arrives in one step. The filter matches
+  both `subfolder/file` and the bare file name. **Group by folder** keeps each
+  folder's files together; otherwise all files are sorted together. Subfolders
+  are listed in the background, so the list can grow for a moment on a
+  network drive. A folder with more than 50 subfolders lists none of them.
+- **Add to graph** (or double-click, or Enter) adds the checked data of the
+  selected files to the active graph. The panel stays where it was.
+- **Replace selected series** (Ctrl+R) swaps the data of the series selected
+  in the Data browser for the checked I(Q) data of the selected files, one
+  file per series. Each series keeps its color, symbols, multiplier, offset,
+  Q range, and place in the legend; the legend text becomes the new sample's
+  name. Replace is one Undo step.
+- **Drag** files from the list onto a graph tab to add them to that graph, or
+  onto the Data browser list.
+
+Newly added series are selected in the Data browser, so a wrong file is
+fixed with: **↓** to the next file, then **Replace selected series**. Repeat
+until it is the right one.
+
+The panel is an ordinary panel: drag its title to dock it elsewhere, or float
+it onto another monitor. On macOS, floating panels stay visible when you
+switch to another application. Close it with its × button; reopen it with
+**View → Open File Browser** (Ctrl+Shift+B). **View → Reset panel layout**
+puts it back. Its folder, favorites, and list settings are remembered on
+this computer, not stored in workspace files.
+
 ## Choose what is displayed
 
 The left **Data browser — active graph** controls the order in which curves are

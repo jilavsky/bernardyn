@@ -3,6 +3,8 @@
 The behavior intentionally matches PyIrena's Data Selector: folders are
 listed non-recursively, filters are case-insensitive regular expressions, and
 the filename can encode temperature, time, pressure, or acquisition order.
+Optionally the first level of subfolders is listed too (USAXS/SAXS/WAXS
+subfolders of one sample folder); never deeper.
 """
 
 from __future__ import annotations
@@ -38,6 +40,10 @@ SORT_TOOLTIP = (
     "_10min, _100PSI, and trailing _03 acquisition order. "
     "Files without a matching pattern sort last."
 )
+#: Above this many subfolders, "Include subfolders" lists none of them: a
+#: parent of hundreds of run folders is the wrong place, and listing it over a
+#: network drive is slow.
+SUBFOLDER_LIMIT = 50
 FILTER_PLACEHOLDER = "Filter… (regex OK, e.g. 60C|0[12]min)"
 FILTER_TOOLTIP = (
     "Filter filenames using a case-insensitive regular expression. "
@@ -71,6 +77,26 @@ def files_in_folder(folder: str | Path, file_type: str = "all") -> list[Path]:
         ]
     except OSError:
         return []
+
+
+def child_folders(folder: str | Path) -> list[Path]:
+    """Visible folders directly in *folder*, A→Z; empty if it cannot be read."""
+    directory = Path(folder).expanduser()
+    try:
+        return sorted(
+            (path for path in directory.iterdir() if path.is_dir() and not path.name.startswith(".")),
+            key=lambda path: path.name.lower(),
+        )
+    except OSError:
+        return []
+
+
+def display_name(path: Path, root: str | Path) -> str:
+    """File name, prefixed by its subfolder (with ``/``) when not directly in *root*."""
+    parent = Path(path).parent
+    if parent == Path(root):
+        return path.name
+    return f"{parent.name}/{path.name}"
 
 
 def make_file_matcher(filter_text: str | None) -> Callable[[str], bool]:
@@ -115,8 +141,23 @@ _SORT_KEYS: tuple[Callable[[str], str | float], ...] = (
 )
 
 
-def sort_paths(paths: Iterable[Path], index: int = DEFAULT_SORT_INDEX) -> list[Path]:
-    """Sort paths using the same order semantics as PyIrena's Data Selector."""
+def sort_paths(
+    paths: Iterable[Path], index: int = DEFAULT_SORT_INDEX, *, group_by_folder: bool = False
+) -> list[Path]:
+    """Sort paths using the same order semantics as PyIrena's Data Selector.
+
+    ``group_by_folder`` keeps each folder's files together (folders A→Z) and
+    sorts within each; otherwise files from several folders are interleaved.
+    """
+    if group_by_folder:
+        groups: dict[Path, list[Path]] = {}
+        for path in paths:
+            groups.setdefault(path.parent, []).append(path)
+        return [
+            path
+            for folder in sorted(groups, key=lambda folder: str(folder).lower())
+            for path in sort_paths(groups[folder], index)
+        ]
     selected_index = min(max(index, 0), len(_SORT_KEYS) - 1)
     key = _SORT_KEYS[selected_index]
     descending = bool(selected_index % 2)

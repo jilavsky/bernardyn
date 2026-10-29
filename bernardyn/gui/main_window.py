@@ -32,6 +32,7 @@ from PySide6.QtGui import (
 from PySide6.QtPrintSupport import QPrintDialog, QPrinter
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QComboBox,
     QDockWidget,
     QFileDialog,
@@ -66,6 +67,7 @@ from bernardyn.gui.dataset_filters import (
     matches_dataset_filter,
 )
 from bernardyn.gui.dialogs import (
+    FILE_BROWSER_MIME_TYPE,
     ChecklistDialog,
     DataFileSelectorDialog,
     GraphSelectionDialog,
@@ -73,6 +75,7 @@ from bernardyn.gui.dialogs import (
     LocationDialog,
     SeriesTransformParameterDialog,
 )
+from bernardyn.gui.file_browser_panel import FileBrowserPanel
 from bernardyn.gui.graph_page import GraphPage, OutputPreviewDialog, PreviewPage
 from bernardyn.gui.inspector import InspectorWidget
 from bernardyn.io.container import ensure_package_suffix, load_package
@@ -97,6 +100,8 @@ DOCUMENTATION_URL = "https://github.com/jilavsky/Bernardyn/tree/main/docs"
 LAST_WORKSPACE_PATH_KEY = "last_workspace_path"
 RECENT_WORKSPACES_KEY = "recent_workspace_paths"
 RECENT_WORKSPACES_LIMIT = 10
+FILES_PANEL_KEY = "files_panel"
+DATA_SELECTOR_KEY = "data_selector"
 
 
 def _documentation_url() -> QUrl:
@@ -200,17 +205,30 @@ class GraphEditCommand(QUndoCommand):
 
 
 class DatasetImportCommand(QUndoCommand):
-    """One undoable import preserves both graph views and the dataset catalog."""
+    """One undoable import preserves both graph views and the dataset catalog.
+
+    With ``replace_series_ids`` the datasets replace those series' data
+    instead of being added (File browser "Replace selected series").
+    """
 
     def __init__(
-        self, window, datasets, graph_id: str, transform_parameters=None, series_styles=None
+        self,
+        window,
+        datasets,
+        graph_id: str,
+        transform_parameters=None,
+        series_styles=None,
+        *,
+        replace_series_ids: tuple[str, ...] | None = None,
     ) -> None:
-        super().__init__("Import datasets")
+        super().__init__("Replace datasets" if replace_series_ids else "Import datasets")
         self.window = window
         self.datasets = tuple(datasets)
         self.graph_id = graph_id
         self.transform_parameters = transform_parameters
         self.series_styles = series_styles
+        self.replace_series_ids = replace_series_ids
+        self.series_ids: tuple[str, ...] = ()
         self.before = None
         self.after = None
 
@@ -218,21 +236,33 @@ class DatasetImportCommand(QUndoCommand):
         if self.after is None:
             self.before = self.window._controller_state()
             try:
-                self.window.controller.add_datasets(
-                    self.datasets,
-                    graph_id=self.graph_id,
-                    transform_parameters=self.transform_parameters,
-                    series_styles=self.series_styles,
-                )
+                if self.replace_series_ids:
+                    views = self.window.controller.replace_series_datasets(
+                        self.graph_id,
+                        self.replace_series_ids,
+                        self.datasets,
+                        transform_parameters=self.transform_parameters,
+                    )
+                else:
+                    views = self.window.controller.add_datasets(
+                        self.datasets,
+                        graph_id=self.graph_id,
+                        transform_parameters=self.transform_parameters,
+                        series_styles=self.series_styles,
+                    )
             except Exception:
                 self.window._restore_controller_state(self.before)
                 self.setObsolete(True)
                 raise
+            self.series_ids = tuple(view.id for view in views)
             self.after = self.window._controller_state()
         else:
             self.window._restore_controller_state(self.after)
         self.window._render_graph(self.graph_id)
         self.window._refresh_dataset_list()
+        # Selecting what just arrived sets up the File browser's correction
+        # loop: a wrong file is fixed with "next file, Replace selected series".
+        self.window._select_series(self.series_ids)
         self.window._sync_inspector()
 
     def undo(self) -> None:
@@ -278,6 +308,8 @@ class DatasetListWidget(QListWidget):
     """Dataset list that keeps internal reordering and accepts local file drops."""
 
     pathsDropped = Signal(object)
+    #: Files dragged from the File browser; added with its current choices.
+    browserPathsDropped = Signal(object)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -299,7 +331,10 @@ class DatasetListWidget(QListWidget):
         if not paths:
             return False
         if event.type() == QEvent.Type.Drop:
-            self.pathsDropped.emit(paths)
+            if event.mimeData().hasFormat(FILE_BROWSER_MIME_TYPE):
+                self.browserPathsDropped.emit(paths)
+            else:
+                self.pathsDropped.emit(paths)
         event.acceptProposedAction()
         return True
 
@@ -356,6 +391,9 @@ class MainWindow(QMainWindow):
         self.tabs.setTabsClosable(True)
         self.tabs.currentChanged.connect(self._active_tab_changed)
         self.tabs.tabCloseRequested.connect(self._close_tab)
+        # Files dropped on a tab go to that graph (see eventFilter).
+        self.tabs.tabBar().setAcceptDrops(True)
+        self.tabs.tabBar().installEventFilter(self)
         self.setCentralWidget(self.tabs)
         self.dataset_list = DatasetListWidget(self)
         self.dataset_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
@@ -364,6 +402,7 @@ class MainWindow(QMainWindow):
         self.dataset_list.setDragEnabled(True)
         self.dataset_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.dataset_list.pathsDropped.connect(self._dropped_data_paths)
+        self.dataset_list.browserPathsDropped.connect(self._add_from_files_panel)
         self.dataset_list.customContextMenuRequested.connect(self._dataset_context_menu)
         self.dataset_list.model().rowsMoved.connect(
             lambda *_: QTimer.singleShot(0, self._dataset_list_reordered)
@@ -387,6 +426,11 @@ class MainWindow(QMainWindow):
         self._update_workspace_indicator()
         self.statusBar().showMessage("Ready")
         self._rebuild_tabs()
+        # The remembered folder may be on a network drive; list it only once
+        # the window exists, so an unreachable drive cannot delay startup.
+        QTimer.singleShot(
+            0, lambda: self.files_panel.start(self.user_state.get("last_data_folder"))
+        )
 
     def _build_docks(self) -> None:
         self.datasets_dock = QDockWidget("Data browser — active graph", self)
@@ -433,6 +477,24 @@ class MainWindow(QMainWindow):
         self.datasets_dock.setWidget(data_widget)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.datasets_dock)
 
+        self.files_dock = QDockWidget("File browser", self)
+        self.files_dock.setObjectName("fileBrowserDock")
+        self.files_panel = FileBrowserPanel(
+            self.controller.sources.discover_path,
+            self.user_state.get(DATA_SELECTOR_KEY, {}),
+            self.user_state.get(FILES_PANEL_KEY, {}),
+            self.files_dock,
+            discover_results=_results_in_file,
+        )
+        self.files_panel.addRequested.connect(self._add_from_files_panel)
+        self.files_panel.replaceRequested.connect(
+            lambda paths: self._add_from_files_panel(paths, replace_selected=True)
+        )
+        self.files_panel.stateChanged.connect(self._save_files_panel_state)
+        self.files_dock.setWidget(self.files_panel)
+        self.files_dock.setMinimumWidth(300)
+        self._place_files_dock()
+
         self.inspector_dock = QDockWidget("Graph inspector", self)
         self.inspector_dock.setObjectName("graphInspectorDock")
         inspector_widget = QWidget(self.inspector_dock)
@@ -455,6 +517,11 @@ class MainWindow(QMainWindow):
         self.inspector_dock.setWidget(inspector_widget)
         self.inspector_dock.setMinimumWidth(340)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.inspector_dock)
+        # A floating panel is a macOS tool window, which the system hides
+        # whenever Bernardyn is not the active app.  Keep torn-off panels
+        # visible beside other apps (Finder, Matilda).  No effect elsewhere.
+        for dock in (self.files_dock, self.datasets_dock, self.inspector_dock):
+            dock.setAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow, True)
 
     def _action(self, text, slot, shortcut=None) -> QAction:
         action = QAction(text, self)
@@ -522,7 +589,10 @@ class MainWindow(QMainWindow):
         self.reopen_inspector_action = self._action(
             "Open Graph Inspector", lambda: self._reopen_dock(self.inspector_dock, Qt.DockWidgetArea.RightDockWidgetArea)
         )
-        self.reset_panels_action = self._action("Reset panel layout", self._reset_panel_layout)
+        self.open_file_browser_action = self._action(
+            "Open File Browser", self._show_files_dock, "Ctrl+Shift+B"
+        )
+        self.reset_panels_action = self._action("Reset panel layout", self._reset_all_panels)
         self.about_action = self._action("About Bernardyn", self._show_about)
         self.about_action.setMenuRole(QAction.MenuRole.AboutRole)
 
@@ -575,7 +645,12 @@ class MainWindow(QMainWindow):
         )
         view_menu = self.menuBar().addMenu("&View")
         view_menu.addActions(
-            [self.reopen_data_browser_action, self.reopen_inspector_action, self.reset_panels_action]
+            [
+                self.open_file_browser_action,
+                self.reopen_data_browser_action,
+                self.reopen_inspector_action,
+                self.reset_panels_action,
+            ]
         )
         help_menu = self.menuBar().addMenu("&Help")
         help_menu.addAction(self.about_action)
@@ -591,9 +666,49 @@ class MainWindow(QMainWindow):
         dock.raise_()
 
     def _reset_panel_layout(self) -> None:
-        """Put the two essential controls back in their safe default places."""
+        """Put the two essential controls back if they are hidden or floating.
+
+        A docked, visible panel is left where it is, so restoring a workspace
+        keeps the File browser and the Data browser side by side.
+        """
+        for dock, area in (
+            (self.datasets_dock, Qt.DockWidgetArea.LeftDockWidgetArea),
+            (self.inspector_dock, Qt.DockWidgetArea.RightDockWidgetArea),
+        ):
+            if dock.isFloating() or dock.isHidden():
+                self._reopen_dock(dock, area)
+
+    def _reset_all_panels(self) -> None:
+        """View → Reset panel layout: every panel back to its default place."""
         self._reopen_dock(self.datasets_dock, Qt.DockWidgetArea.LeftDockWidgetArea)
         self._reopen_dock(self.inspector_dock, Qt.DockWidgetArea.RightDockWidgetArea)
+        self._place_files_dock()
+
+    def _place_files_dock(self) -> None:
+        """Dock the File browser at the left of the Data browser."""
+        self.files_dock.setFloating(False)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.files_dock)
+        if (
+            not self.datasets_dock.isFloating()
+            and self.dockWidgetArea(self.datasets_dock) == Qt.DockWidgetArea.LeftDockWidgetArea
+        ):
+            self.splitDockWidget(self.files_dock, self.datasets_dock, Qt.Orientation.Horizontal)
+        self.files_dock.show()
+
+    @staticmethod
+    def _on_some_screen(widget: QWidget) -> bool:
+        frame = widget.frameGeometry()
+        return any(screen.availableGeometry().intersects(frame) for screen in QApplication.screens())
+
+    def _show_files_dock(self) -> None:
+        """Show the File browser where it was last, unless it floats off every screen."""
+        if self.files_dock.isFloating() and not self._on_some_screen(self.files_dock):
+            self._place_files_dock()
+        self.files_dock.show()
+        self.files_dock.raise_()
+        if self.files_dock.isFloating():
+            self.files_dock.activateWindow()
+        self.files_panel.selector.file_list.setFocus()
 
     def _open_documentation(self) -> None:
         documentation_url = _documentation_url()
@@ -1011,6 +1126,9 @@ class MainWindow(QMainWindow):
 
     def _sync_inspector(self) -> None:
         graph = self._current_graph()
+        self.files_panel.selector.set_iq_results_allowed(
+            graph is not None and graph.view_transform_id == "raw"
+        )
         warnings = self.controller.graph_warnings(graph.id) if graph else self.controller.warnings
         self.inspector.set_graph(
             graph,
@@ -1416,8 +1534,9 @@ class MainWindow(QMainWindow):
         if dialog.exec() != dialog.DialogCode.Accepted:
             return
         self.user_state.set("last_data_folder", str(folder))
-        self.user_state.set("data_selector", dialog.preferences())
+        self.user_state.set(DATA_SELECTOR_KEY, dialog.preferences())
         self.user_state.save()
+        self.files_panel.selector.adopt_shared_preferences(dialog.preferences())
         graph = self._current_graph()
         if graph is None:
             return
@@ -1432,6 +1551,114 @@ class MainWindow(QMainWindow):
         results = dialog.selected_results()
         if results:
             self._import_result_selection(dialog.selected_paths(), results)
+
+    def _add_from_files_panel(self, paths: list[Path], *, replace_selected: bool = False) -> None:
+        """Add files chosen in the File browser to the active graph, without a dialog.
+
+        With ``replace_selected`` their I(Q) data replace the series selected in
+        the Data browser instead (pairwise, in graph order), keeping each
+        series' style and position.  Saved results are not used by Replace.
+        """
+        panel = self.files_panel
+        selector = panel.selector
+        paths = [Path(path) for path in paths]
+
+        def report(text: str) -> None:
+            panel.show_message(text)
+            self.statusBar().showMessage(text, 6000)
+
+        graph = self._current_graph()
+        if graph is None:
+            report("Create or select a graph first.")
+            return
+        if not paths:
+            report("Select one or more files in the File browser.")
+            return
+        self._remember_files_choices(paths[0].parent)
+        q_unit = selector.q_unit.currentText()
+        error_fraction = selector.error_fraction.value() / 100.0
+        if replace_selected:
+            series_ids = self._selected_series_ids()
+            if not series_ids:
+                report("Select the series to replace in the Data browser.")
+                return
+            if unresolved := selector.unresolved_paths(paths):
+                report(f"Check the I(Q) data to use from {unresolved[0].name}.")
+                return
+            locations = selector.selected_locations(paths)
+            if not locations:
+                report("Check the I(Q) data to use, then press Replace again.")
+                return
+            if len(locations) != len(series_ids):
+                report(
+                    f"{len(series_ids)} series are selected in the Data browser, but "
+                    f"{len(locations)} I(Q) data sets are chosen; Replace needs one for each."
+                )
+                return
+            panel.show_message("")
+            self._queue_locations(
+                locations, graph.id, q_unit, error_fraction, replace_series_ids=series_ids
+            )
+            return
+        if problem := selector.selection_problem(paths):
+            report(problem[1])
+            return
+        panel.show_message("")
+        locations = selector.selected_locations(paths)
+        if locations:
+            self._queue_locations(locations, graph.id, q_unit, error_fraction)
+        results = selector.selected_results(paths)
+        if results:
+            self._import_result_selection(paths, results)
+
+    def _remember_files_choices(self, folder: Path) -> None:
+        """Share the File browser's choices with the data dialog and keep its place."""
+        shared = dict(self.user_state.get(DATA_SELECTOR_KEY, {}))
+        preferences = self.files_panel.selector.preferences()
+        for key in ("dataset_profiles", "result_kinds", "q_unit", "error_percent"):
+            shared[key] = preferences[key]
+        self.user_state.set(DATA_SELECTOR_KEY, shared)
+        self.user_state.set("last_data_folder", str(folder))
+        self._save_files_panel_state()
+
+    def _save_files_panel_state(self) -> None:
+        self.user_state.set(FILES_PANEL_KEY, self.files_panel.state())
+        self.user_state.save()
+        self.files_panel.settings_changed = False
+
+    def _selected_series_ids(self) -> tuple[str, ...]:
+        """Series selected in the Data browser, in graph order."""
+        graph = self._current_graph()
+        if graph is None:
+            return ()
+        chosen = {item.data(Qt.ItemDataRole.UserRole) for item in self.dataset_list.selectedItems()}
+        return tuple(series.id for series in graph.series if series.id in chosen)
+
+    def _select_series(self, series_ids) -> None:
+        if not series_ids:
+            return
+        wanted = set(series_ids)
+        for index in range(self.dataset_list.count()):
+            item = self.dataset_list.item(index)
+            item.setSelected(item.data(Qt.ItemDataRole.UserRole) in wanted)
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: N802 - Qt API
+        drag_events = (QEvent.Type.DragEnter, QEvent.Type.DragMove, QEvent.Type.Drop)
+        if watched is self.tabs.tabBar() and event.type() in drag_events:
+            mime_data = event.mimeData()
+            if mime_data.hasUrls():
+                if event.type() == QEvent.Type.Drop:
+                    index = watched.tabAt(event.position().toPoint())
+                    if index >= 0:
+                        self.tabs.setCurrentIndex(index)
+                    paths = [Path(url.toLocalFile()) for url in mime_data.urls() if url.isLocalFile()]
+                    if mime_data.hasFormat(FILE_BROWSER_MIME_TYPE):
+                        self._add_from_files_panel(paths)
+                    else:
+                        self._dropped_data_paths(paths)
+                event.acceptProposedAction()
+                return True
+        return super().eventFilter(watched, event)
 
     def _open_data_paths(self, paths: list[Path], *, use_preferred: bool) -> None:
         graph = self._current_graph()
@@ -1491,6 +1718,8 @@ class MainWindow(QMainWindow):
         graph_id: str,
         q_unit: str,
         error_fraction: float,
+        *,
+        replace_series_ids: tuple[str, ...] | None = None,
     ) -> None:
         locations = list(locations)
         if not locations:
@@ -1504,6 +1733,7 @@ class MainWindow(QMainWindow):
             "workers": set(),
             "finished": set(),
             "records": {},
+            "replace_series_ids": replace_series_ids,
         }
         self._load_batches[batch_id] = batch
         for ordinal, location in enumerate(locations):
@@ -1550,39 +1780,28 @@ class MainWindow(QMainWindow):
                         for ordinal in sorted(batch["records"])
                     ]
                     try:
-                        transform = self.controller.transforms.get(
-                            current.graph(graph_id).view_transform_id
-                        )
-                        parameter_rows = []
-                        needs_prompt = False
-                        for dataset in datasets:
-                            initial = {
-                                parameter.id: value
-                                for parameter in transform.parameters
-                                if (value := metadata_parameter(dataset, parameter.id))
-                                is not None
-                            }
-                            needs_prompt |= any(
-                                parameter.required and parameter.id not in initial
-                                for parameter in transform.parameters
+                        accepted, parameters = self._ask_transform_parameters(datasets, graph_id)
+                        if not accepted:
+                            self.statusBar().showMessage("Data import cancelled", 3000)
+                            return
+                        replace_ids = batch["replace_series_ids"]
+                        if replace_ids:
+                            self.controller.validate_series_replacement(
+                                graph_id, replace_ids, datasets, transform_parameters=parameters
                             )
-                            parameter_rows.append((dataset.id, dataset.label, initial))
-                        parameters = None
-                        if needs_prompt:
-                            dialog = SeriesTransformParameterDialog(transform, parameter_rows, self)
-                            if dialog.exec() != dialog.DialogCode.Accepted:
-                                self.statusBar().showMessage("Data import cancelled", 3000)
-                                return
-                            values = dialog.values()
-                            parameters = [values[dataset.id] for dataset in datasets]
-                        self.controller.validate_add_datasets(
-                            datasets, graph_id=graph_id, transform_parameters=parameters
-                        )
-                        self.undo_stack.push(
-                            DatasetImportCommand(self, datasets, graph_id, parameters)
-                        )
+                            command = DatasetImportCommand(
+                                self, datasets, graph_id, parameters, replace_series_ids=replace_ids
+                            )
+                            done = f"Replaced {len(datasets)} series"
+                        else:
+                            self.controller.validate_add_datasets(
+                                datasets, graph_id=graph_id, transform_parameters=parameters
+                            )
+                            command = DatasetImportCommand(self, datasets, graph_id, parameters)
+                            done = f"Loaded {len(datasets)} dataset(s)"
+                        self.undo_stack.push(command)
                         self._pending_graph_renders.add(graph_id)
-                        self.statusBar().showMessage(f"Loaded {len(datasets)} dataset(s)", 5000)
+                        self.statusBar().showMessage(done, 5000)
                     except Exception as exc:
                         QMessageBox.warning(self, "Load error", str(exc))
         if not self._workers:
@@ -1592,6 +1811,36 @@ class MainWindow(QMainWindow):
             self._refresh_dataset_list()
             self._sync_inspector()
             self.statusBar().showMessage("Ready", 2000)
+
+    def _ask_transform_parameters(self, datasets, graph_id: str) -> tuple[bool, list | None]:
+        """View parameters for incoming data: (accepted, per-dataset rows or None).
+
+        Values carried by the data are used as they are; the user is asked
+        only when the graph's view needs one that some dataset lacks.
+        """
+        transform = self.controller.transforms.get(
+            self.controller.workspace.graph(graph_id).view_transform_id
+        )
+        parameter_rows = []
+        needs_prompt = False
+        for dataset in datasets:
+            initial = {
+                parameter.id: value
+                for parameter in transform.parameters
+                if (value := metadata_parameter(dataset, parameter.id)) is not None
+            }
+            needs_prompt |= any(
+                parameter.required and parameter.id not in initial
+                for parameter in transform.parameters
+            )
+            parameter_rows.append((dataset.id, dataset.label, initial))
+        if not needs_prompt:
+            return True, None
+        dialog = SeriesTransformParameterDialog(transform, parameter_rows, self)
+        if dialog.exec() != dialog.DialogCode.Accepted:
+            return False, None
+        values = dialog.values()
+        return True, [values[dataset.id] for dataset in datasets]
 
     def _cancel_loading(self) -> None:
         for worker in self._workers:
@@ -2031,6 +2280,9 @@ class MainWindow(QMainWindow):
             # not workspace data, so never let it make the primary controls
             # disappear on the next launch.
             self._reset_panel_layout()
+            # The File browser may stay closed, but never stranded off-screen.
+            if self.files_dock.isFloating() and not self._on_some_screen(self.files_dock):
+                self._place_files_dock()
 
     def _confirm_discard(self) -> bool:
         if not self.controller.workspace.dirty:
@@ -2050,6 +2302,8 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event: QCloseEvent) -> None:
         for worker in self._workers:
             worker.cancelled = True
+        if self.files_panel.settings_changed:
+            self._save_files_panel_state()
         if self._confirm_discard():
             self._release_workspace_lock()
             event.accept()

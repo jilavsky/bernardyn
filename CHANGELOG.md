@@ -8,6 +8,25 @@ behavior changes.
 
 ### Added
 
+- **File browser** panel: navigate folders (tree, typed path, Back/Up,
+  Favorites and recent folders), pick files and data, and add them to the
+  active graph without a dialog. It docks, tabs, and floats like the other
+  panels (View → Open File Browser, Ctrl+Shift+B) and remembers its place.
+- **Replace selected series** (Ctrl+R in the File browser): new I(Q) data for
+  the series selected in the Data browser, keeping their style, offset,
+  multiplier, Q range, and order; one Undo step. Newly added series are
+  selected, so a wrong file is corrected with "next file, Replace".
+- **Include subfolders** in the File browser and the data selector: lists the
+  first level of subfolders (e.g. USAXS, SAXS, WAXS of one sample) in the
+  background, as `subfolder/file`, with an optional **Group by folder** order.
+  Filter, select all visible, and add every technique at once.
+- Files picked without being shown first (e.g. with **Select all visible**)
+  now use their only I(Q) curve, as the I(Q) list would show.
+- On macOS, floating panels no longer hide when Bernardyn is not the active
+  application.
+- Files dropped on a graph tab are added to that graph.
+- `ApplicationController.replace_series_datasets()` for the same replacement
+  from Python.
 - The Python API, `bernardyn-plot`, and the MCP server can now color curves
   with any **Series presets** choice (`color`, `bw`, `rainbow`, `turbo`,
   `spectral`, `viridis`), hide the legend, fix the X/Y axis range, and set
