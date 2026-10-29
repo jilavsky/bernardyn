@@ -213,6 +213,8 @@ class Plot2DWidget(pg.PlotWidget):
         # are never part of the document, its snapshots, the legend, or any
         # exported image.
         self._preview_snapshots: tuple[PlotSeries, ...] = ()
+        # Per preview curve: drawn solid (a fit) rather than dashed.
+        self._preview_solid: tuple[bool, ...] = ()
         self._preview_items: list[pg.PlotDataItem] = []
         # True while automatic axes were widened to show the preview.
         self._preview_widened = False
@@ -372,9 +374,15 @@ class Plot2DWidget(pg.PlotWidget):
         self._draw_preview(fit_ranges=reset_ranges)
         self._schedule_view_dependent_refresh()
 
-    def set_preview(self, snapshots: tuple[PlotSeries, ...] | list[PlotSeries]) -> None:
-        """Show temporary preview curves (grey, dashed); an empty sequence removes them."""
+    def set_preview(self, snapshots, solid=()) -> None:
+        """Show temporary grey preview curves; an empty sequence removes them.
+
+        Curves are dashed, except those flagged in *solid* (fits), so data and
+        model stay distinguishable without colour.
+        """
         self._preview_snapshots = tuple(snapshots)
+        flags = tuple(bool(flag) for flag in solid)
+        self._preview_solid = flags + (False,) * (len(self._preview_snapshots) - len(flags))
         self._draw_preview(fit_ranges=True)
 
     @property
@@ -386,14 +394,14 @@ class Plot2DWidget(pg.PlotWidget):
         for item in self._preview_items:
             plot.removeItem(item)
         self._preview_items = []
-        for snapshot in self._preview_snapshots:
+        for snapshot, solid in zip(self._preview_snapshots, self._preview_solid, strict=True):
             # No ``name``: the preview never enters the legend.
-            item = pg.PlotDataItem(
-                snapshot.x,
-                snapshot.y,
-                pen=pg.mkPen(QColor(90, 90, 90, 220), width=2, style=Qt.PenStyle.DashLine),
-                connect="finite",
+            pen = (
+                pg.mkPen(QColor(40, 40, 40, 230), width=2.5)
+                if solid
+                else pg.mkPen(QColor(90, 90, 90, 220), width=2, style=Qt.PenStyle.DashLine)
             )
+            item = pg.PlotDataItem(snapshot.x, snapshot.y, pen=pen, connect="finite")
             item.setZValue(1000)
             plot.addItem(item)
             item.setDownsampling(auto=True, method="peak")

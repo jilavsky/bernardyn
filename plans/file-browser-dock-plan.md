@@ -176,6 +176,19 @@ Decisions taken while building it (the original plan follows):
   results carry a token, stale ones are dropped.
 - Add/Replace removes the preview just before queueing the real load.
 
+### Phase 2b — result previews (implemented)
+
+- Data + fit I(Q) previews in an I(Q) graph (a graph holding no typed result
+  curves); fits drawn solid, data dashed.
+- Residuals/distributions preview only in a graph that already shows the same
+  category (`analysis_kind`, e.g. `size_distribution_volume_distribution`).
+  Same analysis is required: Sizes and Modeling distributions are not mixed,
+  as their x quantities may differ.
+- Add (panel and dialog) sends such a kind to that graph instead of a new
+  graph. Replace stays I(Q)-only.
+- Helpers in `gui/dataset_filters.py`: `graph_takes_iq`,
+  `graph_curve_categories`, `result_curve_category`.
+
 ### Original plan
 
 A **Preview** toggle in the File browser: moving through the file list shows

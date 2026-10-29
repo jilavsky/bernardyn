@@ -18,7 +18,6 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFileSystemModel,
     QHBoxLayout,
-    QLabel,
     QLineEdit,
     QMenu,
     QPushButton,
@@ -30,7 +29,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from bernardyn.gui.dialogs import DataSelectorWidget
+from bernardyn.gui.dialogs import DataSelectorWidget, StatusLabel
 from bernardyn.io.sources import ScatteringLocation
 
 #: Folders kept in the Places menu's "Recent" section.
@@ -189,8 +188,7 @@ class FileBrowserPanel(QWidget):
             "the Data browser, keeping their style and position (Ctrl+R)"
         )
         self.replace_button.clicked.connect(self.request_replace)
-        self.message = QLabel(self)
-        self.message.setWordWrap(True)
+        self.message = StatusLabel(parent=self)
         self.message.setObjectName("fileBrowserMessage")
 
         self.splitter = QSplitter(Qt.Orientation.Vertical, self)

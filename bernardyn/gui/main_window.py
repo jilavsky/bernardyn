@@ -64,7 +64,10 @@ from bernardyn.core.units import axis_label
 from bernardyn.gui.dataset_filters import (
     DATASET_FILTERS,
     dataset_category_label,
+    graph_curve_categories,
+    graph_takes_iq,
     matches_dataset_filter,
+    result_curve_category,
 )
 from bernardyn.gui.dialogs import (
     FILE_BROWSER_MIME_TYPE,
@@ -80,7 +83,7 @@ from bernardyn.gui.graph_page import GraphPage, OutputPreviewDialog, PreviewPage
 from bernardyn.gui.inspector import InspectorWidget
 from bernardyn.io.container import ensure_package_suffix, load_package
 from bernardyn.io.igor import export_datasets_to_h5xp
-from bernardyn.io.result_batch import ResultBatch, load_result_batch, survey_results
+from bernardyn.io.result_batch import IQ_KIND, ResultBatch, load_result_batch, survey_results
 from bernardyn.renderers import builtin_renderers
 from bernardyn.state import UserState
 from bernardyn.template.graph_templates import (
@@ -190,19 +193,25 @@ class PreviewSignals(QObject):
 
 
 class PreviewLoadWorker(QRunnable):
-    """Loads the File browser's current file for a preview curve.
+    """Loads the File browser's current file for preview curves.
 
-    Runs on the window's one-thread pool, like every data load: concurrent
-    HDF5 opens over SSHFS-Win fail.
+    Emits ``(dataset, solid)`` pairs: I(Q) data and saved result curves, with
+    fits flagged to be drawn solid.  Runs on the window's one-thread pool,
+    like every data load: concurrent HDF5 opens over SSHFS-Win fail.
     """
 
-    def __init__(self, controller, locations, q_unit, error_fraction, token: int) -> None:
+    def __init__(
+        self, controller, path, locations, results, q_unit, error_fraction, token: int
+    ) -> None:
         super().__init__()
         # The window keeps the worker until it ends, so a queued one can be
         # taken back with QThreadPool.tryTake when the user moves on.
         self.setAutoDelete(False)
         self.controller = controller
+        self.path = Path(path)
         self.locations = tuple(locations)
+        # {analysis: kinds} of saved results to show
+        self.results = dict(results)
         self.q_unit = q_unit
         self.error_fraction = error_fraction
         self.token = token
@@ -210,16 +219,31 @@ class PreviewLoadWorker(QRunnable):
 
     def run(self) -> None:
         try:
-            records = [
-                self.controller.sources.load_location(
-                    location, q_unit=self.q_unit, error_fraction=self.error_fraction
+            items = [
+                (
+                    self.controller.sources.load_location(
+                        location, q_unit=self.q_unit, error_fraction=self.error_fraction
+                    ).to_dataset(),
+                    False,
                 )
                 for location in self.locations
             ]
+            if self.results:
+                survey = survey_results([self.path])
+                for analysis, kinds in self.results.items():
+                    batch = load_result_batch(survey, analysis, kinds)
+                    if batch.skipped and not (batch.iq or batch.curves):
+                        raise ValueError(batch.skipped[0][1])
+                    for _, bundle in batch.iq:
+                        for record in bundle.records:
+                            role = record.metadata["bernardyn_result"]["role"]
+                            items.append((record.to_dataset(), role == "fit"))
+                    for curves in batch.curves.values():
+                        items.extend((bundle.curve, False) for _, bundle in curves)
         except Exception as exc:
-            self.signals.failed.emit(self.token, str(exc))
+            self.signals.failed.emit(self.token, str(exc) or type(exc).__name__)
             return
-        self.signals.loaded.emit(self.token, records)
+        self.signals.loaded.emit(self.token, items)
 
 
 class GraphEditCommand(QUndoCommand):
@@ -1485,14 +1509,23 @@ class MainWindow(QMainWindow):
             return
         graph_id = graph.id
 
+        # A kind the active graph already compares (say a Volume distribution
+        # graph from an earlier import) joins it instead of a new graph.
+        joinable = graph_curve_categories(graph, self.controller.workspace.datasets)
+
         def action() -> None:
             new_graph_ids: list[str] = []
+            joined = False
             for batch in batches:
-                new_graph_ids.extend(self._add_result_batch(graph_id, batch))
-            # Stay on the I(Q) graph that received data + fit; otherwise show
-            # the first comparison graph the import created.
+                created, joined_here = self._add_result_batch(graph_id, batch, joinable)
+                new_graph_ids.extend(created)
+                joined |= joined_here
+            # Stay on the graph that received curves; otherwise show the first
+            # comparison graph the import created.
             any_iq = any(batch.iq for batch in batches)
-            self.controller.workspace.active_graph_id = graph_id if any_iq else new_graph_ids[0]
+            self.controller.workspace.active_graph_id = (
+                graph_id if any_iq or joined or not new_graph_ids else new_graph_ids[0]
+            )
 
         if not self._push_edit(WorkspaceEditCommand(self, "Import pyIrena results", action), "pyIrena results"):
             return
@@ -1501,8 +1534,14 @@ class MainWindow(QMainWindow):
                 self, "pyIrena results", "No checked results were found in:\n\n" + _skipped_text(skipped)
             )
 
-    def _add_result_batch(self, graph_id: str, batch: ResultBatch) -> list[str]:
+    def _add_result_batch(
+        self, graph_id: str, batch: ResultBatch, joinable: set[str] = frozenset()
+    ) -> tuple[list[str], bool]:
         """Add a loaded result batch: I(Q) to the graph, one new graph per other kind.
+
+        A non-I(Q) kind whose category is in *joinable* (the graph already
+        compares it) is added to the graph instead of a new one.  Returns the
+        new graph ids and whether any kind joined the graph.
 
         Across several files each file keeps one colour; within one file,
         components get their own colours as before.
@@ -1536,7 +1575,21 @@ class MainWindow(QMainWindow):
                 ))
             self.controller.add_datasets(datasets, graph_id=graph.id, series_styles=styles)
         new_graph_ids = []
-        for items in batch.curves.values():
+        joined = False
+        for kind, items in batch.curves.items():
+            if result_curve_category(batch.analysis, kind) in joinable:
+                existing = self.controller.workspace.graph(graph_id)
+                base = len(existing.series)
+                self.controller.add_datasets(
+                    tuple(bundle.curve for _, bundle in items),
+                    graph_id=graph_id,
+                    series_styles=tuple(
+                        replace(bundle.style, color=PALETTE[(base + position) % len(PALETTE)])
+                        for position, (_, bundle) in enumerate(items)
+                    ),
+                )
+                joined = True
+                continue
             first = items[0][1]
             target = self.controller.new_graph(title=first.graph_title)
             new_graph_ids.append(target.id)
@@ -1557,7 +1610,7 @@ class MainWindow(QMainWindow):
                     for position, (file_index, bundle) in enumerate(items)
                 ),
             )
-        return new_graph_ids
+        return new_graph_ids, joined
 
     def _dropped_data_paths(self, dropped: list[Path]) -> None:
         """Open dropped files/folders through the normal profile-aware importer."""
@@ -1687,19 +1740,50 @@ class MainWindow(QMainWindow):
             if path is not None:
                 panel.show_message("Preview needs a graph.")
             return
-        locations = panel.selector.selected_locations([Path(path)])
-        if not locations:
-            self._clear_preview()
-            panel.show_message(
-                f"Preview: check the I(Q) data to show from {Path(path).name}."
-                if panel.selector.unresolved_paths([Path(path)])
-                else f"Preview: {Path(path).name} has no I(Q) data to show."
-            )
-            return
+        path = Path(path)
         selector = panel.selector
+        catalog = self.controller.workspace.datasets
+        # I(Q) data (plain or Data + fit) only into an I(Q) graph; residuals
+        # and distributions only into a graph that already compares them.
+        takes_iq = graph_takes_iq(graph, catalog)
+        compared = graph_curve_categories(graph, catalog)
+        locations = selector.selected_locations([path]) if takes_iq else []
+        checked_results = selector.selected_results([path])
+        results = {
+            analysis: shown
+            for analysis, kinds in checked_results.items()
+            if (
+                shown := tuple(
+                    kind
+                    for kind in kinds
+                    if (kind == IQ_KIND and takes_iq)
+                    or (kind != IQ_KIND and result_curve_category(analysis, kind) in compared)
+                )
+            )
+        }
+        if not locations and not results:
+            self._clear_preview()
+            reasons = []
+            if takes_iq and selector.unresolved_paths([path]):
+                reasons.append(f"check the I(Q) data to show from {path.name}.")
+            if checked_results:
+                reasons.append(
+                    "checked results show in a graph that already compares that kind "
+                    "(Data + fit: in an I(Q) graph)."
+                )
+            if not takes_iq:
+                reasons.append(
+                    "this graph shows residuals or distributions; I(Q) data preview in an I(Q) graph."
+                )
+            if not reasons:
+                reasons.append(f"{path.name} has nothing checked to show.")
+            panel.show_message("Preview: " + " Also, ".join(reasons))
+            return
         worker = PreviewLoadWorker(
             self.controller,
+            path,
             locations,
+            results,
             selector.q_unit.currentText(),
             selector.error_fraction.value() / 100.0,
             self._preview_token,
@@ -1710,7 +1794,7 @@ class MainWindow(QMainWindow):
         panel.show_message(f"Preview: loading {Path(path).name}…")
         self.thread_pool.start(worker)
 
-    def _preview_loaded(self, token: int, records) -> None:
+    def _preview_loaded(self, token: int, items) -> None:
         if token != self._preview_token:
             return
         self._preview_worker = None
@@ -1720,20 +1804,22 @@ class MainWindow(QMainWindow):
             return
         if self._preview_page is not page:
             self._clear_preview()
-        self._preview_datasets = [record.to_dataset() for record in records]
+        self._preview_datasets = list(items)
         if self._show_preview(page, graph):
-            names = ", ".join(dataset.label for dataset in self._preview_datasets)
+            names = ", ".join(dataset.label for dataset, _ in self._preview_datasets)
             self.files_panel.show_message(f"Preview: {names}. Add or Replace to keep it.")
 
     def _show_preview(self, page: GraphPage, graph: GraphDocument) -> bool:
         """Draw the loaded preview data in *graph*'s current view."""
+        datasets = [dataset for dataset, _ in self._preview_datasets]
+        solid = [flag for _, flag in self._preview_datasets]
         try:
-            snapshots = self.controller.preview_series(graph.id, self._preview_datasets)
+            snapshots = self.controller.preview_series(graph.id, datasets)
         except ValueError as exc:
             self._clear_preview()
             self.files_panel.show_message(f"Preview not available in this view: {exc}")
             return False
-        if not page.set_preview(snapshots):
+        if not page.set_preview(snapshots, solid):
             self._preview_datasets = []
             self.files_panel.show_message("Preview works in 2D graphs.")
             return False

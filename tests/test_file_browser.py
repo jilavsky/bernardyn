@@ -639,3 +639,123 @@ def test_panels_can_be_dragged_side_by_side_and_tabs_are_visible(window):
     assert options & QMainWindow.DockOption.AllowNestedDocks
     assert options & QMainWindow.DockOption.AllowTabbedDocks
     assert window.tabPosition(Qt.DockWidgetArea.LeftDockWidgetArea) == QTabWidget.TabPosition.North
+
+
+# ------------------------------------------------------------ result previews
+
+RESULTS_FILE = "Al_Mg_Si__40C_0min_0498.h5"
+
+
+def _results_folder(tmp_path) -> Path:
+    folder = tmp_path / "results"
+    folder.mkdir()
+    copy2(TEST_DATA / RESULTS_FILE, folder / "a_first.h5")
+    copy2(TEST_DATA / RESULTS_FILE, folder / "b_second.h5")
+    return folder
+
+
+def _check_results(panel, *keys: str) -> None:
+    panel.selector.adopt_shared_preferences({"result_kinds": list(keys)})
+
+
+def test_graph_categories_tell_iq_graphs_from_distribution_graphs(window):
+    from bernardyn.gui.dataset_filters import (
+        graph_curve_categories,
+        graph_takes_iq,
+        result_curve_category,
+    )
+
+    window._import_result_selection(
+        [TEST_DATA / RESULTS_FILE], {"size_distribution": ("volume_distribution",)}
+    )
+    catalog = window.controller.workspace.datasets
+    iq_graph, distribution_graph = window.controller.workspace.graphs
+    assert graph_takes_iq(iq_graph, catalog)
+    assert not graph_takes_iq(distribution_graph, catalog)
+    assert graph_curve_categories(distribution_graph, catalog) == {
+        result_curve_category("size_distribution", "volume_distribution")
+    }
+
+
+def test_preview_shows_data_and_fit_in_an_iq_graph(window, qapp, tmp_path):
+    panel = window.files_panel
+    panel.navigate(_results_folder(tmp_path))
+    _check_results(panel, "unified_fit/iq")
+    _start_preview(window, qapp, "a_first.h5")
+    renderer = window.tabs.currentWidget().renderer
+    assert len(renderer.preview_labels) >= 2
+    # The fit is solid, the data dashed: distinguishable without colour.
+    assert any(renderer._preview_solid) and not all(renderer._preview_solid)
+    assert window._current_graph().series == ()
+
+
+def test_distribution_preview_needs_a_matching_graph_and_add_joins_it(window, qapp, tmp_path):
+    folder = _results_folder(tmp_path)
+    panel = window.files_panel
+    panel.navigate(folder)
+    _check_results(panel, "size_distribution/volume_distribution")
+
+    # In the empty I(Q) graph a distribution has no place.
+    _start_preview(window, qapp, "a_first.h5")
+    assert window.tabs.currentWidget().renderer.preview_labels == []
+    assert "already compares that kind" in panel.message.text()
+
+    window._import_result_selection(
+        [folder / "a_first.h5"], {"size_distribution": ("volume_distribution",)}
+    )
+    distribution_graph = window._current_graph()
+    assert len(distribution_graph.series) == 1
+    graph_count = len(window.controller.workspace.graphs)
+
+    _select_file(panel, "b_second.h5")
+    panel._emit_preview()
+    _finish_loads(qapp, window)
+    assert window.tabs.currentWidget().renderer.preview_labels != []
+
+    panel.request_add()
+    _finish_loads(qapp, window)
+    assert len(window.controller.workspace.graphs) == graph_count
+    joined = window.controller.workspace.graph(distribution_graph.id)
+    assert len(joined.series) == 2
+    assert joined.series[0].style.color != joined.series[1].style.color
+    assert window._current_graph().id == distribution_graph.id
+    assert window.tabs.currentWidget().renderer.preview_labels == []
+
+
+def test_iq_data_do_not_preview_into_a_distribution_graph(window, qapp, tmp_path):
+    copy2(TEST_DATA / "LnG_0103.hdf", tmp_path / "a.hdf")
+    window._import_result_selection(
+        [TEST_DATA / RESULTS_FILE], {"size_distribution": ("volume_distribution",)}
+    )
+    panel = window.files_panel
+    panel.navigate(tmp_path)
+    _check_results(panel)
+    _start_preview(window, qapp, "a.hdf")
+    assert window.tabs.currentWidget().renderer.preview_labels == []
+    assert "I(Q) data preview in an I(Q) graph" in panel.message.text()
+
+
+def test_status_text_never_resizes_the_panel(qapp, tmp_path):
+    panel = _panel(tmp_path)
+    panel.resize(320, 900)
+    panel.show()
+    qapp.processEvents()
+    width = panel.minimumSizeHint().width()
+    heights = {label: label.height() for label in (
+        panel.message, panel.selector.data_status, panel.selector.results_status,
+        panel.selector.count,
+    )}
+    long_name = "Sample_" + "x" * 300 + "/entry/" + "y" * 200 + "/sasdata.h5"
+    for label in heights:
+        label.setText(f"Preview: {long_name}")
+    qapp.processEvents()
+    assert panel.minimumSizeHint().width() == width
+    for label, height in heights.items():
+        assert label.height() == height
+        label.setText("")
+    qapp.processEvents()
+    assert all(label.height() == height for label, height in heights.items())
+    # Callers see the text they set; the full text is the tooltip.
+    panel.message.setText("Check the I(Q) data to use from b_second.h5.")
+    assert panel.message.text() == "Check the I(Q) data to use from b_second.h5."
+    assert panel.message.toolTip() == panel.message.text()

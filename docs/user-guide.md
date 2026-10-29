@@ -97,6 +97,18 @@ Kratky view), the panel says so instead. Axes left on automatic range widen
 to show the preview and return afterwards; fixed ranges are kept. Preview
 works in 2D graphs.
 
+Checked **saved pyIrena results** preview too:
+
+- **Data + fit I(Q)** previews in an I(Q) graph: the data dashed, the fit
+  solid.
+- **Residuals and distributions** preview only in a graph that already shows
+  that kind from the same analysis, for example a Size Distribution volume
+  distribution graph made by an earlier import. Make that graph active and
+  move through the files to compare their distributions. **Add to graph**
+  then adds the curve to that graph instead of creating another one; with any
+  other graph active, Add makes a new comparison graph as before.
+- I(Q) data never preview into a residual or distribution graph.
+
 The panel is an ordinary panel: drag its title to dock it elsewhere, or float
 it onto another monitor. On macOS, floating panels stay visible when you
 switch to another application. Close it with its × button; reopen it with

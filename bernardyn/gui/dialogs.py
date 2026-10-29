@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QSplitter,
     QTableWidget,
@@ -61,6 +62,43 @@ from bernardyn.io.file_browser import (
 )
 from bernardyn.io.result_batch import IQ_KIND, kind_label
 from bernardyn.io.sources import ScatteringLocation
+
+
+class StatusLabel(QLabel):
+    """A status line whose text never resizes the panel around it.
+
+    A word-wrapping label is at least as wide as its longest unbreakable word,
+    so a long file name or HDF5 path used to widen the dock, and the panel
+    jumped back when the text changed.  This label takes whatever width the
+    layout gives it, reserves a fixed number of lines, may break after ``/``,
+    ``\\`` and ``_``, and shows the full text as its tooltip when clipped.
+    ``text()`` returns the text as set.
+    """
+
+    _BREAK_AFTER = ("/", "\\", "_")
+
+    def __init__(self, text: str = "", parent=None, *, lines: int = 2) -> None:
+        super().__init__(parent)
+        self._plain = ""
+        self.setWordWrap(True)
+        self.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        self.setMinimumWidth(1)
+        self.setFixedHeight(self.fontMetrics().lineSpacing() * lines + 4)
+        self.setText(text)
+
+    def setText(self, text: str) -> None:  # noqa: N802 - Qt API
+        self._plain = str(text)
+        shown = self._plain
+        for mark in self._BREAK_AFTER:
+            # A zero-width space is a line-break opportunity for Qt's layout.
+            shown = shown.replace(mark, mark + "\u200b")
+        super().setText(shown)
+        self.setToolTip(self._plain)
+
+    def text(self) -> str:
+        return self._plain
+
 
 #: Marks a drag that started in the File browser, so a drop adds the files
 #: with the browser's current choices instead of opening the data dialog.
@@ -180,7 +218,7 @@ class DataSelectorWidget(QWidget):
         self.filter.setPlaceholderText(FILTER_PLACEHOLDER)
         self.filter.setToolTip(FILTER_TOOLTIP)
         self.filter.setClearButtonEnabled(True)
-        self.count = QLabel(self)
+        self.count = StatusLabel(parent=self)
         self.file_list = _FileListWidget(self)
         self.file_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.file_list.currentItemChanged.connect(self._file_selected)
@@ -189,16 +227,14 @@ class DataSelectorWidget(QWidget):
         self.data_list = QListWidget(self)
         self.data_list.itemChanged.connect(self._data_selection_changed)
         self.data_list.setToolTip("Check one or more 1-D data sets to load from the selected file.")
-        self.data_status = QLabel("Select a file to inspect its 1-D data.", self)
-        self.data_status.setWordWrap(True)
+        self.data_status = StatusLabel("Select a file to inspect its 1-D data.", self)
         self.results_list = QListWidget(self)
         self.results_list.itemChanged.connect(self._result_selection_changed)
         self.results_list.setToolTip(
             "Check saved results to add. A checked kind is added from every selected file "
             "that stores it."
         )
-        self.results_status = QLabel(self)
-        self.results_status.setWordWrap(True)
+        self.results_status = StatusLabel(parent=self)
         self.q_unit = QComboBox(self)
         self.q_unit.addItems(["1/A", "1/nm", "1/pm", "1/um", "1/mm"])
         self.error_fraction = QDoubleSpinBox(self)

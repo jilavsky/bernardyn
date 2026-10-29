@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from bernardyn.core.models import Dataset, GenericCurve
+from bernardyn.core.models import Dataset, GenericCurve, GraphDocument
 
 # The stable ids, rather than visible labels, are kept in Qt item data.  This
 # makes a saved result's scientific role available in both places that list
@@ -92,3 +92,29 @@ def matches_dataset_filter(dataset: Dataset | GenericCurve, filter_id: str) -> b
     if filter_id == "sas":
         return category is None
     return category == filter_id
+
+
+def result_curve_category(analysis: str, kind: str) -> str:
+    """Category that :func:`result_category` gives a saved curve of this kind.
+
+    For the non-I(Q) kinds (residuals, distributions), e.g.
+    ``("size_distribution", "volume_distribution")``.
+    """
+    return f"{analysis}_{kind}"
+
+
+def graph_curve_categories(
+    graph: GraphDocument, datasets: Mapping[str, Dataset | GenericCurve]
+) -> set[str]:
+    """Categories of the typed result curves (residuals, distributions) a graph shows."""
+    categories: set[str] = set()
+    for view in graph.series:
+        dataset = datasets.get(view.dataset_id)
+        if isinstance(dataset, GenericCurve) and (category := result_category(dataset)):
+            categories.add(category)
+    return categories
+
+
+def graph_takes_iq(graph: GraphDocument, datasets: Mapping[str, Dataset | GenericCurve]) -> bool:
+    """Whether I(Q) data belong in *graph*: it shows no residuals or distributions."""
+    return not any(isinstance(datasets.get(view.dataset_id), GenericCurve) for view in graph.series)

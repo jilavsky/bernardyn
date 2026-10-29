@@ -29,6 +29,12 @@ behavior changes.
   or replaced. The preview is never saved, undone, put in the legend, or
   exported; automatic axes widen to show it. Loads are debounced and run one
   at a time with the other data loads.
+- Preview also shows checked saved results: Data + fit in an I(Q) graph (fit
+  solid, data dashed), and residuals or distributions in a graph that already
+  shows that kind from the same analysis.
+- Adding saved residuals or distributions while a graph that already shows
+  that kind is active now adds them to it, instead of creating another
+  comparison graph (File browser and data selector alike).
 - `ApplicationController.preview_series()` resolves data as a graph would
   show them without adding them.
 - Files dropped on a graph tab are added to that graph.
