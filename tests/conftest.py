@@ -1,3 +1,4 @@
+import faulthandler
 import os
 import sys
 
@@ -7,6 +8,19 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 # Exit status recorded at session end, used by pytest_unconfigure below.
 _EXIT_STATUS = 0
+
+
+#: A single test running longer than this is stuck (they take well under a
+#: second).  Print every thread's stack and end the run, instead of hanging
+#: silently; a rare hang was seen locally but could not be reproduced.
+TEST_WATCHDOG_SECONDS = 60
+
+
+@pytest.fixture(autouse=True)
+def _hang_watchdog():
+    faulthandler.dump_traceback_later(TEST_WATCHDOG_SECONDS, exit=True)
+    yield
+    faulthandler.cancel_dump_traceback_later()
 
 
 @pytest.fixture(scope="session")

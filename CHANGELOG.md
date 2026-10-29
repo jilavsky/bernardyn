@@ -24,6 +24,13 @@ behavior changes.
   now use their only I(Q) curve, as the I(Q) list would show.
 - On macOS, floating panels no longer hide when Bernardyn is not the active
   application.
+- **Preview in graph** (File browser): the current file is shown as a grey
+  dashed curve in the active graph, in its current view, until it is added
+  or replaced. The preview is never saved, undone, put in the legend, or
+  exported; automatic axes widen to show it. Loads are debounced and run one
+  at a time with the other data loads.
+- `ApplicationController.preview_series()` resolves data as a graph would
+  show them without adding them.
 - Files dropped on a graph tab are added to that graph.
 - `ApplicationController.replace_series_datasets()` for the same replacement
   from Python.

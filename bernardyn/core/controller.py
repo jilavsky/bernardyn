@@ -581,6 +581,42 @@ class ApplicationController:
         snapshots = self._resolve_graph(candidate, datasets)
         return graph, candidate, additions, snapshots
 
+    def preview_series(
+        self, graph_id: str, datasets: Iterable[Dataset | GenericCurve]
+    ) -> tuple[PlotSeries, ...]:
+        """Resolve datasets as the graph would show them, without adding them.
+
+        Uses the graph's view and the parameters each dataset carries; raises
+        ``ValueError`` (with the transform's own message) when the view needs a
+        value the data lack.  Nothing in the workspace changes.
+        """
+        graph = self.workspace.graph(graph_id)
+        resolved: list[PlotSeries] = []
+        for dataset in datasets:
+            view = SeriesView(
+                dataset_id=dataset.id,
+                legend_label=dataset.label,
+                transform_id=graph.view_transform_id,
+                transform_parameters=self._default_parameters(dataset, graph.view_transform_id),
+            )
+            if isinstance(dataset, GenericCurve):
+                resolved.append(
+                    self._resolve_generic_curve(
+                        dataset, view, x_log=graph.x_axis.log, y_log=graph.y_axis.log
+                    )
+                )
+            else:
+                resolved.append(
+                    resolve_series(
+                        dataset,
+                        view,
+                        self.transforms,
+                        x_log=graph.x_axis.log,
+                        y_log=graph.y_axis.log,
+                    )
+                )
+        return tuple(resolved)
+
     def update_graph(self, graph: GraphDocument, *, recompute: bool = False) -> None:
         snapshots = self.validate_graph_update(graph, recompute=recompute)
         # All potentially failing work happens above this line.  The document,

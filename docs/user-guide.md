@@ -85,6 +85,18 @@ Newly added series are selected in the Data browser, so a wrong file is
 fixed with: **↓** to the next file, then **Replace selected series**. Repeat
 until it is the right one.
 
+**Preview in graph** shows the current file as a grey dashed curve in the
+active graph while you move through the list (it appears after a short
+pause, so moving quickly loads only the file you stop on). Nothing changes
+until you press **Add to graph** or **Replace selected series**: the preview
+is not a series, is not in the legend, is not saved, cannot be undone, and
+never appears in exported or printed images. It uses the I(Q) data checked
+for that file's layout and the graph's current view; when the view needs a
+value the file does not store (for example I₀ and Rg for the dimensionless
+Kratky view), the panel says so instead. Axes left on automatic range widen
+to show the preview and return afterwards; fixed ranges are kept. Preview
+works in 2D graphs.
+
 The panel is an ordinary panel: drag its title to dock it elsewhere, or float
 it onto another monitor. On macOS, floating panels stay visible when you
 switch to another application. Close it with its × button; reopen it with

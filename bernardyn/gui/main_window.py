@@ -182,6 +182,46 @@ class SourceLoadWorker(QRunnable):
             self.signals.finished.emit(self)
 
 
+class PreviewSignals(QObject):
+    # (token, loaded records)
+    loaded = Signal(int, object)
+    # (token, message)
+    failed = Signal(int, str)
+
+
+class PreviewLoadWorker(QRunnable):
+    """Loads the File browser's current file for a preview curve.
+
+    Runs on the window's one-thread pool, like every data load: concurrent
+    HDF5 opens over SSHFS-Win fail.
+    """
+
+    def __init__(self, controller, locations, q_unit, error_fraction, token: int) -> None:
+        super().__init__()
+        # The window keeps the worker until it ends, so a queued one can be
+        # taken back with QThreadPool.tryTake when the user moves on.
+        self.setAutoDelete(False)
+        self.controller = controller
+        self.locations = tuple(locations)
+        self.q_unit = q_unit
+        self.error_fraction = error_fraction
+        self.token = token
+        self.signals = PreviewSignals()
+
+    def run(self) -> None:
+        try:
+            records = [
+                self.controller.sources.load_location(
+                    location, q_unit=self.q_unit, error_fraction=self.error_fraction
+                )
+                for location in self.locations
+            ]
+        except Exception as exc:
+            self.signals.failed.emit(self.token, str(exc))
+            return
+        self.signals.loaded.emit(self.token, records)
+
+
 class GraphEditCommand(QUndoCommand):
     def __init__(self, window, before: GraphDocument, after: GraphDocument, recompute: bool, text: str):
         super().__init__(text)
@@ -381,6 +421,11 @@ class MainWindow(QMainWindow):
         self._next_load_batch_id = 0
         self._output_previews: list[OutputPreviewDialog] = []
         self._pending_graph_renders: set[str] = set()
+        # File browser preview: the newest request wins; older results are dropped.
+        self._preview_token = 0
+        self._preview_worker: PreviewLoadWorker | None = None
+        self._preview_page: GraphPage | None = None
+        self._preview_datasets: list = []
         self._refreshing_dataset_list = False
         self._startup_restore_pending = True
         self.user_state = UserState()
@@ -433,6 +478,16 @@ class MainWindow(QMainWindow):
         )
 
     def _build_docks(self) -> None:
+        # Qt's default allows tabbing panels but not nesting, so the File
+        # browser and the Data browser could be placed side by side only by
+        # code (Reset panel layout), never by dragging.  Tabs go on top, where
+        # a panel tabbed behind another is easy to see.
+        self.setDockOptions(
+            QMainWindow.DockOption.AnimatedDocks
+            | QMainWindow.DockOption.AllowTabbedDocks
+            | QMainWindow.DockOption.AllowNestedDocks
+        )
+        self.setTabPosition(Qt.DockWidgetArea.AllDockWidgetAreas, QTabWidget.TabPosition.North)
         self.datasets_dock = QDockWidget("Data browser — active graph", self)
         self.datasets_dock.setObjectName("datasetsDock")
         data_widget = QWidget(self.datasets_dock)
@@ -491,6 +546,7 @@ class MainWindow(QMainWindow):
             lambda paths: self._add_from_files_panel(paths, replace_selected=True)
         )
         self.files_panel.stateChanged.connect(self._save_files_panel_state)
+        self.files_panel.previewRequested.connect(self._preview_file)
         self.files_dock.setWidget(self.files_panel)
         self.files_dock.setMinimumWidth(300)
         self._place_files_dock()
@@ -990,6 +1046,9 @@ class MainWindow(QMainWindow):
             self.controller.workspace.active_graph_id = page.graph_id
         self._refresh_dataset_list()
         self._sync_inspector()
+        # The preview belongs to the graph you are looking at.
+        if self._preview_page is not None:
+            self.files_panel.schedule_preview()
 
     def _rebuild_tabs(self) -> None:
         # Removing and adding tabs emits currentChanged, which records each
@@ -1141,6 +1200,7 @@ class MainWindow(QMainWindow):
                 in (self.controller.read_only_graphs | self.controller.preview_only_graphs)
             ),
         )
+        self._refresh_preview()
 
     def _queue_graph_change(self, graph: GraphDocument, recompute: bool, text: str) -> None:
         try:
@@ -1596,6 +1656,7 @@ class MainWindow(QMainWindow):
                 )
                 return
             panel.show_message("")
+            self._end_preview()
             self._queue_locations(
                 locations, graph.id, q_unit, error_fraction, replace_series_ids=series_ids
             )
@@ -1604,12 +1665,108 @@ class MainWindow(QMainWindow):
             report(problem[1])
             return
         panel.show_message("")
+        self._end_preview()
         locations = selector.selected_locations(paths)
         if locations:
             self._queue_locations(locations, graph.id, q_unit, error_fraction)
         results = selector.selected_results(paths)
         if results:
             self._import_result_selection(paths, results)
+
+    def _preview_file(self, path: Path | None) -> None:
+        """Show *path*'s checked I(Q) data as a temporary curve in the active graph."""
+        self._preview_token += 1
+        if self._preview_worker is not None:
+            self.thread_pool.tryTake(self._preview_worker)
+            self._preview_worker = None
+        panel = self.files_panel
+        page = self._current_page()
+        graph = self._current_graph()
+        if path is None or not isinstance(page, GraphPage) or graph is None:
+            self._clear_preview()
+            if path is not None:
+                panel.show_message("Preview needs a graph.")
+            return
+        locations = panel.selector.selected_locations([Path(path)])
+        if not locations:
+            self._clear_preview()
+            panel.show_message(
+                f"Preview: check the I(Q) data to show from {Path(path).name}."
+                if panel.selector.unresolved_paths([Path(path)])
+                else f"Preview: {Path(path).name} has no I(Q) data to show."
+            )
+            return
+        selector = panel.selector
+        worker = PreviewLoadWorker(
+            self.controller,
+            locations,
+            selector.q_unit.currentText(),
+            selector.error_fraction.value() / 100.0,
+            self._preview_token,
+        )
+        worker.signals.loaded.connect(self._preview_loaded)
+        worker.signals.failed.connect(self._preview_failed)
+        self._preview_worker = worker
+        panel.show_message(f"Preview: loading {Path(path).name}…")
+        self.thread_pool.start(worker)
+
+    def _preview_loaded(self, token: int, records) -> None:
+        if token != self._preview_token:
+            return
+        self._preview_worker = None
+        page = self._current_page()
+        graph = self._current_graph()
+        if not isinstance(page, GraphPage) or graph is None:
+            return
+        if self._preview_page is not page:
+            self._clear_preview()
+        self._preview_datasets = [record.to_dataset() for record in records]
+        if self._show_preview(page, graph):
+            names = ", ".join(dataset.label for dataset in self._preview_datasets)
+            self.files_panel.show_message(f"Preview: {names}. Add or Replace to keep it.")
+
+    def _show_preview(self, page: GraphPage, graph: GraphDocument) -> bool:
+        """Draw the loaded preview data in *graph*'s current view."""
+        try:
+            snapshots = self.controller.preview_series(graph.id, self._preview_datasets)
+        except ValueError as exc:
+            self._clear_preview()
+            self.files_panel.show_message(f"Preview not available in this view: {exc}")
+            return False
+        if not page.set_preview(snapshots):
+            self._preview_datasets = []
+            self.files_panel.show_message("Preview works in 2D graphs.")
+            return False
+        self._preview_page = page
+        return True
+
+    def _refresh_preview(self) -> None:
+        """Follow view and axis changes of the previewed graph without reloading."""
+        page = self._current_page()
+        graph = self._current_graph()
+        if page is self._preview_page and graph is not None and self._preview_datasets:
+            self._show_preview(page, graph)
+
+    def _end_preview(self) -> None:
+        """The real series replaces the preview of the same data."""
+        self._preview_token += 1
+        self._clear_preview()
+
+    def _preview_failed(self, token: int, message: str) -> None:
+        if token != self._preview_token:
+            return
+        self._preview_worker = None
+        self._clear_preview()
+        self.files_panel.show_message(f"Preview failed: {message}")
+
+    def _clear_preview(self) -> None:
+        self._preview_datasets = []
+        if self._preview_page is not None:
+            try:
+                self._preview_page.set_preview(())
+            except RuntimeError:
+                pass  # the tab was closed and its widgets deleted
+            self._preview_page = None
 
     def _remember_files_choices(self, folder: Path) -> None:
         """Share the File browser's choices with the data dialog and keep its place."""

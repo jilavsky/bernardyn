@@ -319,6 +319,11 @@ class DataSelectorWidget(QWidget):
         self._populate_data_list()
         self._populate_results_list()
 
+    @property
+    def current_path(self) -> Path | None:
+        """The file whose contents the I(Q) and results lists show."""
+        return self._current_path
+
     def set_folder(self, folder: Path) -> None:
         """List another folder; learned layout choices are kept."""
         self.folder = Path(folder)

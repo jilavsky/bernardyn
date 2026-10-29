@@ -479,3 +479,163 @@ def test_add_the_same_sample_from_every_technique_at_once(window, qapp, tmp_path
     _finish_loads(qapp, window)
     assert len(window._current_graph().series) == 2
     assert window.undo_stack.count() == 1
+
+
+# ------------------------------------------------------------------- preview
+
+
+def test_preview_series_resolves_without_changing_the_workspace():
+    controller = ApplicationController()
+    graph_id = controller.workspace.graphs[0].id
+    dataset = _dataset("candidate")
+    before = (controller.workspace.graphs[0], dict(controller.workspace.datasets), controller.workspace.dirty)
+    (snapshot,) = controller.preview_series(graph_id, [dataset])
+    assert snapshot.label == "candidate"
+    assert len(snapshot.x) == 3
+    assert (controller.workspace.graphs[0], dict(controller.workspace.datasets), controller.workspace.dirty) == before
+    controller.set_transform(graph_id, "dimensionless_kratky", {"I0": 1.0, "Rg": 10.0})
+    with pytest.raises(ValueError, match="requires"):
+        controller.preview_series(graph_id, [dataset])
+
+
+def test_renderer_preview_is_temporary_and_never_exported(qapp):
+    from bernardyn.renderers.plot2d import Plot2DWidget
+
+    controller = ApplicationController()
+    controller.add_datasets([_dataset("real")])
+    graph = controller.workspace.graphs[0]
+    widget = Plot2DWidget()
+    widget.render(graph, controller.snapshots[graph.id])
+    preview = controller.preview_series(graph.id, [_dataset("candidate", 2.0)])
+    widget.set_preview(preview)
+    assert widget.preview_labels == ["candidate"]
+    assert len(widget._preview_items) == 1
+    # Never in the legend.
+    assert [label.text for _, label in widget._legend.items] == ["real"]
+    # A full re-render (any graph edit) keeps the preview.
+    widget.render(graph, controller.snapshots[graph.id])
+    assert len(widget._preview_items) == 1
+    assert widget._preview_items[0] in widget.getPlotItem().items
+    with widget._preview_hidden():
+        assert not widget._preview_items[0].isVisible()
+    assert widget._preview_items[0].isVisible()
+    widget.set_preview(())
+    assert widget._preview_items == []
+    assert list(widget._snapshots) == [graph.series[0].id]
+
+
+def _start_preview(window, qapp, name: str) -> None:
+    panel = window.files_panel
+    panel.preview_box.setChecked(True)
+    _select_file(panel, name)
+    panel._emit_preview()  # skip the typing pause
+    _finish_loads(qapp, window)
+
+
+def test_preview_shows_the_current_file_until_it_is_added(window, qapp, tmp_path):
+    copy2(TEST_DATA / "LnG_0103.hdf", tmp_path / "a.hdf")
+    copy2(TEST_DATA / "Rh1_0085.h5", tmp_path / "b.h5")
+    panel = window.files_panel
+    panel.navigate(tmp_path)
+    window.controller.workspace.dirty = False
+
+    _start_preview(window, qapp, "a.hdf")
+    page = window.tabs.currentWidget()
+    assert page.renderer.preview_labels == ["LnG"]
+    assert window._current_graph().series == ()
+    assert window.undo_stack.count() == 0
+    assert not window.controller.workspace.dirty
+    assert "Add or Replace to keep it" in panel.message.text()
+
+    # Two curves and no remembered choice: say what is needed, show nothing.
+    _select_file(panel, "b.h5")
+    panel._emit_preview()
+    _finish_loads(qapp, window)
+    assert page.renderer.preview_labels == []
+    assert "check the I(Q) data" in panel.message.text()
+
+    _select_file(panel, "a.hdf")
+    panel._emit_preview()
+    _finish_loads(qapp, window)
+    panel.request_add()
+    _finish_loads(qapp, window)
+    assert page.renderer.preview_labels == []
+    assert len(window._current_graph().series) == 1
+
+    panel.preview_box.setChecked(False)
+    assert page.renderer.preview_labels == []
+
+
+def test_preview_follows_the_view_and_the_active_tab(window, qapp, tmp_path):
+    copy2(TEST_DATA / "LnG_0103.hdf", tmp_path / "a.hdf")
+    window.files_panel.navigate(tmp_path)
+    _start_preview(window, qapp, "a.hdf")
+    page = window.tabs.currentWidget()
+    raw_x = page.renderer._preview_snapshots[0].x.copy()
+
+    graph_id = window._current_graph().id
+    window.controller.set_transform(graph_id, "kratky")
+    window._render_graph(graph_id)
+    window._sync_inspector()
+    assert page.renderer.preview_labels == ["LnG"]
+    assert page.renderer._preview_snapshots[0].x is not raw_x
+
+    window.controller.set_transform(graph_id, "dimensionless_kratky", {"I0": 1.0, "Rg": 10.0})
+    window._sync_inspector()
+    assert page.renderer.preview_labels == []
+    assert "not available in this view" in window.files_panel.message.text()
+
+    window._new_graph("plot2d")
+    _finish_loads(qapp, window)
+    window.files_panel._preview_timer.stop()
+    window.files_panel._emit_preview()
+    _finish_loads(qapp, window)
+    assert window.tabs.currentWidget().renderer.preview_labels == ["LnG"]
+
+
+def test_a_stale_preview_result_is_ignored(window, qapp, tmp_path):
+    copy2(TEST_DATA / "LnG_0103.hdf", tmp_path / "a.hdf")
+    window.files_panel.navigate(tmp_path)
+    _start_preview(window, qapp, "a.hdf")
+    page = window.tabs.currentWidget()
+    window._preview_loaded(window._preview_token - 1, [])
+    assert page.renderer.preview_labels == ["LnG"]
+    window._preview_file(None)
+    assert page.renderer.preview_labels == []
+
+
+def test_preview_widens_automatic_axes_and_restores_them(qapp):
+    from bernardyn.renderers.plot2d import Plot2DWidget
+
+    controller = ApplicationController()
+    controller.add_datasets([_dataset("real")])
+    graph = controller.workspace.graphs[0]
+    widget = Plot2DWidget()
+    widget.render(graph, controller.snapshots[graph.id])
+    view_box = widget.getPlotItem().getViewBox()
+    original = view_box.viewRange()
+    wide = Dataset(q=[0.001, 0.5, 2.0], intensity=[1e6, 1.0, 1e-3], label="WAXS-like")
+    widget.set_preview(controller.preview_series(graph.id, [wide]))
+    x_range, y_range = view_box.viewRange()
+    assert x_range[0] < original[0][0] and x_range[1] > original[0][1]
+    assert y_range[0] < original[1][0] and y_range[1] > original[1][1]
+    widget.set_preview(())
+    for restored, expected in zip(view_box.viewRange(), original, strict=True):
+        assert restored == pytest.approx(expected)
+
+    # A fixed range is the user's choice and is kept.
+    fixed = replace(graph, x_axis=replace(graph.x_axis, auto_range=False, minimum=0.01, maximum=0.03))
+    controller.update_graph(fixed)
+    widget.render(fixed, controller.snapshots[graph.id])
+    before = view_box.viewRange()[0]
+    widget.set_preview(controller.preview_series(graph.id, [wide]))
+    assert view_box.viewRange()[0] == pytest.approx(before)
+
+
+def test_panels_can_be_dragged_side_by_side_and_tabs_are_visible(window):
+    from PySide6.QtWidgets import QMainWindow, QTabWidget
+
+    options = window.dockOptions()
+    assert options & QMainWindow.DockOption.AllowNestedDocks
+    assert options & QMainWindow.DockOption.AllowTabbedDocks
+    assert window.tabPosition(Qt.DockWidgetArea.LeftDockWidgetArea) == QTabWidget.TabPosition.North

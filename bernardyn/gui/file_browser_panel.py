@@ -14,6 +14,7 @@ from pathlib import Path
 from PySide6.QtCore import QDir, Qt, QTimer, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
+    QCheckBox,
     QFileDialog,
     QFileSystemModel,
     QHBoxLayout,
@@ -59,6 +60,12 @@ class FileBrowserPanel(QWidget):
     replaceRequested = Signal(object)
     #: Something worth persisting changed (folder, favorites).
     stateChanged = Signal()
+    #: File to preview in the active graph, or None to remove the preview.
+    previewRequested = Signal(object)
+
+    #: Pause before previewing, so moving quickly through the list loads
+    #: only the file you stop on.
+    PREVIEW_DELAY_MS = 300
 
     def __init__(
         self,
@@ -159,6 +166,19 @@ class FileBrowserPanel(QWidget):
         self.options_toggle.toggled.connect(self._show_options)
         self.options_toggle.setChecked(bool(stored.get("options_open", False)))
         self._show_options(self.options_toggle.isChecked())
+        self.preview_box = QCheckBox("Preview in graph", self)
+        self.preview_box.setToolTip(
+            "Show the current file as a grey dashed curve in the active graph while you move "
+            "through the list. Add to graph or Replace keeps it; nothing else changes the graph."
+        )
+        self.preview_box.setChecked(bool(stored.get("preview", False)))
+        self._preview_timer = QTimer(self)
+        self._preview_timer.setSingleShot(True)
+        self._preview_timer.setInterval(self.PREVIEW_DELAY_MS)
+        self._preview_timer.timeout.connect(self._emit_preview)
+        self.preview_box.toggled.connect(self._preview_toggled)
+        self.selector.file_list.currentItemChanged.connect(self.schedule_preview)
+        self.selector.data_list.itemChanged.connect(self.schedule_preview)
 
         self.add_button = QPushButton("Add to graph", self)
         self.add_button.setToolTip("Add the checked data of the selected files to the active graph (Enter)")
@@ -192,7 +212,11 @@ class FileBrowserPanel(QWidget):
         layout.setContentsMargins(6, 6, 6, 6)
         layout.addLayout(navigation)
         layout.addWidget(self.splitter, 1)
-        layout.addWidget(self.options_toggle, 0, Qt.AlignmentFlag.AlignLeft)
+        options_row = QHBoxLayout()
+        options_row.addWidget(self.options_toggle)
+        options_row.addStretch()
+        options_row.addWidget(self.preview_box)
+        layout.addLayout(options_row)
         layout.addLayout(buttons)
         layout.addWidget(self.message)
 
@@ -212,6 +236,7 @@ class FileBrowserPanel(QWidget):
             self.selector.filter.textEdited,
             self.splitter.splitterMoved,
             self.options_toggle.toggled,
+            self.preview_box.toggled,
         ):
             signal.connect(self._mark_settings_changed)
         self._update_navigation()
@@ -249,6 +274,7 @@ class FileBrowserPanel(QWidget):
             "filter": preferences["filter"],
             "splitter": [int(size) for size in self.splitter.sizes()],
             "options_open": self.options_toggle.isChecked(),
+            "preview": self.preview_box.isChecked(),
         }
 
     def show_message(self, text: str) -> None:
@@ -379,6 +405,23 @@ class FileBrowserPanel(QWidget):
     def _show_options(self, shown: bool) -> None:
         self.selector.options_widget.setVisible(shown)
         self.options_toggle.setArrowType(Qt.ArrowType.DownArrow if shown else Qt.ArrowType.RightArrow)
+
+    def schedule_preview(self, *_args) -> None:
+        """Preview the current file after a short pause (if Preview is on)."""
+        if self.preview_box.isChecked():
+            self._preview_timer.start()
+
+    def _preview_toggled(self, shown: bool) -> None:
+        if shown:
+            self._emit_preview()
+        else:
+            self._preview_timer.stop()
+            self.previewRequested.emit(None)
+
+    def _emit_preview(self) -> None:
+        self.previewRequested.emit(
+            self.selector.current_path if self.preview_box.isChecked() else None
+        )
 
     def request_add(self) -> None:
         self.addRequested.emit(self.selector.selected_paths())

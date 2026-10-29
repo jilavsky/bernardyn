@@ -159,7 +159,24 @@ section, the Add → ↓ → Replace loop).
 - macOS: `WA_MacAlwaysShowToolWindow` on the docks keeps floating panels
   visible when the app is inactive.
 
-## Phase 2 — Preview (planned, not started)
+## Phase 2 — Preview (implemented)
+
+Decisions taken while building it (the original plan follows):
+
+- Preview is drawn in the graph's *current* view, with the parameters the
+  file carries; a view that needs more (dimensionless Kratky: I0, Rg) shows a
+  message instead. It follows later view/axis changes without reloading.
+- Automatic axes widen to include the preview and are restored when it goes;
+  fixed ranges are untouched. Autoscale includes an active preview.
+- `Plot2DWidget.set_preview()` keeps the curves apart from the document,
+  snapshots, and legend, re-adds them after every render, and hides them in
+  every image capture (export, clipboard, print, package thumbnail). CSV/ITX
+  export reads snapshots, so it never sees them. Other renderers: message.
+- A newer request takes a queued older load back (`QThreadPool.tryTake`);
+  results carry a token, stale ones are dropped.
+- Add/Replace removes the preview just before queueing the real load.
+
+### Original plan
 
 A **Preview** toggle in the File browser: moving through the file list shows
 the current file as a temporary, distinct (dashed, grey) curve in the active

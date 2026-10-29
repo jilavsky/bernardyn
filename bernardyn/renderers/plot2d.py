@@ -209,6 +209,13 @@ class Plot2DWidget(pg.PlotWidget):
         # reported rather than silently truncating the rest of the plot.
         self.render_warnings: list[str] = []
         self._annotation_items: list[tuple[Annotation, object]] = []
+        # File browser preview: temporary curves drawn over the graph.  They
+        # are never part of the document, its snapshots, the legend, or any
+        # exported image.
+        self._preview_snapshots: tuple[PlotSeries, ...] = ()
+        self._preview_items: list[pg.PlotDataItem] = []
+        # True while automatic axes were widened to show the preview.
+        self._preview_widened = False
 
     def render(self, graph: GraphDocument, snapshots: Mapping[str, PlotSeries]) -> None:
         previous_graph = self._graph
@@ -360,7 +367,61 @@ class Plot2DWidget(pg.PlotWidget):
             self._review_annotations(graph)
         except Exception:  # pragma: no cover - diagnostics must never break a plot
             log.exception("Could not review annotation placement")
+        # plot.clear() above removed the preview curves; draw them again.
+        self._preview_items = []
+        self._draw_preview(fit_ranges=reset_ranges)
         self._schedule_view_dependent_refresh()
+
+    def set_preview(self, snapshots: tuple[PlotSeries, ...] | list[PlotSeries]) -> None:
+        """Show temporary preview curves (grey, dashed); an empty sequence removes them."""
+        self._preview_snapshots = tuple(snapshots)
+        self._draw_preview(fit_ranges=True)
+
+    @property
+    def preview_labels(self) -> list[str]:
+        return [snapshot.label for snapshot in self._preview_snapshots]
+
+    def _draw_preview(self, *, fit_ranges: bool) -> None:
+        plot = self.getPlotItem()
+        for item in self._preview_items:
+            plot.removeItem(item)
+        self._preview_items = []
+        for snapshot in self._preview_snapshots:
+            # No ``name``: the preview never enters the legend.
+            item = pg.PlotDataItem(
+                snapshot.x,
+                snapshot.y,
+                pen=pg.mkPen(QColor(90, 90, 90, 220), width=2, style=Qt.PenStyle.DashLine),
+                connect="finite",
+            )
+            item.setZValue(1000)
+            plot.addItem(item)
+            item.setDownsampling(auto=True, method="peak")
+            item.setClipToView(True)
+            self._preview_items.append(item)
+        graph = self._graph
+        if not fit_ranges or graph is None:
+            return
+        if self._preview_snapshots:
+            # Automatic axes widen to show the preview (WAXS data previewed on a
+            # USAXS graph would otherwise lie outside the view); fixed axes stay.
+            self._apply_ranges(graph, include_preview=True)
+            self._preview_widened = True
+        elif self._preview_widened:
+            self._apply_ranges(graph)
+            self._preview_widened = False
+
+    @contextmanager
+    def _preview_hidden(self):
+        """Exports show the graph, never the File browser preview."""
+        shown = [item for item in self._preview_items if item.isVisible()]
+        for item in shown:
+            item.setVisible(False)
+        try:
+            yield
+        finally:
+            for item in shown:
+                item.setVisible(True)
 
     def resizeEvent(self, event) -> None:  # noqa: N802 - Qt API
         super().resizeEvent(event)
@@ -828,11 +889,11 @@ class Plot2DWidget(pg.PlotWidget):
             anchor_y,
         )
 
-    def _apply_ranges(self, graph: GraphDocument) -> None:
+    def _apply_ranges(self, graph: GraphDocument, *, include_preview: bool = False) -> None:
         plot = self.getPlotItem()
         view_box = plot.getViewBox()
         view_box.disableAutoRange()
-        x_range, y_range = self._resolved_bounds(graph)
+        x_range, y_range = self._resolved_bounds(graph, include_preview=include_preview)
         if not graph.x_axis.auto_range:
             x_range = None
         if not graph.y_axis.auto_range:
@@ -857,17 +918,22 @@ class Plot2DWidget(pg.PlotWidget):
     def autoscale(self) -> None:
         """Fit the current data without requiring a document rerender."""
         if self._graph is not None:
-            self._apply_ranges(self._graph)
+            self._apply_ranges(self._graph, include_preview=bool(self._preview_snapshots))
 
     def _resolved_bounds(
-        self, graph: GraphDocument
+        self, graph: GraphDocument, *, include_preview: bool = False
     ) -> tuple[tuple[float, float] | None, tuple[float, float] | None]:
         """Bounds from complete snapshots, independent of view clipping."""
         x_values: list[np.ndarray] = []
         y_values: list[np.ndarray] = []
-        for view in graph.series:
-            if not view.visible or (snapshot := self._snapshots.get(view.id)) is None:
-                continue
+        shown = [
+            snapshot
+            for view in graph.series
+            if view.visible and (snapshot := self._snapshots.get(view.id)) is not None
+        ]
+        if include_preview:
+            shown.extend(self._preview_snapshots)
+        for snapshot in shown:
             with np.errstate(divide="ignore", invalid="ignore"):
                 x = _coordinate(snapshot.x, graph.x_axis.log)
                 y = _coordinate(snapshot.y, graph.y_axis.log)
@@ -904,7 +970,7 @@ class Plot2DWidget(pg.PlotWidget):
                 legend.setFlag(flag, ignores_transform)
 
     def capture_preview(self, width: int = 1200) -> bytes:
-        with self._legend_follows_export_scale():
+        with self._legend_follows_export_scale(), self._preview_hidden():
             exporter = pyqtgraph.exporters.ImageExporter(self.getPlotItem())
             exporter.parameters()["width"] = width
             image = exporter.export(toBytes=True)
@@ -927,7 +993,7 @@ class Plot2DWidget(pg.PlotWidget):
         )
         # LegendItem ignores scene transforms while users zoom.  During
         # export, let it follow the scene scale so it matches the axis font.
-        with self._legend_follows_export_scale():
+        with self._legend_follows_export_scale(), self._preview_hidden():
             exporter = pyqtgraph.exporters.ImageExporter(self.getPlotItem())
             exporter.parameters()["width"] = image_width
             # ImageExporter normally derives height from the current on-screen
@@ -972,7 +1038,7 @@ class Plot2DWidget(pg.PlotWidget):
             generator.setTitle(self._graph.title if self._graph else "Bernardyn graph")
             painter = QPainter(generator)
             try:
-                with self._legend_follows_export_scale():
+                with self._legend_follows_export_scale(), self._preview_hidden():
                     self.scene().render(
                         painter,
                         QRectF(0, 0, size.width(), size.height()),

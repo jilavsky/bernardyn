@@ -291,6 +291,14 @@ class GraphPage(QWidget):
         )
         self.render_warnings = list(getattr(self.renderer, "render_warnings", []))
 
+    def set_preview(self, snapshots) -> bool:
+        """Show File browser preview curves; False when this renderer cannot."""
+        show = getattr(self.renderer, "set_preview", None)
+        if show is None:
+            return False
+        show(snapshots)
+        return True
+
     def capture_preview(self) -> bytes:
         capture = getattr(self.renderer, "capture_snapshot", None)
         return capture() if capture is not None else self.renderer.capture_preview()
