@@ -1,6 +1,6 @@
 """Bernardyn scientific plotting workbench."""
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 from bernardyn.api import (
     SERIES_PRESETS,
