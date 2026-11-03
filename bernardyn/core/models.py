@@ -348,6 +348,23 @@ class AxisSpec:
         if self.minimum is not None and self.maximum is not None and self.minimum >= self.maximum:
             raise ValueError("axis minimum must be less than maximum")
 
+    def range_problem(self, name: str = "axis") -> str | None:
+        """Explain why the stored limits cannot be displayed, or return None.
+
+        Kept separate from ``__post_init__`` so packages written before this
+        check still open; editors refuse such limits and the renderer reports
+        them instead of silently ignoring them.  One-sided limits are allowed:
+        the missing side follows the data.
+        """
+        for label, value in (("minimum", self.minimum), ("maximum", self.maximum)):
+            if value is None:
+                continue
+            if not math.isfinite(value):
+                return f"{name} {label} must be a finite number"
+            if self.log and value <= 0:
+                return f"logarithmic {name} {label} must be positive (got {value:g})"
+        return None
+
 
 @dataclass(frozen=True)
 class TypographySpec:

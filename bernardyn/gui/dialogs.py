@@ -222,6 +222,7 @@ class DataSelectorWidget(QWidget):
         self.file_list = _FileListWidget(self)
         self.file_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.file_list.currentItemChanged.connect(self._file_selected)
+        self.file_list.itemSelectionChanged.connect(self._update_count)
         # itemActivated covers both double-click and Enter.
         self.file_list.itemActivated.connect(lambda _item: self.activated.emit())
         self.data_list = QListWidget(self)
@@ -463,15 +464,24 @@ class DataSelectorWidget(QWidget):
 
     def _apply_filter(self) -> None:
         matches = make_file_matcher(self.filter.text())
-        visible = 0
         for index in range(self.file_list.count()):
             item = self.file_list.item(index)
             # The file name alone also counts, so "^S12" works with subfolders listed.
             name = Path(item.data(Qt.ItemDataRole.UserRole)).name
             hidden = not (matches(item.text()) or matches(name))
             item.setHidden(hidden)
-            visible += not hidden
-        text = f"Showing {visible} of {self.file_list.count()} files"
+            # Add, Replace and dragging act on the visible selection only;
+            # a hidden row must not stay selected out of sight.
+            if hidden and item.isSelected():
+                item.setSelected(False)
+        self._update_count()
+
+    def _update_count(self) -> None:
+        total = self.file_list.count()
+        visible = sum(not self.file_list.item(index).isHidden() for index in range(total))
+        text = f"Showing {visible} of {total} files"
+        if selected := len(self.selected_paths()):
+            text += f", {selected} selected"
         self.count.setText(f"{text}; {self._listing_note}" if self._listing_note else text)
 
     def _select_all_visible(self) -> None:
@@ -481,7 +491,12 @@ class DataSelectorWidget(QWidget):
             item.setSelected(not item.isHidden())
 
     def selected_paths(self) -> list[Path]:
-        return [Path(item.data(Qt.ItemDataRole.UserRole)) for item in self.file_list.selectedItems()]
+        """Selected files that the filter currently shows."""
+        return [
+            Path(item.data(Qt.ItemDataRole.UserRole))
+            for item in self.file_list.selectedItems()
+            if not item.isHidden()
+        ]
 
     @staticmethod
     def _profile_key(locations: list[ScatteringLocation]) -> str:

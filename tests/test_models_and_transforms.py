@@ -88,7 +88,8 @@ def test_uncertainty_and_dq_propagation(dataset):
         ("guinier_rod", {}, 0.4, 0.1),
         ("guinier_sheet", {}, 0.4, 0.1),
         ("kratky", {}, 0.1, 1.6),
-        ("dimensionless_kratky", {"I0": 2, "Rg": 3}, 0.1, 7.2),
+        # X is qRg, so dX = Rg·dQ.
+        ("dimensionless_kratky", {"I0": 2, "Rg": 3}, 0.3, 7.2),
         ("porod", {}, 3.2, 6.4),
         ("porod2", {}, 0.1, 6.4),
         ("porod3", {}, 0.1, 3.2),
@@ -122,8 +123,14 @@ def test_dimensionless_kratky_requires_parameters(dataset):
             transform_parameters={"I0": 4, "Rg": 2},
         ),
     )
-    np.testing.assert_allclose(result.x, [1, 2, 3])
+    # X is the dimensionless qRg (q = 1, 2, 3 with Rg = 2).
+    np.testing.assert_allclose(result.x, [2, 4, 6])
     np.testing.assert_allclose(result.y, [8, 64, -18])
+    assert (result.x_label, result.x_unit, result.transform_version) == (
+        "qRg",
+        "dimensionless",
+        "2.0",
+    )
 
 
 def test_log_mask_removes_points_individually(dataset):

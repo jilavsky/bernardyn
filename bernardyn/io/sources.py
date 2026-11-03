@@ -27,6 +27,7 @@ from bernardyn.core.models import (
     json_value,
 )
 from bernardyn.core.registry import Registry
+from bernardyn.core.units import inverse_angstrom_scale
 
 log = logging.getLogger(__name__)
 
@@ -47,6 +48,13 @@ Q_UNIT_SCALE = {
     "µm^-1": 1e-4,
     "mm^-1": 1e-7,
 }
+
+
+def q_unit_scale(unit: str | None) -> float | None:
+    """Factor converting Q in *unit* to Å⁻¹, or None for an unrecognised unit."""
+    text = "" if unit is None else str(unit).strip()
+    scale = Q_UNIT_SCALE.get(text, Q_UNIT_SCALE.get(text.lower()))
+    return scale if scale is not None else inverse_angstrom_scale(text)
 
 
 def _location_id(path: Path, internal_path: str | None) -> str:
@@ -168,16 +176,28 @@ class ScatteringRecord:
     uncertainty_kind: str | None = None
 
     def to_dataset(self) -> Dataset:
+        """Convert Q and dQ to Å⁻¹, the canonical Bernardyn unit.
+
+        Raises:
+            ValueError: if ``q_unit`` is not a recognised inverse length.  An
+                explicitly stored unit is never relabelled as Å⁻¹ without
+                conversion; a genuinely missing unit is resolved earlier by
+                the adapter from the user's Q-unit assumption.
+        """
         original_unit = str(self.q_unit).strip()
-        scale = Q_UNIT_SCALE.get(original_unit, Q_UNIT_SCALE.get(original_unit.lower()))
-        assumed = scale is None
-        scale = 1.0 if scale is None else scale
+        scale = q_unit_scale(original_unit)
+        if scale is None:
+            raise ValueError(
+                f"{self.label}: Q unit {original_unit!r} is not a recognised inverse "
+                "length (for example 1/angstrom, 1/nm or 1/m); the data were not loaded"
+            )
         metadata = dict(self.metadata)
         metadata["q_unit_conversion"] = {
             "original_unit": original_unit,
             "canonical_unit": "1/angstrom",
             "scale": scale,
-            "assumed_inverse_angstrom": assumed,
+            # Kept for packages written before unknown units were refused.
+            "assumed_inverse_angstrom": False,
         }
         return Dataset(
             q=np.asarray(self.q, dtype=float) * scale,
@@ -548,7 +568,7 @@ class TextSourceAdapter:
         q_unit: str = "1/A",
         error_fraction: float = 0.05,
     ) -> ScatteringRecord:
-        if q_unit not in Q_UNIT_SCALE:
+        if q_unit_scale(q_unit) is None:
             raise ValueError(f"unsupported Q unit {q_unit!r}")
         if error_fraction <= 0:
             raise ValueError("error_fraction must be positive")
@@ -608,7 +628,7 @@ class TextSourceAdapter:
             rows.append(values[:4])
         if not rows:
             raise ValueError(f"no numeric Q/intensity rows found in {location.path.name}")
-        q = np.asarray([row[0] for row in rows], dtype=float) * Q_UNIT_SCALE[q_unit]
+        q = np.asarray([row[0] for row in rows], dtype=float) * q_unit_scale(q_unit)
         intensity = np.asarray([row[1] for row in rows], dtype=float)
         uncertainty = np.asarray(
             [row[2] if len(row) >= 3 else np.nan for row in rows], dtype=float
@@ -618,7 +638,7 @@ class TextSourceAdapter:
         dq = None
         if any(len(row) >= 4 for row in rows):
             dq = np.asarray([row[3] if len(row) >= 4 else np.nan for row in rows], dtype=float)
-            dq *= Q_UNIT_SCALE[q_unit]
+            dq *= q_unit_scale(q_unit)
         return ScatteringRecord(
             q=q,
             intensity=intensity,

@@ -40,6 +40,9 @@ from bernardyn.gui.dialogs import AnnotationDialog
 
 class InspectorWidget(QScrollArea):
     graphChanged = Signal(object, bool, str)
+    #: Like graphChanged, for deliberate changes to which series the graph
+    #: holds (Remove).  The window then accepts an emptied series list.
+    seriesListChanged = Signal(object, bool, str)
     transformRequested = Signal(str)
     resetRequested = Signal()
     outputPreviewRequested = Signal()
@@ -221,6 +224,12 @@ class InspectorWidget(QScrollArea):
         form.addRow("Ranges:", auto_row)
         form.addRow("X range:", self._paired_row("Min", self.axis_x_min, "Max", self.axis_x_max, group))
         form.addRow("Y range:", self._paired_row("Min", self.axis_y_min, "Max", self.axis_y_max, group))
+        # Why the last axis edit was refused; the typed values stay for correction.
+        self.axis_message = QLabel(group)
+        self.axis_message.setWordWrap(True)
+        self.axis_message.setStyleSheet("color: #b42318")
+        self.axis_message.setVisible(False)
+        form.addRow("", self.axis_message)
         form.addRow("Grid:", grid_row)
         form.addRow("Box axes:", self.box_axes)
         form.addRow("Tick labels:", self.minor_tick_labels)
@@ -568,8 +577,12 @@ class InspectorWidget(QScrollArea):
         self.description.setText(graph.description)
         self.notes.setText(graph.notes)
         self.renderer.setCurrentIndex(max(0, self.renderer.findData(graph.renderer_id)))
-        transform_id = graph.series[0].transform_id if graph.series else "raw"
-        self.transform.setCurrentIndex(max(0, self.transform.findData(transform_id)))
+        # The graph's own view intent, so an empty graph shows the view that
+        # added data will use.
+        self.transform.setCurrentIndex(
+            max(0, self.transform.findData(graph.view_transform_id))
+        )
+        self._show_axis_problem(None)
         self.x_label.setText(graph.x_axis.label)
         self.y_label.setText(graph.y_axis.label)
         self.x_log.setChecked(graph.x_axis.log)
@@ -822,15 +835,24 @@ class InspectorWidget(QScrollArea):
                 y_axis=y_axis,
                 box_axes=self.box_axes.isChecked(),
             )
-        except ValueError:
-            self.set_graph(self._graph, self._datasets)
+        except ValueError as exc:
+            self._show_axis_problem(f"Axis change not applied: {exc}")
             return
+        problem = x_axis.range_problem("X axis") or y_axis.range_problem("Y axis")
+        if problem is not None:
+            self._show_axis_problem(f"Axis change not applied: {problem}")
+            return
+        self._show_axis_problem(None)
         recompute = (
             graph.x_axis.log != self._graph.x_axis.log
             or graph.y_axis.log != self._graph.y_axis.log
         )
         self._graph = graph
         self.graphChanged.emit(graph, recompute, "Change axes")
+
+    def _show_axis_problem(self, message: str | None) -> None:
+        self.axis_message.setText(message or "")
+        self.axis_message.setVisible(bool(message))
 
     def _autoscale_axes(self) -> None:
         """Fit both axes, including after an interactive zoom on auto axes."""
@@ -1150,7 +1172,7 @@ class InspectorWidget(QScrollArea):
             return
         graph = self._graph.replace_series(item for item in self._graph.series if item.id != series_id)
         self._graph = graph
-        self.graphChanged.emit(graph, False, "Remove dataset from graph")
+        self.seriesListChanged.emit(graph, False, "Remove dataset from graph")
 
     def _add_annotation(self) -> None:
         if self._graph is None:

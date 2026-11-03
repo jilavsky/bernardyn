@@ -93,11 +93,10 @@ class FormulaTransform:
             if dataset.uncertainty is not None:
                 dy = self.dy_formula(q_valid, i_valid, dataset.uncertainty[mask], params)
 
+        # Only the coordinates decide whether a measurement is drawable.  A
+        # missing optional uncertainty stays NaN so the renderer omits that
+        # one error bar instead of discarding the measurement itself.
         finite = np.isfinite(x) & np.isfinite(y)
-        if dx is not None:
-            finite &= np.isfinite(dx)
-        if dy is not None:
-            finite &= np.isfinite(dy)
         newly_invalid = int(len(finite) - np.count_nonzero(finite))
         if newly_invalid:
             warnings.append(f"{newly_invalid} transformed points were non-finite and were masked")
@@ -106,8 +105,10 @@ class FormulaTransform:
         source_indices = source_indices[finite]
         if dx is not None:
             dx = np.abs(dx[finite])
+            warnings.extend(_missing_uncertainty_warning("dX", dx))
         if dy is not None:
             dy = np.abs(dy[finite] * view.multiplier)
+            warnings.extend(_missing_uncertainty_warning("dY", dy))
 
         return PlotSeries(
             series_id=view.id,
@@ -126,6 +127,14 @@ class FormulaTransform:
             transform_version=self.version,
             warnings=tuple(warnings),
         )
+
+
+def _missing_uncertainty_warning(name: str, values: np.ndarray) -> list[str]:
+    """Report points kept without an error bar because their uncertainty is unusable."""
+    missing = int(len(values) - np.count_nonzero(np.isfinite(values)))
+    if not missing:
+        return []
+    return [f"{missing} of {len(values)} points have no finite {name}; their error bars are omitted"]
 
 
 def _all(q, intensity, params):
@@ -229,15 +238,21 @@ def builtin_transforms(*, discover_plugins: bool = True) -> TransformRegistry:
             lambda q, i, di, p: di * q**2, _all,
             "q", "Intensity·q²", _unit_q, lambda d: f"{d.intensity_unit}·({d.q_unit})²",
         ),
+        # (qRg)² I(q)/I₀ versus qRg (Kieffer et al., J. Synchrotron Rad. 29,
+        # 2022).  Version 1.0 left X as q; 2.0 normalises both axes so curves
+        # with different Rg overlay.  Rg is treated as exact, so dX = Rg·dQ.
         FormulaTransform(
-            "dimensionless_kratky", "Dimensionless Kratky", _q,
-            lambda q, i, p: i * (q * p["Rg"]) ** 2 / p["I0"], _dq,
+            "dimensionless_kratky", "Dimensionless Kratky",
+            lambda q, p: q * p["Rg"],
+            lambda q, i, p: i * (q * p["Rg"]) ** 2 / p["I0"],
+            lambda q, dq, p: dq * p["Rg"],
             lambda q, i, di, p: di * (q * p["Rg"]) ** 2 / p["I0"], _q_positive,
-            "q", "I(qRg)²/I₀", _unit_q, _unit_log,
+            "qRg", "I(qRg)²/I₀", _unit_log, _unit_log,
             parameters=(
                 ParameterSpec("I0", "I₀", minimum=np.finfo(float).tiny, required=True),
                 ParameterSpec("Rg", "Rg", minimum=np.finfo(float).tiny, required=True),
             ),
+            version="2.0",
         ),
         FormulaTransform(
             "porod", "Porod", _q4, lambda q, i, p: i * q**4, _dq4,

@@ -129,6 +129,21 @@ def _coordinate(values: np.ndarray, logarithmic: bool) -> np.ndarray:
     return np.log10(values) if logarithmic else values
 
 
+def _error_extent(
+    values: np.ndarray, errors: np.ndarray, valid: np.ndarray, logarithmic: bool
+) -> list[np.ndarray]:
+    """Plot-unit ends of the error bars that _add_error_bars would draw."""
+    low = values - errors
+    high = values + errors
+    drawn = valid & np.isfinite(low) & np.isfinite(high)
+    if logarithmic:
+        drawn &= (low > 0) & (high > 0)
+    if not np.any(drawn):
+        return []
+    with np.errstate(divide="ignore", invalid="ignore"):
+        return [_coordinate(low[drawn], logarithmic), _coordinate(high[drawn], logarithmic)]
+
+
 class LegendSymbolSample(ItemSample):
     """Legend sample whose marker size is independent of the plotted marker."""
 
@@ -190,7 +205,7 @@ class Plot2DWidget(pg.PlotWidget):
             },
         )
         self.setAntialiasing(True)
-        self.getPlotItem().setMenuEnabled(True)
+        self._restrict_context_menu()
         self._graph: GraphDocument | None = None
         self._snapshots: dict[str, PlotSeries] = {}
         self._legend = None
@@ -218,6 +233,33 @@ class Plot2DWidget(pg.PlotWidget):
         self._preview_items: list[pg.PlotDataItem] = []
         # True while automatic axes were widened to show the preview.
         self._preview_widened = False
+        # View range right after the preview widened it.  While the view is
+        # unchanged since then, output recomputes the graph's own ranges.
+        self._range_with_preview = None
+
+    def _restrict_context_menu(self) -> None:
+        """Keep only right-click actions that cannot bypass the document.
+
+        PyQtGraph's "Plot Options" (log axes, downsampling, alpha, grid,
+        points), the ViewBox axis panels (persistent auto-range, invert, link)
+        and the scene "Export..." would change the display or write output
+        without the inspector, Undo, snapshots or preview isolation knowing.
+        Bernardyn has its own controls for all of these.  "View All" fits
+        through Bernardyn's own autoscale; "Mouse Mode" stays.
+        """
+        plot = self.getPlotItem()
+        plot.setMenuEnabled(enableMenu=False, enableViewBoxMenu=True)
+        menu = plot.getViewBox().menu
+        if menu is not None:
+            menu.viewAll.triggered.disconnect()
+            menu.viewAll.triggered.connect(self.autoscale)
+            for menu_action in menu.actions():
+                submenu = menu_action.menu()
+                if submenu is not None and submenu.title().endswith("axis"):
+                    menu_action.setVisible(False)
+        scene = self.scene()
+        if hasattr(scene, "contextMenu"):
+            scene.contextMenu = []
 
     def render(self, graph: GraphDocument, snapshots: Mapping[str, PlotSeries]) -> None:
         previous_graph = self._graph
@@ -410,26 +452,52 @@ class Plot2DWidget(pg.PlotWidget):
         graph = self._graph
         if not fit_ranges or graph is None:
             return
+        view_box = self.getPlotItem().getViewBox()
         if self._preview_snapshots:
             # Automatic axes widen to show the preview (WAXS data previewed on a
             # USAXS graph would otherwise lie outside the view); fixed axes stay.
             self._apply_ranges(graph, include_preview=True)
+            self._range_with_preview = view_box.viewRange()
             self._preview_widened = True
         elif self._preview_widened:
             self._apply_ranges(graph)
             self._preview_widened = False
+            self._range_with_preview = None
 
     @contextmanager
     def _preview_hidden(self):
-        """Exports show the graph, never the File browser preview."""
+        """Exports show the graph, never the File browser preview.
+
+        The preview's curves are hidden, and so is the extra room it made on
+        automatic axes: output uses the graph's own viewport.  A zoom chosen
+        after the preview appeared is deliberate and is kept.
+        """
         shown = [item for item in self._preview_items if item.isVisible()]
         for item in shown:
             item.setVisible(False)
+        view_box = self.getPlotItem().getViewBox()
+        restore_range = None
+        if (
+            self._preview_widened
+            and self._graph_has_auto_axis()
+            and self._range_with_preview is not None
+            and np.allclose(view_box.viewRange(), self._range_with_preview)
+        ):
+            restore_range = view_box.viewRange()
+            self._apply_ranges(self._graph)
         try:
             yield
         finally:
+            if restore_range is not None:
+                view_box.setRange(
+                    xRange=restore_range[0], yRange=restore_range[1], padding=0
+                )
             for item in shown:
                 item.setVisible(True)
+
+    def _graph_has_auto_axis(self) -> bool:
+        graph = self._graph
+        return graph is not None and (graph.x_axis.auto_range or graph.y_axis.auto_range)
 
     def resizeEvent(self, event) -> None:  # noqa: N802 - Qt API
         super().resizeEvent(event)
@@ -685,6 +753,13 @@ class Plot2DWidget(pg.PlotWidget):
             self._annotation_items.append((annotation, item))
 
         color = _color(annotation.color)
+        problem = self._annotation_domain_problem(graph, annotation)
+        if problem is not None:
+            label = annotation.text or annotation.kind.value
+            message = f"Annotation {label!r} is not drawn: {problem}"
+            log.warning(message)
+            self.render_warnings.append(message)
+            return
         x, y = self._plot_position(graph, annotation.position)
         if annotation.kind is AnnotationKind.TEXT:
             item = pg.TextItem(annotation.text, color=color, anchor=(0, 1))
@@ -797,13 +872,42 @@ class Plot2DWidget(pg.PlotWidget):
             self.render_warnings.append(message)
 
     @staticmethod
+    def _annotation_domain_problem(graph: GraphDocument, annotation: Annotation) -> str | None:
+        """Explain why an annotation cannot be placed on these axes, or None.
+
+        A zero or negative coordinate has no position on a logarithmic axis.
+        It is reported, never reinterpreted as a log10 value.  Horizontal and
+        vertical rules only need the coordinate that positions them.
+        """
+        needs_x = annotation.kind is not AnnotationKind.HLINE
+        needs_y = annotation.kind is not AnnotationKind.VLINE
+        points = [annotation.position]
+        if annotation.end is not None and annotation.kind in (
+            AnnotationKind.ARROW,
+            AnnotationKind.BOX,
+        ):
+            points.append(annotation.end)
+        for x, y in points:
+            if needs_x and graph.x_axis.log and not x > 0:
+                return f"x={x:g} is not positive on the logarithmic X axis"
+            if needs_y and graph.y_axis.log and not y > 0:
+                return f"y={y:g} is not positive on the logarithmic Y axis"
+        return None
+
+    @staticmethod
     def _plot_position(
         graph: GraphDocument, position: tuple[float, float]
     ) -> tuple[float, float]:
-        """Data coordinates in the plot's own units (log10 on log axes)."""
+        """Data coordinates in the plot's own units (log10 on log axes).
+
+        Non-positive values on a log axis become NaN rather than being passed
+        through as if they were already log10 values.
+        """
         x, y = position
-        x = math.log10(x) if graph.x_axis.log and x > 0 else x
-        y = math.log10(y) if graph.y_axis.log and y > 0 else y
+        if graph.x_axis.log:
+            x = math.log10(x) if x > 0 else math.nan
+        if graph.y_axis.log:
+            y = math.log10(y) if y > 0 else math.nan
         return x, y
 
     @staticmethod
@@ -902,26 +1006,43 @@ class Plot2DWidget(pg.PlotWidget):
         view_box = plot.getViewBox()
         view_box.disableAutoRange()
         x_range, y_range = self._resolved_bounds(graph, include_preview=include_preview)
-        if not graph.x_axis.auto_range:
-            x_range = None
-        if not graph.y_axis.auto_range:
-            y_range = None
-        if x_range is not None or y_range is not None:
-            view_box.setRange(xRange=x_range, yRange=y_range, padding=0.02)
-        if not graph.x_axis.auto_range and graph.x_axis.minimum is not None and graph.x_axis.maximum is not None:
-            low, high = graph.x_axis.minimum, graph.x_axis.maximum
-            if graph.x_axis.log and low > 0 and high > 0:
-                low, high = math.log10(low), math.log10(high)
-                plot.setXRange(low, high, padding=0)
-            elif not graph.x_axis.log:
-                plot.setXRange(low, high, padding=0)
-        if not graph.y_axis.auto_range and graph.y_axis.minimum is not None and graph.y_axis.maximum is not None:
-            low, high = graph.y_axis.minimum, graph.y_axis.maximum
-            if graph.y_axis.log and low > 0 and high > 0:
-                low, high = math.log10(low), math.log10(high)
-                plot.setYRange(low, high, padding=0)
-            elif not graph.y_axis.log:
-                plot.setYRange(low, high, padding=0)
+        auto_x = x_range if graph.x_axis.auto_range else None
+        auto_y = y_range if graph.y_axis.auto_range else None
+        if auto_x is not None or auto_y is not None:
+            view_box.setRange(xRange=auto_x, yRange=auto_y, padding=0.02)
+        for name, axis, data_range, set_range in (
+            ("X axis", graph.x_axis, x_range, plot.setXRange),
+            ("Y axis", graph.y_axis, y_range, plot.setYRange),
+        ):
+            if axis.auto_range or (axis.minimum is None and axis.maximum is None):
+                continue
+            problem = axis.range_problem(name)
+            fixed = None if problem is not None else self._fixed_range(axis, data_range)
+            if fixed is None:
+                message = f"Fixed {name} range not applied: " + (
+                    problem or "minimum must be below maximum (a missing limit follows the data)"
+                )
+                # Export re-applies ranges; report each problem once per render.
+                if message not in self.render_warnings:
+                    self.render_warnings.append(message)
+                continue
+            set_range(*fixed, padding=0)
+
+    @staticmethod
+    def _fixed_range(axis, data_range: tuple[float, float] | None) -> tuple[float, float] | None:
+        """Fixed limits in plot units; a missing side follows the data extent."""
+        limits = [
+            None if value is None else (math.log10(value) if axis.log else value)
+            for value in (axis.minimum, axis.maximum)
+        ]
+        if None in limits:
+            if data_range is None:
+                return None
+            limits = [data if limit is None else limit for limit, data in zip(limits, data_range, strict=True)]
+        low, high = limits
+        if low >= high:
+            return None
+        return low, high
 
     def autoscale(self) -> None:
         """Fit the current data without requiring a document rerender."""
@@ -934,14 +1055,14 @@ class Plot2DWidget(pg.PlotWidget):
         """Bounds from complete snapshots, independent of view clipping."""
         x_values: list[np.ndarray] = []
         y_values: list[np.ndarray] = []
-        shown = [
-            snapshot
+        shown: list[tuple[PlotSeries, SeriesStyle | None]] = [
+            (snapshot, view.style)
             for view in graph.series
             if view.visible and (snapshot := self._snapshots.get(view.id)) is not None
         ]
         if include_preview:
-            shown.extend(self._preview_snapshots)
-        for snapshot in shown:
+            shown.extend((snapshot, None) for snapshot in self._preview_snapshots)
+        for snapshot, style in shown:
             with np.errstate(divide="ignore", invalid="ignore"):
                 x = _coordinate(snapshot.x, graph.x_axis.log)
                 y = _coordinate(snapshot.y, graph.y_axis.log)
@@ -949,6 +1070,17 @@ class Plot2DWidget(pg.PlotWidget):
             if np.any(valid):
                 x_values.append(x[valid])
                 y_values.append(y[valid])
+            # Visible error bars belong to the data extent.  This mirrors
+            # _add_error_bars: a bar that would cross zero on a log axis is
+            # not drawn, so it does not widen the range either.
+            if style is not None and style.show_x_error_bars and snapshot.dx is not None:
+                x_values.extend(
+                    _error_extent(snapshot.x, snapshot.dx, valid, graph.x_axis.log)
+                )
+            if style is not None and style.show_y_error_bars and snapshot.dy is not None:
+                y_values.extend(
+                    _error_extent(snapshot.y, snapshot.dy, valid, graph.y_axis.log)
+                )
 
         def span(values: list[np.ndarray]) -> tuple[float, float] | None:
             if not values:

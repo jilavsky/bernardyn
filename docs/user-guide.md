@@ -214,7 +214,10 @@ Use the **Graph** tab in the right-side inspector for graph-wide settings.
   Bernardyn remains open and shows a 2-D offset-waterfall fallback instead;
   the status bar explains why and the 3-D graph settings are retained.
 - Set axis labels, logarithmic axes, automatic or fixed ranges, grid lines,
-  axis colour, and width. Numeric arrow controls redraw while they are used,
+  axis colour, and width. A fixed range may give only a minimum or only a
+  maximum; the other side follows the data. Limits on a log axis must be
+  positive; an edit that breaks this is refused with an explanation below
+  the range fields. Numeric arrow controls redraw while they are used,
   at no more than five updates per second; pressing Enter applies immediately.
 - **Autoscale** enables both automatic axes and immediately fits the displayed
   data. Presentation-only choices such as grid, legend, or tick-label settings

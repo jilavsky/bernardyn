@@ -456,6 +456,11 @@ class MainWindow(QMainWindow):
         self._workspace_lock: QLockFile | None = None
         self._locked_workspace_path: Path | None = None
         self.undo_stack = QUndoStack(self)
+        # Whether the document differs from the last saved package is derived
+        # from content, never restored from an Undo snapshot (see
+        # _sync_dirty_with_saved).  None: nothing on disk matches any state.
+        self._saved_signature = self._content_signature()
+        self.undo_stack.indexChanged.connect(self._sync_dirty_with_saved)
         self.tabs = QTabWidget(self)
         self.tabs.setTabsClosable(True)
         self.tabs.currentChanged.connect(self._active_tab_changed)
@@ -478,6 +483,11 @@ class MainWindow(QMainWindow):
         )
         self.inspector = InspectorWidget(self.controller.transforms, self)
         self.inspector.graphChanged.connect(self._queue_graph_change)
+        self.inspector.seriesListChanged.connect(
+            lambda graph, recompute, text: self._queue_graph_change(
+                graph, recompute, text, series_edit=True
+            )
+        )
         self.inspector.transformRequested.connect(self._set_transform)
         self.inspector.resetRequested.connect(self._reset_graph_defaults)
         self.inspector.outputPreviewRequested.connect(self._preview_output)
@@ -929,6 +939,7 @@ class MainWindow(QMainWindow):
         if previous_lock is not None and previous_lock is not lock and previous_path != target:
             previous_lock.unlock()
         self.undo_stack.clear()
+        self._mark_saved()
         self._rebuild_tabs()
         self._update_workspace_indicator()
         if remember:
@@ -946,6 +957,7 @@ class MainWindow(QMainWindow):
         self.controller.new_workspace()
         self._pending_graph_renders.clear()
         self.undo_stack.clear()
+        self._mark_saved()
         self._rebuild_tabs()
         self._update_workspace_indicator()
 
@@ -1043,9 +1055,14 @@ class MainWindow(QMainWindow):
         )
         if not ok:
             return
-        self.controller.workspace.title = title
-        self.controller.workspace.description = description
-        self.controller.workspace.dirty = True
+        def action() -> None:
+            self.controller.workspace.title = title
+            self.controller.workspace.description = description
+            self.controller.workspace.dirty = True
+
+        self._push_edit(
+            WorkspaceEditCommand(self, "Workspace properties", action), "Workspace properties"
+        )
         self._update_workspace_indicator()
 
     def _new_graph(self, renderer_id: str) -> None:
@@ -1176,6 +1193,59 @@ class MainWindow(QMainWindow):
             set(self.controller.preview_only_graphs),
         )
 
+    def _content_signature(self):
+        """Identify the saved-document content of the current workspace.
+
+        Graphs and datasets are immutable and replaced on every edit, so the
+        objects themselves identify their content; Undo restores the very same
+        objects.  Snapshot versions cover "Recompute with current version".
+        """
+        workspace = self.controller.workspace
+        return (
+            workspace.title,
+            workspace.description,
+            tuple(workspace.graphs),
+            tuple(workspace.datasets.items()),
+            tuple(
+                sorted(
+                    (graph_id, view_id, snapshot.transform_version)
+                    for graph_id, values in self.controller.snapshots.items()
+                    for view_id, snapshot in values.items()
+                )
+            ),
+        )
+
+    @staticmethod
+    def _same_content(first, second) -> bool:
+        if first is None or second is None:
+            return False
+        title, description, graphs, datasets, versions = first
+        return (
+            (title, description, versions) == (second[0], second[1], second[4])
+            and len(graphs) == len(second[2])
+            and all(a is b for a, b in zip(graphs, second[2], strict=True))
+            and len(datasets) == len(second[3])
+            and all(
+                key == other_key and value is other_value
+                for (key, value), (other_key, other_value) in zip(datasets, second[3], strict=True)
+            )
+        )
+
+    def _mark_saved(self) -> None:
+        """Record the current content as what the workspace package holds."""
+        self.undo_stack.setClean()
+        self._saved_signature = (
+            None if self.controller.workspace.dirty else self._content_signature()
+        )
+
+    def _sync_dirty_with_saved(self, *_args) -> None:
+        """After any Undo-stack move, compare content with the last save."""
+        self.controller.workspace.dirty = not self._same_content(
+            self._content_signature(), self._saved_signature
+        )
+        # Undo/Redo can change the workspace title shown there.
+        self._update_workspace_indicator()
+
     def _restore_controller_state(self, state) -> None:
         (
             workspace,
@@ -1226,13 +1296,16 @@ class MainWindow(QMainWindow):
         )
         self._refresh_preview()
 
-    def _queue_graph_change(self, graph: GraphDocument, recompute: bool, text: str) -> None:
+    def _queue_graph_change(
+        self, graph: GraphDocument, recompute: bool, text: str, *, series_edit: bool = False
+    ) -> None:
         try:
             before = self.controller.workspace.graph(graph.id)
             # Controller/API callers can update a graph while the inspector is
             # open.  Presentation controls must not turn that stale, empty
-            # inspector copy into an accidental series deletion.
-            if before.series and not graph.series:
+            # inspector copy into an accidental series deletion.  An explicit
+            # series edit (Remove) may legitimately empty the graph.
+            if before.series and not graph.series and not series_edit:
                 graph = replace(graph, series=before.series)
             self.controller.validate_graph_update(graph, recompute=recompute)
             self.undo_stack.push(GraphEditCommand(self, before, graph, recompute, text))
@@ -2194,10 +2267,17 @@ class MainWindow(QMainWindow):
             selected = dialog.selected_ids()
             if not selected:
                 return
-            self.controller.import_from_package(path, selected)
-            self._rebuild_tabs()
         except Exception as exc:
             QMessageBox.critical(self, "Import graph", str(exc))
+            return
+        # Catalog, snapshots, warnings and archival status are all part of
+        # the controller state the command captures and restores.
+        self._push_edit(
+            WorkspaceEditCommand(
+                self, "Import graph", lambda: self.controller.import_from_package(path, selected)
+            ),
+            "Import graph",
+        )
 
     def _collect_artifacts(self):
         previews = dict(self.controller.previews)
@@ -2263,6 +2343,7 @@ class MainWindow(QMainWindow):
                 target, graph_ids=graph_ids, previews=previews, renderer_data=renderer_data
             )
             if graph_ids is None:
+                self._mark_saved()
                 previous_lock = self._workspace_lock
                 previous_path = self._locked_workspace_path
                 self._workspace_lock = lock
@@ -2416,12 +2497,14 @@ class MainWindow(QMainWindow):
         graph = self._current_graph()
         if graph is None:
             return
-        try:
-            self.controller.recompute_graph(graph.id)
-            self._render_graph(graph.id)
-            self._sync_inspector()
-        except Exception as exc:
-            QMessageBox.warning(self, "Recompute graph", str(exc))
+        self._push_edit(
+            WorkspaceEditCommand(
+                self,
+                "Recompute with current version",
+                lambda: self.controller.recompute_graph(graph.id),
+            ),
+            "Recompute graph",
+        )
 
     def _apply_series_preset(self, preset: str) -> None:
         graph = self._current_graph()

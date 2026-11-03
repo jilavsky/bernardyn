@@ -4,6 +4,55 @@ This file records user-visible changes in Bernardyn. Update it, together with
 the relevant user documentation, whenever a feature is added or an existing
 behavior changes.
 
+## Unreleased
+
+Fixes from the 1D code review of 2026-11-02
+(`docs/code-review-1d-2026-11-02.md`, findings F01–F16).
+
+### Changed
+
+- **Dimensionless Kratky** now plots (qRg)²·I(q)/I₀ against **qRg**
+  (Kieffer et al., 2022), so curves with different Rg overlay; dX = Rg·dQ.
+  The view's version is now 2.0. Packages saved with version 1.0 keep their
+  archived arrays and show a note until you choose **Recompute with current
+  version** (now undoable).
+- A Q unit that is stored in a file but not recognised as an inverse length
+  is refused with a message, instead of being relabelled Å⁻¹ unconverted.
+  Any spelling of Å⁻¹, nm⁻¹, pm⁻¹, µm⁻¹, mm⁻¹, cm⁻¹ and m⁻¹ is converted.
+- The plot's right-click menu keeps only **View All** (Bernardyn's
+  autoscale) and **Mouse Mode**. Log axes, grid, downsampling, axis panels
+  and **Export…** there bypassed the inspector, Undo and saved document; use
+  the inspector and File menu instead.
+- Fixed axis limits may be one-sided: the empty side follows the data.
+
+### Fixed
+
+- Undo after Save now marks the workspace as changed (and Redo back to the
+  saved state as unchanged), so closing asks to save when it should.
+- **Import graph** and **Workspace properties** are undoable steps of their
+  own; undoing an earlier step no longer removes a later import.
+- A missing dI or dQ value no longer removes the measurement; only that
+  error bar is omitted, with a note.
+- Residual and distribution curves on log axes are masked after multiplier
+  and offset, like scattering curves.
+- Copy/Move of residuals or distributions to a new graph keeps their axis
+  labels and a linear Y axis for residuals, so negative values are kept.
+- The File browser filter deselects files it hides; Add, Replace and
+  dragging use only the visible selection, and the count shows how many are
+  selected.
+- Image export and package previews use the graph's own axis ranges while a
+  File browser preview has widened them.
+- Automatic axis ranges include the visible error bars.
+- **Remove** in the inspector can remove a graph's last series.
+- Non-positive fixed limits on a log axis (and NaN/infinite limits) are
+  refused in the inspector with an explanation; the renderer reports such
+  limits from older packages instead of ignoring them silently.
+- Annotations at zero or negative coordinates on a log axis are reported and
+  not drawn, instead of appearing at a different position.
+- Checking saved results or changing the Q unit / error options refreshes the
+  File browser preview.
+- An empty graph shows its selected view in the inspector.
+
 ## 1.1.0 — 2026-11-01
 
 ### Added

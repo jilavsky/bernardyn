@@ -180,3 +180,31 @@ def units_equivalent(first: str | None, second: str | None) -> bool:
     if left is None or right is None:
         return str(first or "").strip().lower() == str(second or "").strip().lower()
     return left == right
+
+
+# Length of each recognised length symbol, in Å.
+_LENGTH_IN_ANGSTROM = {
+    "pm": Fraction(1, 100),
+    "Å": Fraction(1),
+    "nm": Fraction(10),
+    "µm": Fraction(10**4),
+    "mm": Fraction(10**7),
+    "cm": Fraction(10**8),
+    "m": Fraction(10**10),
+}
+
+
+def inverse_angstrom_scale(unit: str | None) -> float | None:
+    """Return the factor that converts a Q value in *unit* to Å⁻¹, or None.
+
+    Any spelling ``parse_unit`` understands is accepted (``1/nm``, ``nm^-1``,
+    ``1/m``, ``Å⁻¹``, ...).  None means the string is not a recognised inverse
+    length; callers must refuse it rather than assume Å⁻¹.
+    """
+    powers = parse_unit(unit)
+    if powers is None or len(powers) != 1:
+        return None
+    ((symbol, power),) = powers.items()
+    if power != -1 or symbol not in _LENGTH_IN_ANGSTROM:
+        return None
+    return float(1 / _LENGTH_IN_ANGSTROM[symbol])

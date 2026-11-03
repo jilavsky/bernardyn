@@ -178,6 +178,10 @@ class FileBrowserPanel(QWidget):
         self.preview_box.toggled.connect(self._preview_toggled)
         self.selector.file_list.currentItemChanged.connect(self.schedule_preview)
         self.selector.data_list.itemChanged.connect(self.schedule_preview)
+        # Every input that changes what the preview shows refreshes it.
+        self.selector.results_list.itemChanged.connect(self.schedule_preview)
+        self.selector.q_unit.currentIndexChanged.connect(self.schedule_preview)
+        self.selector.error_fraction.valueChanged.connect(self.schedule_preview)
 
         self.add_button = QPushButton("Add to graph", self)
         self.add_button.setToolTip("Add the checked data of the selected files to the active graph (Enter)")

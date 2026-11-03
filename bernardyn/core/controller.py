@@ -14,6 +14,7 @@ from bernardyn.core.models import (
     ESTIMATED_UNCERTAINTY_KINDS,
     UNCERTAINTY_MEASURED,
     UNCERTAINTY_PARTLY_ESTIMATED,
+    CurveRole,
     Dataset,
     GenericCurve,
     GraphDocument,
@@ -428,6 +429,7 @@ class ApplicationController:
                     transform_parameters=parameters,
                 )
             )
+        target = self._initialize_untouched_target(source, target, chosen)
         target_candidate = target.replace_series((*target.series, *transferred))
         source_candidate = (
             source.replace_series(view for view in source.series if view.id not in chosen_ids)
@@ -442,6 +444,28 @@ class ApplicationController:
             else self.snapshots.get(source.id, {})
         )
         return source_candidate, target_candidate, source_snapshots, target_snapshots
+
+    def _initialize_untouched_target(
+        self, source: GraphDocument, target: GraphDocument, chosen: list[SeriesView]
+    ) -> GraphDocument:
+        """Give an empty, never-customized destination axes that suit typed curves.
+
+        A default graph has scattering axes (log-log, q and Intensity labels).
+        Residuals and distributions copied into it keep the source graph's
+        axes instead, and a residual always gets a linear Y axis so its
+        negative values are not masked.  Scattering transfers and graphs with
+        data or edited axes are left as they are.
+        """
+        curves = [self.workspace.datasets[view.dataset_id] for view in chosen]
+        if not all(isinstance(curve, GenericCurve) for curve in curves):
+            return target
+        default = GraphDocument()
+        if target.series or (target.x_axis, target.y_axis) != (default.x_axis, default.y_axis):
+            return target
+        y_axis = source.y_axis
+        if any(curve.role is CurveRole.RESIDUAL for curve in curves):
+            y_axis = replace(y_axis, log=False)
+        return replace(target, x_axis=source.x_axis, y_axis=y_axis)
 
     def validate_series_transfer(
         self,
@@ -703,23 +727,32 @@ class ApplicationController:
     ) -> PlotSeries:
         if view.transform_id != "raw":
             raise ValueError("generic curves support only the raw view")
-        mask = np.isfinite(curve.x) & np.isfinite(curve.y)
+        # Axis validity applies to the displayed values, after multiplier and
+        # offset, exactly as resolve_series does for scattering curves.
+        displayed_y = curve.y * view.multiplier + view.offset
+        mask = np.isfinite(curve.x) & np.isfinite(displayed_y)
         low, high = view.q_range
         if low is not None:
             mask &= curve.x >= low
         if high is not None:
             mask &= curve.x <= high
+        domain = mask.copy()
         if x_log:
             mask &= curve.x > 0
         if y_log:
-            mask &= curve.y > 0
-        excluded = int(len(curve.x) - np.count_nonzero(mask))
-        warnings = () if not excluded else (f"{excluded} of {len(curve.x)} points were outside the valid plot domain",)
+            mask &= displayed_y > 0
+        warnings: list[str] = []
+        excluded = int(len(curve.x) - np.count_nonzero(domain))
+        if excluded:
+            warnings.append(f"{excluded} of {len(curve.x)} points were outside the valid plot domain")
+        removed = int(np.count_nonzero(domain) - np.count_nonzero(mask))
+        if removed:
+            warnings.append(f"{removed} points were invalid for logarithmic axes")
         return PlotSeries(
             series_id=view.id,
             dataset_id=curve.id,
             x=curve.x[mask],
-            y=curve.y[mask] * view.multiplier + view.offset,
+            y=displayed_y[mask],
             dx=None if curve.dx is None else np.abs(curve.dx[mask]),
             dy=None if curve.dy is None else np.abs(curve.dy[mask] * view.multiplier),
             source_indices=np.flatnonzero(mask),
@@ -730,7 +763,7 @@ class ApplicationController:
             y_unit=curve.y_unit,
             transform_id="raw",
             transform_version="1.0",
-            warnings=warnings,
+            warnings=tuple(warnings),
         )
 
     def _clear_recompute_warnings(self, graph_id: str) -> None:
