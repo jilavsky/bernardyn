@@ -27,6 +27,10 @@ Fixes from the 1D code review of 2026-11-02
 
 ### Fixed
 
+- **Refresh** (F5) in the File browser now re-reads the folder tree as well
+  as the file list. Before, a new folder on a network drive (SSHFS-Win)
+  never appeared in the tree, because such drives send no change
+  notifications; only typing its path reached it.
 - Undo after Save now marks the workspace as changed (and Redo back to the
   saved state as unchanged), so closing asks to save when it should.
 - **Import graph** and **Workspace properties** are undoable steps of their

@@ -120,22 +120,11 @@ class FileBrowserPanel(QWidget):
         for widget in (self.favorite_button, self.places_button, self.refresh_button):
             navigation.addWidget(widget)
 
-        # Folders only: files are listed by the selector, and an HDF5 file is
-        # opened only when it becomes current.  This keeps network drives
-        # (SSHFS-Win) responsive while browsing.
-        self.folder_model = QFileSystemModel(self)
-        self.folder_model.setFilter(QDir.Filter.AllDirs | QDir.Filter.NoDotAndDotDot | QDir.Filter.Drives)
-        self.folder_model.setRootPath("")
         self.tree = QTreeView(self)
-        self.tree.setModel(self.folder_model)
-        for column in range(1, self.folder_model.columnCount()):
-            self.tree.hideColumn(column)
         self.tree.setHeaderHidden(True)
         self.tree.setToolTip("Click a folder to list its data files below")
-        self.tree.selectionModel().currentChanged.connect(self._tree_folder_changed)
-        # The model reads folders in the background; scroll again once the
-        # path to the current folder has actually been loaded.
-        self.folder_model.directoryLoaded.connect(self._folder_loaded)
+        self.folder_model: QFileSystemModel | None = None
+        self._install_folder_model()
 
         self.selector = DataSelectorWidget(
             Path.home(),
@@ -323,8 +312,39 @@ class FileBrowserPanel(QWidget):
             self.navigate(self.folder.parent)
 
     def refresh(self) -> None:
+        """Re-read the folder tree and the file list from disk."""
+        self._install_folder_model()
+        if self.folder is not None:
+            self._select_in_tree(self.folder)
         self.selector.forget_cached_contents()
         self.selector.refresh()
+
+    def _install_folder_model(self) -> None:
+        """Give the tree a new folder model, so every folder is read from disk again.
+
+        QFileSystemModel reads a folder once and then relies on change
+        notifications, which network drives (SSHFS-Win) do not send, and it
+        has no public way to re-read.  A new model is the reliable refresh.
+        """
+        old, old_selection = self.folder_model, self.tree.selectionModel()
+        # Folders only: files are listed by the selector, and an HDF5 file is
+        # opened only when it becomes current.  This keeps network drives
+        # (SSHFS-Win) responsive while browsing.
+        model = QFileSystemModel(self)
+        model.setFilter(QDir.Filter.AllDirs | QDir.Filter.NoDotAndDotDot | QDir.Filter.Drives)
+        model.setRootPath("")
+        self.folder_model = model
+        self.tree.setModel(model)
+        for column in range(1, model.columnCount()):
+            self.tree.hideColumn(column)
+        self.tree.selectionModel().currentChanged.connect(self._tree_folder_changed)
+        # The model reads folders in the background; scroll again once the
+        # path to the current folder has actually been loaded.
+        model.directoryLoaded.connect(self._folder_loaded)
+        # QTreeView.setModel() leaves the replaced models to their owner.
+        for replaced in (old_selection, old):
+            if replaced is not None:
+                replaced.deleteLater()
 
     def _path_entered(self) -> None:
         if not self.navigate(self.path_edit.text().strip()) and self.folder is not None:

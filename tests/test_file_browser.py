@@ -134,6 +134,26 @@ def test_panel_state_round_trips_and_falls_back_from_missing_folder(qapp, tmp_pa
     assert stale.folder == Path.home().resolve()
 
 
+def test_refresh_rereads_the_folder_tree(qapp, tmp_path):
+    # Network drives (SSHFS-Win) send no change notifications, so Refresh must
+    # replace the tree's folder model rather than wait for one.
+    panel = _panel(tmp_path)
+    panel.navigate(tmp_path)
+    old_model = panel.folder_model
+    (tmp_path / "new_user").mkdir()
+    (tmp_path / "new_user" / "S1_0001.h5").touch()
+
+    panel.refresh()
+    assert panel.folder_model is not old_model
+    assert panel.tree.model() is panel.folder_model
+    assert Path(panel.folder_model.filePath(panel.tree.currentIndex())) == tmp_path.resolve()
+
+    # Clicking a folder in the new tree still navigates.
+    panel.tree.setCurrentIndex(panel.folder_model.index(str(tmp_path / "new_user")))
+    assert panel.folder == (tmp_path / "new_user").resolve()
+    assert panel.selector.file_list.item(0).text() == "S1_0001.h5"
+
+
 def test_panel_keeps_recent_folders_bounded(qapp, tmp_path):
     panel = _panel(tmp_path)
     for index in range(RECENT_FOLDER_LIMIT + 3):

@@ -58,7 +58,9 @@ one file after another.
 - **Find the folder.** Click a folder in the tree, type or paste a path into
   the path field and press Enter, or use **Back** and **Up**. **☆** adds the
   folder to Favorites; **Places** lists Favorites, recent folders, and Home.
-  Refresh (F5) re-reads a folder that is still being written to.
+  Refresh (F5) re-reads the folder tree and the file list, e.g. to see a new
+  user folder or files still being written. Network drives (SSHFS-Win) do
+  not report new folders on their own, so use Refresh there.
 - **Choose files and data.** Sort and filter the file list as in the data
   selector, and check the I(Q) data or saved results below it. The panel and
   the data selector share what they learn about file layouts.
