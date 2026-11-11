@@ -593,12 +593,12 @@ def render_2d_image(
 
     from bernardyn.renderers.plot2d import Plot2DWidget
 
-    app = QApplication.instance() or QApplication(["bernardyn-headless"])
-    widget = Plot2DWidget()
-    widget.resize(graph.width_px, graph.height_px)
+    QApplication.instance() or QApplication(["bernardyn-headless"])
+    # Laid out in points at the graph's physical size and settled (painted
+    # until axis widths and tick labels stop changing) before export.
+    widget = Plot2DWidget(output_layout=True)
     try:
         widget.render(graph, snapshots)
-        app.processEvents()
         return widget.save_image(destination)
     finally:
         widget.close()

@@ -187,7 +187,10 @@ launch so they cannot be stranded outside a changed display arrangement. Use
 Reset panel layout** to recover a closed or misplaced panel immediately.
 
 - Click a row to edit its style, legend label, visible Q range, multiplier,
-  and offset.
+  and offset. As in Irena, the **multiplier scales the intensity** (and its
+  uncertainty) before the view is computed, so in a Guinier view it shifts
+  ln(I) without changing the slope (Rg). The **offset** is added to the plotted
+  Y value. Both fields accept exponent notation such as `2.5e-9`.
 - Use **Shift-click** to select a contiguous block of rows.
 - Use **Command-click** on macOS or **Ctrl-click** on Windows/Linux to add or
   remove individual rows from the selection.
@@ -236,7 +239,12 @@ Use the **Graph** tab in the right-side inspector for graph-wide settings.
   is available for 2-D graphs.
 - **Canvas (px) → Set** resizes the application so the displayed 2-D canvas
   matches the requested pixel width and height. The display badge confirms the
-  actual on-screen size; later window resizing remains available.
+  actual on-screen size; later window resizing remains available. This only
+  changes the on-screen view: exported images do not depend on it.
+- **Match output** sizes the on-screen canvas to the output's physical size at
+  your screen's font resolution. Text, tick labels and the legend then take
+  the same share of the plot as in the exported image, on any platform and
+  display scaling, so font sizes can be judged on screen.
 - **Reset graph to defaults…** restores graph-wide settings, axes, legend,
   annotations, background, and output settings while keeping the loaded curves
   and their styles. The action can be undone.
@@ -305,16 +313,22 @@ graph…** opens the system print dialog and prints the same graph image while
 preserving its aspect ratio.
 
 **Output (in)** and **Output DPI** control the size and resolution of exported
-PNG/JPEG files and the clipboard image. The interactive 2-D graph is fitted to
-the available window at the same output aspect ratio; unused space is canvas-
-coloured padding. It therefore previews the output shape without trying to
-match the output's absolute physical size. SVG remains vector output, but uses
-the same requested physical dimensions.
+PNG/JPEG/SVG files, the clipboard image, printing and the stored package
+preview. Output is laid out at its physical size, so **font sizes are true
+typographic points**: a 12 pt label is 1/6 inch tall in a 6.5 inch wide figure
+(50 px at 300 dpi). Line widths and symbol sizes are in points too. The result
+is the same on macOS, Windows and Linux and does not depend on the window size,
+the screen resolution or the system's display scaling. A mouse zoom shown on
+screen is kept in the output; the File browser preview never is.
+
+The interactive 2-D graph is fitted to the available window at the output
+aspect ratio and uses the platform's normal font size, so text on screen can
+look relatively larger or smaller than in the output. Use **Preview output…**
+to see the exact result.
 
 The small **Display: W × H px** badge at the upper-right of the graph shows
 the current on-screen canvas size. It changes when the application window is
-resized; it is useful for comparing the fitted display with **Canvas (px)**,
-but it is not the exported image size.
+resized and does not affect exported images.
 
 Use **Preview output…** beside the output controls (or in the File/Graph menu)
 to open a separate, exact-pixel raster preview. It is generated only on demand;

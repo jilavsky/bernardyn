@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
 import numpy as np
@@ -56,8 +56,22 @@ class FormulaTransform:
     version: str = "1.0"
     default_x_log: bool = False
     default_y_log: bool = False
+    # Older versions whose snapshots are still exact for some views, mapped
+    # to a predicate saying for which.  See ``snapshot_is_current``.
+    equivalent_versions: Mapping[str, Callable[[SeriesView], bool]] = field(
+        default_factory=dict
+    )
 
     def apply(self, dataset: Dataset, view: SeriesView) -> PlotSeries:
+        """Resolve one series.
+
+        The series multiplier scales the measured intensity (and its
+        uncertainty) *before* the view formula, as Irena does, so a
+        multiplier shifts ln(I) in a Guinier view instead of changing its
+        slope.  The offset is a display shift of the transformed Y.  For
+        views linear in I (General I(Q), Kratky, Porod, ...) both orders
+        give the same numbers.
+        """
         params = {spec.id: spec.default for spec in self.parameters if spec.default is not None}
         params.update({key: float(value) for key, value in view.transform_parameters.items()})
         for spec in self.parameters:
@@ -67,19 +81,32 @@ class FormulaTransform:
                 raise ValueError(f"{spec.label} must be at least {spec.minimum}")
 
         q = dataset.q
-        intensity = dataset.intensity
-        base = np.isfinite(q) & np.isfinite(intensity)
+        multiplier = float(view.multiplier)
+        with np.errstate(over="ignore", invalid="ignore"):
+            intensity = dataset.intensity * multiplier
+            uncertainty = (
+                None if dataset.uncertainty is None else dataset.uncertainty * abs(multiplier)
+            )
+        in_range = np.ones(q.shape, dtype=bool)
         low, high = view.q_range
         if low is not None:
-            base &= q >= low
+            in_range &= q >= low
         if high is not None:
-            base &= q <= high
-        mask = base & self.valid_formula(q, intensity, params)
+            in_range &= q <= high
+        with np.errstate(invalid="ignore"):
+            valid = np.isfinite(q) & np.isfinite(intensity) & self.valid_formula(q, intensity, params)
+        mask = in_range & valid
         source_indices = np.flatnonzero(mask)
         warnings: list[str] = []
-        excluded = int(len(q) - np.count_nonzero(mask))
+        # Points the user trimmed with the Q range are a choice, not a data
+        # problem; only points inside the range that the view cannot show
+        # are reported.
+        excluded = int(np.count_nonzero(in_range & ~valid))
         if excluded:
-            warnings.append(f"{excluded} of {len(q)} points were outside the valid plot domain")
+            warnings.append(
+                f"{excluded} of {int(np.count_nonzero(in_range))} points were outside "
+                "the valid plot domain"
+            )
 
         q_valid = q[mask]
         i_valid = intensity[mask]
@@ -90,8 +117,8 @@ class FormulaTransform:
             if dataset.dq is not None:
                 dx = self.dx_formula(q_valid, dataset.dq[mask], params)
             dy = None
-            if dataset.uncertainty is not None:
-                dy = self.dy_formula(q_valid, i_valid, dataset.uncertainty[mask], params)
+            if uncertainty is not None:
+                dy = self.dy_formula(q_valid, i_valid, uncertainty[mask], params)
 
         # Only the coordinates decide whether a measurement is drawable.  A
         # missing optional uncertainty stays NaN so the renderer omits that
@@ -101,13 +128,13 @@ class FormulaTransform:
         if newly_invalid:
             warnings.append(f"{newly_invalid} transformed points were non-finite and were masked")
         x = x[finite]
-        y = y[finite] * view.multiplier + view.offset
+        y = y[finite] + view.offset
         source_indices = source_indices[finite]
         if dx is not None:
             dx = np.abs(dx[finite])
             warnings.extend(_missing_uncertainty_warning("dX", dx))
         if dy is not None:
-            dy = np.abs(dy[finite] * view.multiplier)
+            dy = np.abs(dy[finite])
             warnings.extend(_missing_uncertainty_warning("dY", dy))
 
         return PlotSeries(
@@ -135,6 +162,31 @@ def _missing_uncertainty_warning(name: str, values: np.ndarray) -> list[str]:
     if not missing:
         return []
     return [f"{missing} of {len(values)} points have no finite {name}; their error bars are omitted"]
+
+
+def snapshot_is_current(transform: PlotTransform, version: str, view: SeriesView) -> bool:
+    """Whether a snapshot written by ``version`` of a view is still exact.
+
+    A snapshot of the current version always is.  An older version counts
+    only where the transform declares it equivalent for this series (for
+    example, a Guinier 1.0 snapshot with multiplier 1).  Plugin transforms
+    without ``equivalent_versions`` compare versions only.
+    """
+    if version == transform.version:
+        return True
+    predicate = getattr(transform, "equivalent_versions", {}).get(version)
+    return bool(predicate is not None and predicate(view))
+
+
+def _unit_multiplier(view: SeriesView) -> bool:
+    return float(view.multiplier) == 1.0
+
+
+# Version 1.1 of the views that are not linear in I: the multiplier now
+# scales I before the formula (it used to scale the transformed Y, which in
+# a Guinier view changed the slope and so the apparent Rg).  Snapshots from
+# 1.0 are identical whenever the multiplier is 1.
+_MULTIPLIER_ON_INTENSITY = {"version": "1.1", "equivalent_versions": {"1.0": _unit_multiplier}}
 
 
 def _all(q, intensity, params):
@@ -221,17 +273,20 @@ def builtin_transforms(*, discover_plugins: bool = True) -> TransformRegistry:
             "guinier", "Guinier", _q2, lambda q, i, p: np.log(i), _dq2,
             lambda q, i, di, p: di / i, _i_positive,
             "q²", "ln(Intensity)", _unit_q2, _unit_log,
+            **_MULTIPLIER_ON_INTENSITY,
         ),
         FormulaTransform(
             "guinier_rod", "Guinier rod", _q2, lambda q, i, p: np.log(i * q), _dq2,
             lambda q, i, di, p: di / i, _qi_positive,
             "q²", "ln(Intensity·q)", _unit_q2, _unit_log,
+            **_MULTIPLIER_ON_INTENSITY,
         ),
         FormulaTransform(
             "guinier_sheet", "Guinier sheet", _q2,
             lambda q, i, p: np.log(i * q**2), _dq2,
             lambda q, i, di, p: di / i, _qi_positive,
             "q²", "ln(Intensity·q²)", _unit_q2, _unit_log,
+            **_MULTIPLIER_ON_INTENSITY,
         ),
         FormulaTransform(
             "kratky", "Kratky", _q, lambda q, i, p: i * q**2, _dq,
@@ -273,11 +328,13 @@ def builtin_transforms(*, discover_plugins: bool = True) -> TransformRegistry:
             "zimm", "Zimm", _q2, lambda q, i, p: 1 / i, _dq2,
             lambda q, i, di, p: di / i**2, _i_positive,
             "q²", "1/Intensity", _unit_q2, _unit_inverse_i,
+            **_MULTIPLIER_ON_INTENSITY,
         ),
         FormulaTransform(
             "debye_bueche", "Debye–Bueche", _q2, lambda q, i, p: np.sqrt(1 / i), _dq2,
             lambda q, i, di, p: 0.5 * di * i ** (-1.5), _i_positive,
             "q²", "√(1/Intensity)", _unit_q2, lambda d: f"1/√({d.intensity_unit})",
+            **_MULTIPLIER_ON_INTENSITY,
         ),
     ]
     for transform in transforms:

@@ -38,7 +38,9 @@ dependencies = [
     # deviation): Bernardyn is a desktop application first, and even the
     # headless recipes render images with the Qt 2-D renderer.  6.10.* is
     # excluded to match pyirena[qtplot]; environment.yml additionally stays
-    # below 6.10 for the reference conda environment.
+    # below 6.10 for the reference conda environment.  No <6.11 cap (house
+    # rule for RHEL 8): Bernardyn is not deployed on RHEL 8 hosts; the one
+    # remaining RHEL 8 beamline machine uses a pinned, managed environment.
     "PySide6>=6.8,!=6.9.1,!=6.10.*",
 ]
 

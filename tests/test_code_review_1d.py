@@ -1,6 +1,6 @@
 """Regression tests for the 1D code review of November 2, 2026.
 
-Each test names its finding (docs/code-review-1d-2026-11-02.md) and checks
+Each test names its finding (review document in git history, commit 8ab3292) and checks
 the scientific or workflow invariant rather than the implementation.
 """
 

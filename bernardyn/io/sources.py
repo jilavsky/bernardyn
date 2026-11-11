@@ -28,6 +28,7 @@ from bernardyn.core.models import (
 )
 from bernardyn.core.registry import Registry
 from bernardyn.core.units import inverse_angstrom_scale
+from bernardyn.io.access import serialized
 
 log = logging.getLogger(__name__)
 
@@ -245,6 +246,7 @@ class SourceRegistry(Registry[SourceAdapter]):
                 return adapter
         raise ValueError(f"no source adapter supports {path}")
 
+    @serialized
     def discover_path(self, path: str | Path) -> list[ScatteringLocation]:
         resolved = Path(path).expanduser().resolve()
         return self.adapter_for(resolved).discover(resolved)
@@ -270,6 +272,7 @@ class SourceRegistry(Registry[SourceAdapter]):
         non_smeared = [location for location in locations if location.variant != "slit-smeared"]
         return [non_smeared[0] if non_smeared else locations[0]]
 
+    @serialized
     def load_location(self, location: ScatteringLocation, **options: Any) -> ScatteringRecord:
         return self.get(location.adapter_id).load(location, **options)
 
@@ -281,7 +284,13 @@ class HDF5SourceAdapter:
     def discover(self, path: Path) -> list[ScatteringLocation]:
         if not path.is_file():
             raise FileNotFoundError(path)
-        pyirena_locations = self._discover_with_pyirena(path)
+        # pyIrena can report a whole file it does not understand as one
+        # location without a group ("simple-hdf5"); such a location cannot be
+        # loaded, so fall through to the built-in visitor (and from there to
+        # the Map HDF5 arrays dialog) instead.
+        pyirena_locations = [
+            location for location in self._discover_with_pyirena(path) if location.internal_path
+        ]
         if pyirena_locations:
             return pyirena_locations
         locations: list[ScatteringLocation] = []
@@ -397,6 +406,12 @@ class HDF5SourceAdapter:
         q_unit: str = "1/A",
         error_fraction: float = 0.05,
     ) -> ScatteringRecord:
+        # An explicit array mapping (Map HDF5 arrays, or a plain group found
+        # by the built-in visitor) names the datasets to read; pyIrena's
+        # readers would look for NXcanSAS structure and find none.
+        if location.variant == "custom" or location.metadata.get("mapping"):
+            return self._load_direct(location, q_unit=q_unit)
+        first_error: ValueError | None = None
         try:
             from pyirena.io import ScatteringLocation as PyIrenaLocation
             from pyirena.io import load_scattering
@@ -434,8 +449,10 @@ class HDF5SourceAdapter:
                 source_fingerprint=record.source_fingerprint,
                 uncertainty_kind=_stored_uncertainty_kind(record.uncertainty),
             )
-        except (ImportError, ValueError):
+        except ImportError:
             pass
+        except ValueError as exc:
+            first_error = exc
         try:
             from pyirena.io.hdf5 import readGenericNXcanSAS
 
@@ -446,9 +463,20 @@ class HDF5SourceAdapter:
             )
         except ImportError:
             result = None
+        except ValueError as exc:
+            # e.g. NoScatteringDataError for a plain group with q/intensity
+            first_error = first_error or exc
+            result = None
         if result is not None:
             return self._record_from_mapping(location, result, q_unit=q_unit)
-        return self._load_direct(location, q_unit=q_unit)
+        try:
+            return self._load_direct(location, q_unit=q_unit)
+        except ValueError:
+            # pyIrena's explanation (e.g. "no usable scattering data") is
+            # more useful than "no Q/intensity mapping" for an NXcanSAS file.
+            if first_error is not None:
+                raise first_error from None
+            raise
 
     def _record_from_mapping(
         self, location: ScatteringLocation, result: Mapping[str, Any], *, q_unit: str

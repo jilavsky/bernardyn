@@ -205,7 +205,7 @@ def describe_package(path: str) -> dict[str, Any]:
         "path": str(loaded.path),
         "workspace": {"id": loaded.workspace.id, "title": loaded.workspace.title},
         "graphs": graphs,
-        "warnings": loaded.warnings,
+        "warnings": loaded.messages,
         "read_only_graph_ids": sorted(loaded.read_only_graphs),
     }
 
@@ -250,7 +250,7 @@ def export_plot(
         "width_px": graph.width_px,
         "height_px": graph.height_px,
         "dpi": graph.dpi,
-        "warnings": loaded.warnings,
+        "warnings": loaded.messages,
     }
 
 

@@ -46,6 +46,7 @@ from PySide6.QtWidgets import (
 
 from bernardyn.core.models import Annotation, AnnotationKind
 from bernardyn.core.transforms import PlotTransform
+from bernardyn.gui.widgets import ScientificSpinBox
 from bernardyn.io.file_browser import (
     DEFAULT_SORT_INDEX,
     FILE_TYPE_CHOICES,
@@ -946,33 +947,6 @@ class HDFMappingDialog(QDialog):
         )
 
 
-class TransformParameterDialog(QDialog):
-    def __init__(self, transform: PlotTransform, parent=None) -> None:
-        super().__init__(parent)
-        self.setWindowTitle(transform.name)
-        self.inputs: dict[str, QDoubleSpinBox] = {}
-        form = QFormLayout()
-        for parameter in transform.parameters:
-            spin = QDoubleSpinBox(self)
-            spin.setDecimals(8)
-            spin.setRange(parameter.minimum or -1e300, 1e300)
-            spin.setValue(parameter.default or max(parameter.minimum or 0.0, 1.0))
-            self.inputs[parameter.id] = spin
-            form.addRow(parameter.label + ":", spin)
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
-            parent=self,
-        )
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout = QVBoxLayout(self)
-        layout.addLayout(form)
-        layout.addWidget(buttons)
-
-    def values(self) -> dict[str, float]:
-        return {name: spin.value() for name, spin in self.inputs.items()}
-
-
 class SeriesTransformParameterDialog(QDialog):
     """Declarative per-series transform parameters in one compact table."""
 
@@ -984,7 +958,7 @@ class SeriesTransformParameterDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(f"{transform.name} parameters")
-        self.inputs: dict[str, dict[str, QDoubleSpinBox]] = {}
+        self.inputs: dict[str, dict[str, ScientificSpinBox]] = {}
         table = QTableWidget(len(rows), len(transform.parameters) + 1, self)
         table.setHorizontalHeaderLabels(
             ["Dataset", *(parameter.label for parameter in transform.parameters)]
@@ -993,9 +967,7 @@ class SeriesTransformParameterDialog(QDialog):
             table.setItem(row_index, 0, QTableWidgetItem(label))
             self.inputs[series_id] = {}
             for column, parameter in enumerate(transform.parameters, 1):
-                spin = QDoubleSpinBox(table)
-                spin.setDecimals(8)
-                spin.setRange(parameter.minimum or -1e300, 1e300)
+                spin = ScientificSpinBox(table, minimum=parameter.minimum or -1e300)
                 value = initial.get(parameter.id, parameter.default)
                 spin.setValue(value if value is not None else max(parameter.minimum or 0.0, 1.0))
                 table.setCellWidget(row_index, column, spin)
@@ -1114,10 +1086,8 @@ class AnnotationDialog(QDialog):
         if power_law and self.annotation is None and self.font_size.value() == 11:
             self.font_size.setValue(14)
 
-    def _spin(self, value: float) -> QDoubleSpinBox:
-        spin = QDoubleSpinBox(self)
-        spin.setDecimals(8)
-        spin.setRange(-1e300, 1e300)
+    def _spin(self, value: float) -> ScientificSpinBox:
+        spin = ScientificSpinBox(self)
         spin.setValue(value)
         return spin
 

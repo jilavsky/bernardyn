@@ -40,6 +40,18 @@ log = logging.getLogger(__name__)
 ANNOTATION_BASE_Z = 100_000
 BOX_ANNOTATION_BASE_Z = -10_000
 
+# Exported images are laid out by a dedicated offscreen widget whose layout
+# unit is one typographic point: the widget is ``width_in * 72`` units wide,
+# fonts get *pixel* sizes equal to their point sizes, and the finished scene
+# is scaled to the output pixels (``dpi / 72``).  The screen's DPI, the OS
+# scaling factor and the window size therefore never enter the output: a
+# 12 pt title is 12/72 inch tall in a figure of ``width_in`` inches on macOS,
+# Windows and Linux alike.  Integer point sizes stay integer pixel sizes, so
+# Qt never has to lay out a fractional font.  Line widths and symbol sizes,
+# given in layout units, are points too.
+OUTPUT_LAYOUT_DPI = 72
+OUTPUT_RENDERER_VERSION = "1.1"
+
 LINE_STYLES = {
     "none": Qt.PenStyle.NoPen,
     "solid": Qt.PenStyle.SolidLine,
@@ -193,7 +205,7 @@ class Plot2DWidget(pg.PlotWidget):
     renderer_id = "plot2d"
     powerLawMoved = Signal(str, object)
 
-    def __init__(self, parent=None) -> None:
+    def __init__(self, parent=None, *, output_layout: bool = False) -> None:
         super().__init__(
             parent=parent,
             background="w",
@@ -206,6 +218,16 @@ class Plot2DWidget(pg.PlotWidget):
         )
         self.setAntialiasing(True)
         self._restrict_context_menu()
+        # True for the offscreen widget that lays out exported images (see
+        # OUTPUT_LAYOUT_DPI); False for the interactive on-screen plot, whose
+        # fonts follow the platform's own point size.
+        self._output_layout = output_layout
+        if output_layout:
+            self.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen)
+        # Arrow heads are drawn in screen pixels, so their angle depends on
+        # the view's aspect; recomputed whenever the view transform changes.
+        self._arrow_heads: list[tuple[pg.ArrowItem, tuple[float, float], tuple[float, float]]] = []
+        self.getPlotItem().getViewBox().sigTransformChanged.connect(self._update_arrow_heads)
         self._graph: GraphDocument | None = None
         self._snapshots: dict[str, PlotSeries] = {}
         self._legend = None
@@ -261,7 +283,34 @@ class Plot2DWidget(pg.PlotWidget):
         if hasattr(scene, "contextMenu"):
             scene.contextMenu = []
 
+    def _css_size(self, points: float) -> str:
+        """CSS font size for ``points``: pixels in output layout, points on screen."""
+        return f"{points:g}px" if self._output_layout else f"{points:g}pt"
+
+    def _font(self, family: str, points: float) -> QFont:
+        font = QFont(family)
+        if self._output_layout:
+            font.setPixelSize(max(1, round(points)))
+        else:
+            font = QFont(family, round(points))
+        return font
+
+    @staticmethod
+    def output_layout_size(graph: GraphDocument) -> tuple[int, int]:
+        """Size, in layout units (points), of the widget that lays out output.
+
+        The width is the physical output width; the height keeps the output
+        pixel aspect so the exported scene is never stretched.
+        """
+        width = max(50, round(graph.width_in * OUTPUT_LAYOUT_DPI))
+        height = max(50, round(width * graph.height_px / graph.width_px))
+        return width, height
+
     def render(self, graph: GraphDocument, snapshots: Mapping[str, PlotSeries]) -> None:
+        if self._output_layout:
+            width, height = self.output_layout_size(graph)
+            if (self.width(), self.height()) != (width, height):
+                self.resize(width, height)
         previous_graph = self._graph
         previous_snapshots = self._snapshots
         plot = self.getPlotItem()
@@ -300,7 +349,7 @@ class Plot2DWidget(pg.PlotWidget):
         plot.setTitle(
             graph.title,
             color=_color(graph.x_axis.color).name(),
-            size=f"{graph.typography.title_size}pt",
+            size=self._css_size(graph.typography.title_size),
             family=graph.typography.family,
         )
         # PlotItem's hard-coded 30 px title row clips larger selected title
@@ -313,7 +362,7 @@ class Plot2DWidget(pg.PlotWidget):
             graph.x_axis.label,
             color=_color(graph.x_axis.color).name(),
             **{
-                "font-size": f"{graph.typography.axis_label_size}pt",
+                "font-size": self._css_size(graph.typography.axis_label_size),
                 "font-family": graph.typography.family,
             },
         )
@@ -322,11 +371,11 @@ class Plot2DWidget(pg.PlotWidget):
             graph.y_axis.label,
             color=_color(graph.y_axis.color).name(),
             **{
-                "font-size": f"{graph.typography.axis_label_size}pt",
+                "font-size": self._css_size(graph.typography.axis_label_size),
                 "font-family": graph.typography.family,
             },
         )
-        tick_font = QFont(graph.typography.family, graph.typography.tick_size)
+        tick_font = self._font(graph.typography.family, graph.typography.tick_size)
         for axis_name, spec in (("bottom", graph.x_axis), ("left", graph.y_axis)):
             axis = plot.getAxis(axis_name)
             axis.disable_auto_si_prefix()
@@ -371,7 +420,7 @@ class Plot2DWidget(pg.PlotWidget):
                 colCount=graph.legend.columns,
                 frame=graph.legend.framed,
                 labelTextColor=_color(graph.x_axis.color),
-                labelTextSize=f"{graph.typography.legend_size}pt",
+                labelTextSize=self._css_size(graph.typography.legend_size),
                 sampleType=LegendSymbolSample,
             )
             if graph.legend.framed:
@@ -505,6 +554,8 @@ class Plot2DWidget(pg.PlotWidget):
 
     def _schedule_view_dependent_refresh(self) -> None:
         """Recalculate clipping/downsampling after the widget settles in its tab."""
+        if getattr(self, "_output_layout", False):
+            return  # output is settled explicitly and never downsampled
         if getattr(self, "_curve_items", None):
             self._view_dependent_refresh.start()
 
@@ -515,7 +566,10 @@ class Plot2DWidget(pg.PlotWidget):
             # ViewBox changes.  It clears the cached clipped/downsampled
             # display array while leaving Bernardyn's canonical snapshot
             # untouched.
-            item.viewRangeChanged(changed=[True, False])
+            try:
+                item.viewRangeChanged(changed=[True, False])
+            except RuntimeError:  # the widget was closed before the timer fired
+                return
 
     @staticmethod
     def _range_signature(graph: GraphDocument) -> tuple:
@@ -555,7 +609,7 @@ class Plot2DWidget(pg.PlotWidget):
                 label.text,
                 family=graph.typography.family,
                 color=color,
-                size=f"{graph.typography.legend_size}pt",
+                size=self._css_size(graph.typography.legend_size),
             )
         self._legend.updateSize()
 
@@ -595,7 +649,13 @@ class Plot2DWidget(pg.PlotWidget):
         item.opts["legend_symbol_size"] = graph.legend.symbol_size
         plot.addItem(item)
         self._curve_items[series_id] = item
-        item.setDownsampling(auto=True, method="peak")
+        if self._output_layout:
+            # Automatic downsampling follows the widget width in layout units
+            # (points), far coarser than the exported pixels; output keeps
+            # every point.
+            item.setDownsampling(ds=1, auto=False)
+        else:
+            item.setDownsampling(auto=True, method="peak")
         item.setClipToView(True)
         if style.show_error_bars and (snapshot.dx is not None or snapshot.dy is not None):
             errors = self._add_error_bars(graph, snapshot, style)
@@ -731,6 +791,7 @@ class Plot2DWidget(pg.PlotWidget):
     def _add_annotations(self, graph: GraphDocument) -> None:
         plot = self.getPlotItem()
         self._annotation_items = []
+        self._arrow_heads = []
         log.debug("drawing %d annotation(s)", len(graph.annotations))
         for annotation in graph.annotations:
             try:
@@ -763,7 +824,7 @@ class Plot2DWidget(pg.PlotWidget):
         x, y = self._plot_position(graph, annotation.position)
         if annotation.kind is AnnotationKind.TEXT:
             item = pg.TextItem(annotation.text, color=color, anchor=(0, 1))
-            item.setFont(QFont(graph.typography.family, annotation.font_size))
+            item.setFont(self._font(graph.typography.family, annotation.font_size))
             item.setPos(x, y)
             add_overlay(item)
         elif annotation.kind is AnnotationKind.HLINE:
@@ -795,11 +856,12 @@ class Plot2DWidget(pg.PlotWidget):
                     pen=pg.mkPen(color, width=annotation.line_width),
                 )
             )
-            angle = math.degrees(math.atan2(end_y - y, end_x - x))
-            arrow = pg.ArrowItem(
-                pos=(end_x, end_y), angle=180 - angle, brush=color, pen=color
-            )
+            # The head is drawn in screen pixels; its angle is set from the
+            # shaft's on-screen direction by _update_arrow_heads.
+            arrow = pg.ArrowItem(pos=(end_x, end_y), angle=0, brush=color, pen=color)
             add_overlay(arrow)
+            self._arrow_heads.append((arrow, (x, y), (end_x, end_y)))
+            self._update_arrow_heads()
         elif annotation.kind is AnnotationKind.BOX:
             if annotation.end is None:  # pragma: no cover - blocked by the model
                 raise ValueError("box annotation has no end point")
@@ -844,7 +906,7 @@ class Plot2DWidget(pg.PlotWidget):
                 color=color,
                 anchor=(0.5, 1),
             )
-            label.setFont(QFont(graph.typography.family, annotation.font_size))
+            label.setFont(self._font(graph.typography.family, annotation.font_size))
             label.setPos((x_low + x_high) / 2, max(y_low, y_high))
 
             def moved(offset_x: float, offset_y: float) -> None:
@@ -870,6 +932,30 @@ class Plot2DWidget(pg.PlotWidget):
             )
             log.warning(message)
             self.render_warnings.append(message)
+
+    def _update_arrow_heads(self, *_args) -> None:
+        """Point each arrow head along its shaft as drawn on screen.
+
+        The shaft runs between two data points, but the head ignores view
+        transformations.  Its angle must therefore come from pixel positions:
+        an angle computed in data units is wrong whenever the axes are not
+        equally scaled (almost always).
+        """
+        if not self._arrow_heads:
+            return
+        view_box = self.getPlotItem().getViewBox()
+        for arrow, start, end in self._arrow_heads:
+            try:
+                first = view_box.mapViewToScene(pg.Point(*start))
+                second = view_box.mapViewToScene(pg.Point(*end))
+            except RuntimeError:  # pragma: no cover - item deleted with the scene
+                continue
+            dx, dy = second.x() - first.x(), second.y() - first.y()
+            if dx == 0 and dy == 0:
+                continue
+            # Scene y runs downwards; ArrowItem's angle 0 points left and
+            # turns clockwise, so a rightwards shaft needs 180 degrees.
+            arrow.setStyle(angle=180 - math.degrees(math.atan2(-dy, dx)))
 
     @staticmethod
     def _annotation_domain_problem(graph: GraphDocument, annotation: Annotation) -> str | None:
@@ -1109,11 +1195,84 @@ class Plot2DWidget(pg.PlotWidget):
             if legend is not None:
                 legend.setFlag(flag, ignores_transform)
 
-    def capture_preview(self, width: int = 1200) -> bytes:
-        with self._legend_follows_export_scale(), self._preview_hidden():
+    def settle_layout(self, passes: int = 3) -> None:
+        """Paint and lay the widget out until axis widths and tick labels settle.
+
+        PyQtGraph sizes axes from their tick-label text and decides which
+        labels overlap only while painting, so a scene that was never painted
+        has stale axis widths (the Y title over the tick labels) and drops
+        labels such as ``2.000e+03``.  Each pass paints offscreen and then
+        delivers the layout requests that painting posted.
+        """
+        if not self.isVisible():
+            self.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen)
+            self.show()
+        for _ in range(passes):
+            QApplication.sendPostedEvents()
+            QApplication.processEvents()
+            self.grab()
+        QApplication.sendPostedEvents()
+        QApplication.processEvents()
+        self._update_arrow_heads()
+
+    @contextmanager
+    def _output_widget(self):
+        """Yield a settled widget laid out for output (see OUTPUT_LAYOUT_DPI).
+
+        An output-layout widget (the headless API) is used directly.  The
+        interactive plot instead hands its graph, snapshots and current view
+        range (a mouse zoom is kept; the File browser preview is not) to a
+        temporary offscreen widget, so output never depends on the window.
+        """
+        if self._output_layout:
+            self.settle_layout()
+            yield self
+            return
+        if self._graph is None:
+            yield self  # nothing rendered yet; never hide the on-screen widget
+            return
+        with self._preview_hidden():
+            view_range = self.getPlotItem().getViewBox().viewRange()
+        output = Plot2DWidget(output_layout=True)
+        try:
+            output.render(self._graph, self._snapshots)
+            output.settle_layout(passes=1)
+            output.getPlotItem().getViewBox().setRange(
+                xRange=view_range[0], yRange=view_range[1], padding=0
+            )
+            output.settle_layout()
+            yield output
+        finally:
+            output.close()
+            output.deleteLater()
+
+    def _output_size(self, width: int | None) -> tuple[int, int]:
+        graph = self._graph
+        image_width = width or (graph.width_px if graph else 1600)
+        image_height = (
+            round(image_width * graph.height_px / graph.width_px)
+            if width is not None and graph is not None
+            else (graph.height_px if graph else 1000)
+        )
+        return image_width, image_height
+
+    def _export_raster(self, image_width: int, image_height: int):
+        """Scale this (output-layout) scene to an exact raster size."""
+        with self._legend_follows_export_scale():
             exporter = pyqtgraph.exporters.ImageExporter(self.getPlotItem())
-            exporter.parameters()["width"] = width
-            image = exporter.export(toBytes=True)
+            exporter.parameters()["width"] = image_width
+            # ImageExporter normally derives height from the widget's aspect;
+            # a graph's output size is an explicit export size instead.
+            exporter.parameters().param("height").setValue(
+                image_height, blockSignal=exporter.widthChanged
+            )
+            return exporter.export(toBytes=True)
+
+    def capture_preview(self, width: int = 1200) -> bytes:
+        """PNG thumbnail of the output, stored in packages as the archived preview."""
+        image_width, image_height = self._output_size(width)
+        with self._output_widget() as output:
+            image = output._export_raster(image_width, image_height)
         data = QByteArray()
         buffer = QBuffer(data)
         buffer.open(QIODevice.OpenModeFlag.WriteOnly)
@@ -1123,25 +1282,10 @@ class Plot2DWidget(pg.PlotWidget):
     capture_snapshot = capture_preview
 
     def capture_output_image(self, width: int | None = None):
-        """Render the exact raster image used for export and clipboard copy."""
-        graph = self._graph
-        image_width = width or (graph.width_px if graph else 1600)
-        image_height = (
-            round(image_width * graph.height_px / graph.width_px)
-            if width is not None and graph is not None
-            else (graph.height_px if graph else 1000)
-        )
-        # LegendItem ignores scene transforms while users zoom.  During
-        # export, let it follow the scene scale so it matches the axis font.
-        with self._legend_follows_export_scale(), self._preview_hidden():
-            exporter = pyqtgraph.exporters.ImageExporter(self.getPlotItem())
-            exporter.parameters()["width"] = image_width
-            # ImageExporter normally derives height from the current on-screen
-            # widget.  A graph's output size is instead an explicit export size.
-            exporter.parameters().param("height").setValue(
-                image_height, blockSignal=exporter.widthChanged
-            )
-            return exporter.export(toBytes=True)
+        """Render the exact raster image used for export, preview and clipboard copy."""
+        image_width, image_height = self._output_size(width)
+        with self._output_widget() as output:
+            return output._export_raster(image_width, image_height)
 
     def save_image(self, path: str | Path, width: int | None = None) -> Path:
         destination = Path(path)
@@ -1178,11 +1322,11 @@ class Plot2DWidget(pg.PlotWidget):
             generator.setTitle(self._graph.title if self._graph else "Bernardyn graph")
             painter = QPainter(generator)
             try:
-                with self._legend_follows_export_scale(), self._preview_hidden():
-                    self.scene().render(
+                with self._output_widget() as output, output._legend_follows_export_scale():
+                    output.scene().render(
                         painter,
                         QRectF(0, 0, size.width(), size.height()),
-                        self.scene().sceneRect(),
+                        output.getPlotItem().sceneBoundingRect(),
                     )
             finally:
                 painter.end()

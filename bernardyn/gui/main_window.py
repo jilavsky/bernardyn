@@ -253,8 +253,14 @@ class GraphEditCommand(QUndoCommand):
         self.before = before
         self.after = after
         self.recompute = recompute
+        # The resolved arrays shown before the edit.  Undo puts these back
+        # exactly instead of recomputing them, so undoing an edit never turns
+        # archived older-version snapshots into current-version data.
+        self.before_snapshots: dict | None = None
 
     def redo(self) -> None:
+        controller = self.window.controller
+        snapshots = dict(controller.snapshots.get(self.after.id, {}))
         try:
             self.window._commit_graph(self.after, self.recompute)
         except Exception:
@@ -263,9 +269,19 @@ class GraphEditCommand(QUndoCommand):
             # leaving an undo entry for an edit that never happened.
             self.setObsolete(True)
             raise
+        if self.before_snapshots is None:
+            self.before_snapshots = snapshots
 
     def undo(self) -> None:
-        self.window._commit_graph(self.before, self.recompute)
+        if self.before_snapshots is None:  # pragma: no cover - redo always runs first
+            self.window._commit_graph(self.before, self.recompute)
+            return
+        controller = self.window.controller
+        controller.workspace.replace_graph(self.before)
+        controller.snapshots[self.before.id] = dict(self.before_snapshots)
+        self.window._render_graph(self.before.id)
+        self.window._refresh_dataset_list()
+        self.window._sync_inspector()
 
 
 class DatasetImportCommand(QUndoCommand):
@@ -493,6 +509,7 @@ class MainWindow(QMainWindow):
         self.inspector.outputPreviewRequested.connect(self._preview_output)
         self.inspector.autoscaleRequested.connect(self._autoscale_current_graph)
         self.inspector.displayCanvasRequested.connect(self._set_display_canvas_size)
+        self.inspector.matchOutputCanvasRequested.connect(self._match_output_canvas)
         self._build_docks()
         self._build_actions()
         self._build_menus()
@@ -934,18 +951,38 @@ class MainWindow(QMainWindow):
             raise
         previous_lock = self._workspace_lock
         previous_path = self._locked_workspace_path
-        self._workspace_lock = lock
-        self._locked_workspace_path = target
-        if previous_lock is not None and previous_lock is not lock and previous_path != target:
-            previous_lock.unlock()
+        if loaded.future_schema:
+            # Written by a newer Bernardyn: shown as archived previews only.
+            # The controller has no package path, so Save asks for a new
+            # file and this one can never be overwritten; no edit lock either.
+            if acquired:
+                lock.unlock()
+            self._workspace_lock = None
+            self._locked_workspace_path = None
+            if previous_lock is not None:
+                previous_lock.unlock()
+        else:
+            self._workspace_lock = lock
+            self._locked_workspace_path = target
+            if previous_lock is not None and previous_lock is not lock and previous_path != target:
+                previous_lock.unlock()
         self.undo_stack.clear()
         self._mark_saved()
         self._rebuild_tabs()
         self._update_workspace_indicator()
-        if remember:
+        if remember and not loaded.future_schema:
             self._remember_workspace(target)
-        if loaded.warnings:
-            QMessageBox.warning(self, "Package warnings", "\n".join(loaded.warnings))
+        if loaded.future_schema:
+            QMessageBox.warning(
+                self,
+                "Package from a newer Bernardyn",
+                f"{target.name} was written by a newer version of Bernardyn "
+                f"({'; '.join(loaded.messages)}).\n\n"
+                "Its embedded previews are shown, but its graphs cannot be edited here. "
+                "The file is left untouched: Save will ask for a new file name.",
+            )
+        elif loaded.messages:
+            QMessageBox.warning(self, "Package warnings", "\n".join(loaded.messages))
         if restore_layout:
             self._restore_layout()
         return True
@@ -1066,8 +1103,9 @@ class MainWindow(QMainWindow):
         self._update_workspace_indicator()
 
     def _new_graph(self, renderer_id: str) -> None:
-        self.undo_stack.push(
-            WorkspaceEditCommand(self, "New graph", lambda: self.controller.new_graph(renderer_id))
+        self._push_edit(
+            WorkspaceEditCommand(self, "New graph", lambda: self.controller.new_graph(renderer_id)),
+            "New graph",
         )
 
     def _close_tab(self, index: int) -> None:
@@ -1075,10 +1113,11 @@ class MainWindow(QMainWindow):
         if not isinstance(page, GraphPage):
             self.tabs.removeTab(index)
             return
-        self.undo_stack.push(
+        self._push_edit(
             WorkspaceEditCommand(
                 self, "Close graph", lambda: self.controller.close_graph(page.graph_id)
-            )
+            ),
+            "Close graph",
         )
 
     def _active_tab_changed(self, index: int) -> None:
@@ -1159,6 +1198,17 @@ class MainWindow(QMainWindow):
             return
         page.set_display_canvas_size(width, height)
         self.statusBar().showMessage(f"Set displayed canvas to {width} × {height} px")
+
+    def _match_output_canvas(self) -> None:
+        page = self.tabs.currentWidget()
+        if not isinstance(page, GraphPage):
+            return
+        size = page.match_output_canvas()
+        if size is not None:
+            self.statusBar().showMessage(
+                f"Displayed canvas set to {size[0]} × {size[1]} px, the output's proportions "
+                "at this screen's font resolution"
+            )
 
     def _move_power_law(
         self, graph_id: str, annotation_id: str, position: tuple[float, float]
@@ -1310,7 +1360,7 @@ class MainWindow(QMainWindow):
             self.controller.validate_graph_update(graph, recompute=recompute)
             self.undo_stack.push(GraphEditCommand(self, before, graph, recompute, text))
         except Exception as exc:
-            QMessageBox.warning(self, "Graph change", str(exc))
+            QMessageBox.warning(self, "Graph change", _edit_error_text(exc))
             self._sync_inspector()
 
     def _push_edit(self, command: QUndoCommand, title: str) -> bool:
@@ -1379,7 +1429,7 @@ class MainWindow(QMainWindow):
             self.controller.validate_graph_update(after, recompute=True)
             self.undo_stack.push(GraphEditCommand(self, before, after, True, f"Set {transform.name} view"))
         except Exception as exc:
-            QMessageBox.warning(self, "Graph change", str(exc))
+            QMessageBox.warning(self, "Graph change", _edit_error_text(exc))
             self._sync_inspector()
 
     def _open_data(self) -> None:
@@ -2119,7 +2169,7 @@ class MainWindow(QMainWindow):
                         self._pending_graph_renders.add(graph_id)
                         self.statusBar().showMessage(done, 5000)
                     except Exception as exc:
-                        QMessageBox.warning(self, "Load error", str(exc))
+                        QMessageBox.warning(self, "Load error", _edit_error_text(exc))
         if not self._workers:
             for graph_id in self._pending_graph_renders:
                 self._render_graph(graph_id)
@@ -2222,9 +2272,11 @@ class MainWindow(QMainWindow):
         )
         if reordered == graph.series:
             return
-        self.undo_stack.push(
-            GraphEditCommand(self, graph, graph.replace_series(reordered), False, "Reorder datasets")
-        )
+        if not self._push_edit(
+            GraphEditCommand(self, graph, graph.replace_series(reordered), False, "Reorder datasets"),
+            "Reorder datasets",
+        ):
+            self._refresh_dataset_list()
 
     def _open_package(self) -> None:
         previous = self.user_state.get(LAST_WORKSPACE_PATH_KEY, "")
@@ -2257,8 +2309,11 @@ class MainWindow(QMainWindow):
             return
         try:
             package = load_package(path)
-            if not package.workspace.graphs:
-                raise ValueError("the package contains no editable graphs")
+            if package.future_schema or not package.workspace.graphs:
+                raise ValueError(
+                    "; ".join(package.messages) if package.future_schema
+                    else "the package contains no editable graphs"
+                )
             dialog = GraphSelectionDialog(
                 [(graph.id, graph.title) for graph in package.workspace.graphs], self
             )
@@ -2271,13 +2326,15 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Import graph", str(exc))
             return
         # Catalog, snapshots, warnings and archival status are all part of
-        # the controller state the command captures and restores.
-        self._push_edit(
+        # the controller state the command captures and restores.  The package
+        # already read for the selection is reused, not read a second time.
+        if self._push_edit(
             WorkspaceEditCommand(
-                self, "Import graph", lambda: self.controller.import_from_package(path, selected)
+                self, "Import graph", lambda: self.controller.import_from_package(package, selected)
             ),
             "Import graph",
-        )
+        ) and package.messages:
+            QMessageBox.warning(self, "Package warnings", "\n".join(package.messages))
 
     def _collect_artifacts(self):
         previews = dict(self.controller.previews)
@@ -2329,6 +2386,18 @@ class MainWindow(QMainWindow):
 
     def _save_to(self, path, graph_ids=None) -> bool:
         target = ensure_package_suffix(path).resolve()
+        package_path = self.controller.package_path
+        if graph_ids is not None and package_path is not None and target == package_path.resolve():
+            # Saving one graph onto the open workspace file would replace the
+            # whole workspace package with that graph, while the window still
+            # believed the workspace was saved there.
+            QMessageBox.warning(
+                self,
+                "Save graph package",
+                f"{target.name} is the open workspace. Choose a different file for the graph "
+                "package, or use Save to save the whole workspace.",
+            )
+            return False
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
@@ -2514,7 +2583,9 @@ class MainWindow(QMainWindow):
         # the current series count (re-apply the preset after adding data).
         changed = apply_series_preset(graph.series, preset, PALETTE)
         after = graph.replace_series(changed)
-        self.undo_stack.push(GraphEditCommand(self, graph, after, False, "Apply series preset"))
+        self._push_edit(
+            GraphEditCommand(self, graph, after, False, "Apply series preset"), "Series preset"
+        )
 
     def _template_folder(self) -> Path:
         root = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppDataLocation)
@@ -2537,7 +2608,10 @@ class MainWindow(QMainWindow):
             f"A template saved as {destination.name} already exists. Replace it?",
         ) != QMessageBox.StandardButton.Yes:
             return
-        save_template(destination, graph, name.strip())
+        try:
+            save_template(destination, graph, name.strip())
+        except OSError as exc:
+            QMessageBox.warning(self, "Save template", str(exc))
 
     def _choose_template(self, title: str) -> Path | None:
         templates = sorted(self._template_folder().glob(f"*{TEMPLATE_SUFFIX}"))
@@ -2588,7 +2662,10 @@ class MainWindow(QMainWindow):
     def _delete_template(self) -> None:
         path = self._choose_template("Delete template")
         if path is not None and QMessageBox.question(self, "Delete template", f"Delete {path.name}?") == QMessageBox.StandardButton.Yes:
-            path.unlink()
+            try:
+                path.unlink()
+            except OSError as exc:
+                QMessageBox.warning(self, "Delete template", str(exc))
 
     def _restore_layout(self) -> None:
         if not self.controller.workspace.layout_state:

@@ -6,8 +6,87 @@ behavior changes.
 
 ## Unreleased
 
+Fixes from the code review of 2026-11-09 (issue #1, findings B01–B17 and
+decisions D1–D5). The next release should be 1.2.0: the multiplier and
+image-output changes below alter results. Open work from all reviews and
+plans is now tracked in one list, [`docs/TODO.md`](docs/TODO.md); the old
+review and plan documents were removed (they remain in git history).
+
+### Changed
+
+- **Series multiplier scales the intensity before the view** (D1), as in
+  Irena. In Guinier views it used to multiply ln(I), which changed the slope:
+  a multiplier of 2 turned an Rg of 30 Å into an apparent 42 Å. It now shifts
+  ln(I) only. Guinier, Guinier rod, Guinier sheet, Zimm and Debye–Bueche are
+  now version 1.1. Snapshots saved with 1.0 are still exact when the
+  multiplier is 1; otherwise they keep their arrays with a note until you
+  choose **Recompute with current version**. Views linear in I are unchanged.
+- **Exported images no longer depend on the window** (D2, B05, B06). PNG,
+  JPEG, SVG, the clipboard image, printing and package previews are laid out
+  by an offscreen widget at the physical output size. Font sizes are true
+  points (a 12 pt label is 1/6 inch tall); line widths and symbol sizes are
+  points too. Output is identical on macOS, Windows and Linux whatever the
+  window size, screen DPI or display scaling. Text in exports is therefore
+  usually larger than before. The 2-D renderer version is now 1.1.
+  **Match output** (beside Canvas → Set) sizes the on-screen canvas so text
+  takes the same share of the plot as in the output.
+- **Graphs with older-version snapshots refuse data edits** (D4, B02). Adding,
+  replacing, copying or moving data, and edits that recompute (multiplier,
+  Q range, log axes, templates), say to use **Recompute with current version**
+  first instead of silently recomputing archived arrays. Removing series and
+  changing the view still work. The version note is now derived from the
+  snapshots, so it also appears after **Import graph**, duplicate and Undo.
+- **Packages from newer releases stay readable** (D3, B11): an unknown
+  annotation kind is kept (not drawn) and written back on save; an unknown
+  curve role loads as a plain X/Y curve and is kept. Both are reported as
+  notices. Malformed values are reported as package validation errors.
+- Print uses the full-resolution output image instead of the 1200 px preview.
+
+### Fixed
+
+- Saving after opening a package written by a newer Bernardyn could replace
+  it with an empty schema-3 file (B01). Such a package now opens read-only,
+  without an edit lock, and **Save** asks for a new file.
+- Multiplier, offset, annotation positions and I₀/Rg fields rounded values
+  below 1e-8 to zero (B03). They now keep full precision and accept exponent
+  notation (`3.2e-10`).
+- **Export to Igor (h5xp)** destroyed an existing file before failing when
+  the workspace had no I(Q) data (B04). It now checks first and writes
+  atomically.
+- Headless images (API, CLI, MCP) were laid out on a stale scene: a blank
+  strip at the right, the Y title over tick labels, missing labels (B05).
+- Arrow heads pointed in a direction computed in data units, not on screen
+  (B07); they now follow the shaft and update on zoom and resize.
+- Plain HDF5 groups with `q`/`intensity`, files pyIrena does not recognise,
+  and **Map HDF5 arrays** mappings failed to load (B08).
+- Residuals added to an untouched default graph from the workspace kept
+  log–log axes and lost every negative point (B09). Result curves now carry
+  their recommended axes.
+- A read-only graph (failed checksum) accepted added and transferred data
+  (B10).
+- **Import graph** now shows the package's warnings, reads the file once,
+  recovers missing snapshots and remaps 3-D series positions (B12).
+- Discovery, result surveys and previews could open a file while a load ran
+  in the background, the concurrency that fails on SSHFS-Win (B13). Every
+  source-file read now holds one process-wide lock; folders are listed with
+  `os.scandir`, and the result cache holds 256 entries.
+- Uncaught errors are written to `~/.bernardyn/logs/bernardyn.log` and shown
+  in a dialog; every undoable edit reports failures (B14).
+- Trimming a series' Q range no longer warns that points were "outside the
+  valid plot domain" (B15).
+- **Save graph package** onto the open workspace file is refused; it replaced
+  the whole workspace with one graph (B16).
+- A package that failed while recomputing a missing snapshot left the window
+  half-opened (B17).
+- Saving or deleting a template reports file errors instead of failing
+  silently.
+
+### Removed
+
+- The unused `TransformParameterDialog`.
+
 Fixes from the 1D code review of 2026-11-02
-(`docs/code-review-1d-2026-11-02.md`, findings F01–F16).
+(findings F01–F16; the review document is in git history).
 
 ### Changed
 

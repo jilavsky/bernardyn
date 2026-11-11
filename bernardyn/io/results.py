@@ -14,6 +14,7 @@ import numpy as np
 
 from bernardyn.core.models import CurveRole, GenericCurve, SeriesStyle
 from bernardyn.core.units import parse_unit
+from bernardyn.io.access import SOURCE_ACCESS_LOCK, serialized
 from bernardyn.io.sources import ScatteringRecord
 
 
@@ -49,6 +50,18 @@ class ResultCurveBundle:
     graph_title: str
     x_log: bool
     y_log: bool
+
+    def __post_init__(self) -> None:
+        # Keep the recommended axes with the curve itself, so a curve added
+        # later from the workspace catalog to an empty graph gets them too
+        # (see bernardyn.core.controller.curve_axis_hint).
+        result = self.curve.metadata.get("bernardyn_result")
+        if isinstance(result, Mapping) and "axis_log" not in result:
+            metadata = {
+                **self.curve.metadata,
+                "bernardyn_result": {**result, "axis_log": [self.x_log, self.y_log]},
+            }
+            object.__setattr__(self, "curve", replace(self.curve, metadata=metadata))
 
 
 _ANALYSES = (
@@ -92,11 +105,19 @@ def _reader():
 # Recently read results, keyed by file identity.  Choosing curves and then
 # loading several kinds from one file would otherwise re-read it each time.
 _CACHE: OrderedDict[tuple[str, str, str, int, int], Any] = OrderedDict()
-_CACHE_SIZE = 64
+# Large enough for a typical batch of files (several kinds each).
+_CACHE_SIZE = 256
 
 
 def _cached(kind: str, descriptor: ResultDescriptor, load: Callable[[ResultDescriptor], Any]) -> Any:
     """Return ``load(descriptor)``, reusing it while the file is unchanged."""
+    with SOURCE_ACCESS_LOCK:
+        return _cached_locked(kind, descriptor, load)
+
+
+def _cached_locked(
+    kind: str, descriptor: ResultDescriptor, load: Callable[[ResultDescriptor], Any]
+) -> Any:
     stat = descriptor.path.stat()
     key = (kind, str(descriptor.path), descriptor.analysis, stat.st_size, stat.st_mtime_ns)
     if key in _CACHE:
@@ -110,7 +131,8 @@ def _cached(kind: str, descriptor: ResultDescriptor, load: Callable[[ResultDescr
 
 
 def clear_result_cache() -> None:
-    _CACHE.clear()
+    with SOURCE_ACCESS_LOCK:
+        _CACHE.clear()
 
 
 def _result(descriptor: ResultDescriptor) -> Mapping[str, Any]:
@@ -273,6 +295,7 @@ def _is_arbitrary(unit: str | None) -> bool:
     return unit is None or parse_unit(unit) == parse_unit("arb")
 
 
+@serialized
 def discover_results(path: str | Path) -> list[ResultDescriptor]:
     """Report result groups with at least one stored I(Q) curve."""
     source = Path(path).expanduser().resolve()
@@ -309,6 +332,7 @@ def _array(result: Mapping[str, Any], key: str, *, length: int | None = None) ->
     return array
 
 
+@serialized
 def load_result_bundle(descriptor: ResultDescriptor) -> ResultBundle:
     """Load the available measured, fitted, and component I(Q) curves."""
     result = _result(descriptor)
@@ -483,6 +507,7 @@ def _result_context(descriptor: ResultDescriptor, result: Mapping[str, Any]) -> 
     return fingerprint, result_metadata, provenance
 
 
+@serialized
 def available_curve_kinds(descriptor: ResultDescriptor) -> tuple[str, ...]:
     """Return generic curve views that have complete public-reader arrays."""
     result = _result(descriptor)
@@ -529,6 +554,7 @@ def _modeling_populations(
     ]
 
 
+@serialized
 def load_result_curves(descriptor: ResultDescriptor, kind: str) -> tuple[ResultCurveBundle, ...]:
     """Load every curve of one kind; Modeling has one distribution per population."""
     if descriptor.analysis == "modeling" and kind in _MODELING_DISTRIBUTIONS:
@@ -599,6 +625,7 @@ def _modeling_population_distribution(
     )
 
 
+@serialized
 def load_result_curve(descriptor: ResultDescriptor, kind: str) -> ResultCurveBundle:
     """Load a supported non-I(Q) curve without assigning scattering semantics."""
     result = _result(descriptor)

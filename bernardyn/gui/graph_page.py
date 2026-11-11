@@ -49,8 +49,9 @@ class GraphCanvas(QWidget):
             "padding: 2px 5px; }"
         )
         self.size_badge.setToolTip(
-            "Current on-screen graph canvas size. This changes with the window; "
-            "compare it with Canvas (px) when adjusting relative font sizes."
+            "Current on-screen graph canvas size. It changes with the window but does not "
+            "affect exported images, which are laid out at the output size in inches with "
+            "font sizes in points. Use Preview output to see the exact result."
         )
         self.size_badge.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self.size_badge.hide()
@@ -255,6 +256,29 @@ class GraphPage(QWidget):
         # without permanently locking the user out of later window resizing.
         QTimer.singleShot(0, lambda: self._correct_display_canvas_size(width, height))
 
+    def output_matching_canvas_size(self) -> tuple[int, int] | None:
+        """On-screen size at which screen text has the output's proportions.
+
+        Output is laid out ``width_in`` inches wide with fonts in points.  On
+        screen, Qt turns points into pixels at the screen's *logical* DPI (72
+        on macOS, 96 on Windows at any scaling, the X/Wayland setting on
+        Linux), so a canvas ``width_in * logical DPI`` pixels wide shows every
+        font at the same fraction of the plot as the exported image, without
+        assuming any particular DPI.
+        """
+        if not isinstance(self.renderer, Plot2DWidget):
+            return None
+        dpi = self.renderer.logicalDpiX() or 96
+        width = max(100, round(self._graph.width_in * dpi))
+        height = max(100, round(width * self._graph.height_px / self._graph.width_px))
+        return width, height
+
+    def match_output_canvas(self) -> tuple[int, int] | None:
+        size = self.output_matching_canvas_size()
+        if size is not None:
+            self.set_display_canvas_size(*size)
+        return size
+
     def _correct_display_canvas_size(self, width: int, height: int) -> None:
         if not isinstance(self.renderer, Plot2DWidget):
             return
@@ -329,8 +353,8 @@ class GraphPage(QWidget):
         )
 
     def print_to(self, printer: QPrinter) -> None:
-        """Print a high-quality raster snapshot while preserving graph aspect."""
-        image = QImage.fromData(self.capture_preview(), "PNG")
+        """Print the full-resolution output image while preserving graph aspect."""
+        image = self.output_preview_image()
         if image.isNull():
             raise OSError("could not create a printable graph image")
         target = printer.pageRect(QPrinter.Unit.DevicePixel)

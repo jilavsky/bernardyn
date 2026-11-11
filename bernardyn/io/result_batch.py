@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from bernardyn.io.access import serialized
 from bernardyn.io.results import (
     ResultBundle,
     ResultCurveBundle,
@@ -84,6 +85,7 @@ class ResultSurvey:
         return result
 
 
+@serialized
 def survey_results(paths: list[str | Path]) -> ResultSurvey:
     """Inspect each file once.  A failure is recorded, never raised."""
     files: list[FileResults] = []
@@ -118,6 +120,7 @@ class ResultBatch:
     skipped: tuple[tuple[Path, str], ...]
 
 
+@serialized
 def load_result_batch(survey: ResultSurvey, analysis: str, kinds: tuple[str, ...]) -> ResultBatch:
     """Load the chosen kinds from every file that offers them.
 

@@ -36,6 +36,7 @@ from bernardyn.core.models import Dataset, GraphDocument, PlotSeries, SeriesView
 from bernardyn.core.transforms import TransformRegistry
 from bernardyn.gui.dataset_filters import DATASET_FILTERS, matches_dataset_filter
 from bernardyn.gui.dialogs import AnnotationDialog
+from bernardyn.gui.widgets import ScientificSpinBox
 
 
 class InspectorWidget(QScrollArea):
@@ -48,6 +49,8 @@ class InspectorWidget(QScrollArea):
     outputPreviewRequested = Signal()
     autoscaleRequested = Signal()
     displayCanvasRequested = Signal(int, int)
+    #: Size the on-screen canvas so text takes the same share of it as in the output.
+    matchOutputCanvasRequested = Signal()
 
     def __init__(self, transforms: TransformRegistry, parent=None) -> None:
         super().__init__(parent)
@@ -184,9 +187,18 @@ class InspectorWidget(QScrollArea):
             control.editingFinished.connect(self._edit_dimensions)
         self.set_display_canvas = QPushButton("Set", group)
         self.set_display_canvas.setToolTip(
-            "Resize the application so the displayed 2-D graph canvas matches these pixels"
+            "Resize the application so the on-screen 2-D canvas has these pixels. Exported, "
+            "copied and previewed images do not depend on the window: they are laid out at the "
+            "physical output size, with font sizes in points"
         )
         self.set_display_canvas.clicked.connect(self._set_display_canvas_size)
+        self.match_output_canvas = QPushButton("Match output", group)
+        self.match_output_canvas.setToolTip(
+            "Resize the on-screen 2-D canvas to the output's physical size at this screen's "
+            "font resolution, so text, ticks and legend take the same share of the plot as "
+            "in the exported image"
+        )
+        self.match_output_canvas.clicked.connect(self.matchOutputCanvasRequested)
         self.width_in = self._double(0.1, 200, 6.5)
         self.height_in = self._double(0.1, 200, 4.5)
         self.dpi = QSpinBox(group)
@@ -246,6 +258,7 @@ class InspectorWidget(QScrollArea):
         canvas_layout.addWidget(QLabel("Height:", canvas_row))
         canvas_layout.addWidget(self.canvas_height, 1)
         canvas_layout.addWidget(self.set_display_canvas)
+        canvas_layout.addWidget(self.match_output_canvas)
         form.addRow("Canvas (px):", canvas_row)
         form.addRow("Output (in):", self._paired_row("Width", self.width_in, "Height", self.height_in, group))
         form.addRow("Output DPI:", self.dpi)
@@ -452,11 +465,17 @@ class InspectorWidget(QScrollArea):
         self.error_width.editingFinished.connect(
             lambda: self._finish_live_edit(self._edit_style)
         )
-        self.multiplier = self._double(-1e12, 1e12, 1)
-        self.multiplier.setDecimals(8)
+        # Full precision: Porod, Kratky and Zimm values are often below 1e-8.
+        self.multiplier = ScientificSpinBox(group)
+        self.multiplier.setValue(1.0)
+        self.multiplier.setToolTip(
+            "Scales the measured intensity (and its uncertainty) before the view is "
+            "computed, as in Irena. Accepts values such as 2.5e-9."
+        )
         self.multiplier.editingFinished.connect(self._edit_series_transform)
-        self.offset = self._double(-1e12, 1e12, 0)
-        self.offset.setDecimals(8)
+        self.offset = ScientificSpinBox(group)
+        self.offset.setValue(0.0)
+        self.offset.setToolTip("Added to the displayed Y value, after the view is computed.")
         self.offset.editingFinished.connect(self._edit_series_transform)
         self.q_min = QLineEdit(group)
         self.q_max = QLineEdit(group)
@@ -639,8 +658,11 @@ class InspectorWidget(QScrollArea):
             "Plot-area backgrounds are available for 2-D graphs; 3-D graphs use one canvas."
         )
         self.set_display_canvas.setEnabled(graph.renderer_id == "plot2d")
+        self.match_output_canvas.setEnabled(graph.renderer_id == "plot2d")
         self.set_display_canvas.setToolTip(
-            "Resize the application so the displayed 2-D graph canvas matches these pixels"
+            "Resize the application so the on-screen 2-D canvas has these pixels. Exported, "
+            "copied and previewed images do not depend on the window: they are laid out at the "
+            "physical output size, with font sizes in points"
             if graph.renderer_id == "plot2d"
             else "Exact displayed-pixel sizing is available for 2-D graphs only"
         )
@@ -756,7 +778,8 @@ class InspectorWidget(QScrollArea):
             return
         renderer_id = self.renderer.currentData()
         config = dict(self._graph.renderer_config)
-        config["renderer_version"] = "1.0"
+        # 2-D 1.1: output laid out at the physical size (fonts in points).
+        config["renderer_version"] = "1.0" if renderer_id.startswith("opengl") else "1.1"
         if renderer_id.startswith("opengl"):
             config.setdefault("spacing", 1.0)
             config.setdefault("normalization", "none")

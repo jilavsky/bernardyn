@@ -24,7 +24,12 @@ from bernardyn.core.models import (
     Workspace,
     new_id,
 )
-from bernardyn.core.transforms import TransformRegistry, builtin_transforms, resolve_series
+from bernardyn.core.transforms import (
+    TransformRegistry,
+    builtin_transforms,
+    resolve_series,
+    snapshot_is_current,
+)
 from bernardyn.core.units import axis_label, format_unit, units_equivalent
 from bernardyn.io.container import LoadedPackage, import_graphs, load_package, save_package
 from bernardyn.io.sources import ScatteringLocation, SourceRegistry, builtin_sources
@@ -81,6 +86,27 @@ def describe_uncertainty(dataset: Dataset | GenericCurve) -> str:
     if kind in ESTIMATED_UNCERTAINTY_KINDS:
         return f"Uncertainty: estimated as {rule}, not measured"
     return "Uncertainty: source not recorded"
+
+
+RECOMPUTE_HINT = "Use Graph → Recompute with current version first."
+READ_ONLY_MESSAGE = "this graph is read-only because its canonical data are invalid"
+
+
+def curve_axis_hint(curve: GenericCurve) -> tuple[bool, bool]:
+    """Logarithmic (X, Y) axes that suit a typed curve on an empty graph.
+
+    Result loaders store the hint in ``metadata["bernardyn_result"]["axis_log"]``.
+    Curves without it (older packages, plugins) fall back to their role: a
+    residual is plotted against log q with a linear Y, so its negative values
+    are kept; a distribution uses linear axes.
+    """
+    result = curve.metadata.get("bernardyn_result")
+    hint = result.get("axis_log") if isinstance(result, Mapping) else None
+    if isinstance(hint, (list, tuple)) and len(hint) == 2:
+        return bool(hint[0]), bool(hint[1])
+    if curve.role is CurveRole.RESIDUAL:
+        return True, False
+    return False, False
 
 
 def _curve_units(dataset: Dataset | GenericCurve) -> tuple[str, str]:
@@ -148,7 +174,8 @@ class ApplicationController:
                 "camera": {"distance": 40.0, "elevation": 25.0, "azimuth": -45.0},
             }
             if renderer_id.startswith("opengl")
-            else {"renderer_version": "1.0"},
+            # 2-D 1.1: output is laid out at the physical size, fonts in points.
+            else {"renderer_version": "1.1"},
         )
         self.workspace.add_graph(graph)
         self.snapshots[graph.id] = {}
@@ -339,6 +366,9 @@ class ApplicationController:
         series_styles: Iterable[SeriesStyle | None] | None,
     ):
         graph = self.workspace.graph(graph_id or self.workspace.active_graph_id or "")
+        if graph.id in self.read_only_graphs:
+            raise PermissionError(READ_ONLY_MESSAGE)
+        self._refuse_stale(graph.id, "add data to")
         additions = tuple(datasets_to_add)
         given_parameters = tuple(transform_parameters or ())
         given_styles = tuple(series_styles or ())
@@ -367,7 +397,8 @@ class ApplicationController:
                     ),
                 )
             )
-        candidate = graph.replace_series((*graph.series, *views))
+        candidate = self._initialize_untouched_target(None, graph, additions)
+        candidate = candidate.replace_series((*graph.series, *views))
         if not graph.series and additions and self._has_automatic_labels(graph):
             x_label, y_label = self.axis_labels(graph.view_transform_id, additions[0])
             candidate = replace(
@@ -407,12 +438,19 @@ class ApplicationController:
         source = self.workspace.graph(source_graph_id)
         if source.id == target.id:
             raise ValueError("choose a different destination graph")
+        if target.id in self.read_only_graphs or (move and source.id in self.read_only_graphs):
+            raise PermissionError(READ_ONLY_MESSAGE)
         chosen_ids = set(series_ids)
         chosen = [view for view in source.series if view.id in chosen_ids]
         if not chosen:
             raise ValueError("select one or more datasets to transfer")
         if len(chosen) != len(chosen_ids):
             raise ValueError("one or more selected datasets are no longer in the source graph")
+        # The copies are resolved again in the destination, so an archived
+        # older-version snapshot would silently become current-version data.
+        self._refuse_stale(source.id, "copy or move", series_ids=chosen_ids)
+        if any(graph.id == target.id for graph in self.workspace.graphs):
+            self._refuse_stale(target.id, "add data to")
         transferred: list[SeriesView] = []
         for view in chosen:
             dataset = self.workspace.datasets[view.dataset_id]
@@ -429,7 +467,8 @@ class ApplicationController:
                     transform_parameters=parameters,
                 )
             )
-        target = self._initialize_untouched_target(source, target, chosen)
+        curves = [self.workspace.datasets[view.dataset_id] for view in chosen]
+        target = self._initialize_untouched_target(source, target, curves)
         target_candidate = target.replace_series((*target.series, *transferred))
         source_candidate = (
             source.replace_series(view for view in source.series if view.id not in chosen_ids)
@@ -439,33 +478,43 @@ class ApplicationController:
         # Resolve both candidate graphs before changing either document.
         target_snapshots = self._resolve_graph(target_candidate, self.workspace.datasets)
         source_snapshots = (
-            self._resolve_graph(source_candidate, self.workspace.datasets)
+            self._resolve_candidate(source_candidate, self.workspace.datasets)
             if move
             else self.snapshots.get(source.id, {})
         )
         return source_candidate, target_candidate, source_snapshots, target_snapshots
 
     def _initialize_untouched_target(
-        self, source: GraphDocument, target: GraphDocument, chosen: list[SeriesView]
+        self,
+        source: GraphDocument | None,
+        target: GraphDocument,
+        curves: Iterable[Dataset | GenericCurve],
     ) -> GraphDocument:
         """Give an empty, never-customized destination axes that suit typed curves.
 
         A default graph has scattering axes (log-log, q and Intensity labels).
-        Residuals and distributions copied into it keep the source graph's
-        axes instead, and a residual always gets a linear Y axis so its
-        negative values are not masked.  Scattering transfers and graphs with
-        data or edited axes are left as they are.
+        Residuals and distributions copied or moved into it keep the source
+        graph's axes; added from the catalog (no source graph) they get the
+        axes their loader recommends (:func:`curve_axis_hint`).  A residual
+        always gets a linear Y axis so its negative values are not masked.
+        Scattering data and graphs with data or edited axes are left as they
+        are.
         """
-        curves = [self.workspace.datasets[view.dataset_id] for view in chosen]
-        if not all(isinstance(curve, GenericCurve) for curve in curves):
+        curves = list(curves)
+        if not curves or not all(isinstance(curve, GenericCurve) for curve in curves):
             return target
         default = GraphDocument()
         if target.series or (target.x_axis, target.y_axis) != (default.x_axis, default.y_axis):
             return target
-        y_axis = source.y_axis
+        if source is not None:
+            x_axis, y_axis = source.x_axis, source.y_axis
+        else:
+            x_log, y_log = curve_axis_hint(curves[0])
+            x_axis = replace(target.x_axis, log=x_log)
+            y_axis = replace(target.y_axis, log=y_log)
         if any(curve.role is CurveRole.RESIDUAL for curve in curves):
             y_axis = replace(y_axis, log=False)
-        return replace(target, x_axis=source.x_axis, y_axis=y_axis)
+        return replace(target, x_axis=x_axis, y_axis=y_axis)
 
     def validate_series_transfer(
         self,
@@ -566,7 +615,8 @@ class ApplicationController:
     ):
         graph = self.workspace.graph(graph_id)
         if graph.id in self.read_only_graphs:
-            raise PermissionError("this graph is read-only because its canonical data are invalid")
+            raise PermissionError(READ_ONLY_MESSAGE)
+        self._refuse_stale(graph.id, "replace data in")
         chosen_ids = tuple(series_ids)
         additions = tuple(datasets_to_use)
         given_parameters = tuple(transform_parameters or ())
@@ -654,9 +704,9 @@ class ApplicationController:
     ) -> dict[str, PlotSeries]:
         """Resolve a proposed graph edit without changing controller state."""
         if graph.id in self.read_only_graphs:
-            raise PermissionError("this graph is read-only because its canonical data are invalid")
+            raise PermissionError(READ_ONLY_MESSAGE)
         if recompute:
-            return self._resolve_graph(graph, self.workspace.datasets)
+            return self._resolve_candidate(graph, self.workspace.datasets)
         return self._presentation_snapshots(graph)
 
     def recompute_graph(self, graph_id: str) -> dict[str, PlotSeries]:
@@ -668,6 +718,98 @@ class ApplicationController:
         self._clear_recompute_warnings(graph_id)
         self.workspace.dirty = True
         return resolved
+
+    def stale_series(self, graph_id: str) -> list[tuple[SeriesView, PlotSeries]]:
+        """Series whose archived snapshot came from an older view version.
+
+        Such arrays are kept as they were saved until the user chooses
+        **Recompute with current version**.  An older version the transform
+        declares equivalent for the series (see
+        :func:`~bernardyn.core.transforms.snapshot_is_current`) is not stale.
+        """
+        try:
+            graph = self.workspace.graph(graph_id)
+        except KeyError:
+            return []
+        snapshots = self.snapshots.get(graph_id, {})
+        stale: list[tuple[SeriesView, PlotSeries]] = []
+        for view in graph.series:
+            snapshot = snapshots.get(view.id)
+            if snapshot is None or snapshot.transform_id != view.transform_id:
+                continue
+            try:
+                transform = self.transforms.get(snapshot.transform_id)
+            except KeyError:
+                continue  # reported as an unknown transform instead
+            if not snapshot_is_current(transform, snapshot.transform_version, view):
+                stale.append((view, snapshot))
+        return stale
+
+    def version_notes(self, graph_id: str) -> list[str]:
+        """One note per view version that archived snapshots in a graph still use."""
+        groups: dict[tuple[str, str], int] = {}
+        for _view, snapshot in self.stale_series(graph_id):
+            key = (snapshot.transform_id, snapshot.transform_version)
+            groups[key] = groups.get(key, 0) + 1
+        notes = []
+        for (transform_id, version), count in groups.items():
+            transform = self.transforms.get(transform_id)
+            notes.append(
+                f"{count} {transform.name} snapshot(s) use version {version}; current version "
+                f"is {transform.version}. They are shown as saved. Use Recompute with current "
+                "version to update them; until then, edits that recompute data are refused."
+            )
+        return notes
+
+    def _refuse_stale(
+        self, graph_id: str, action: str, *, series_ids: Iterable[str] | None = None
+    ) -> None:
+        """Raise instead of silently recomputing older-version snapshots."""
+        stale = self.stale_series(graph_id)
+        if series_ids is not None:
+            chosen = set(series_ids)
+            stale = [item for item in stale if item[0].id in chosen]
+        if not stale:
+            return
+        view, snapshot = stale[0]
+        transform = self.transforms.get(snapshot.transform_id)
+        raise ValueError(
+            f"cannot {action} this graph: {len(stale)} series still show archived "
+            f"{transform.name} {snapshot.transform_version} data, and this change would "
+            f"recompute them with version {transform.version}. {RECOMPUTE_HINT}"
+        )
+
+    def _resolve_candidate(
+        self, candidate: GraphDocument, datasets: Mapping[str, Dataset | GenericCurve]
+    ) -> dict[str, PlotSeries]:
+        """Resolve a proposed edit of an existing graph, protecting archived data.
+
+        Removing or reordering series keeps the remaining snapshots exactly
+        as they are.  Any other recomputation of a graph that still shows
+        older-version snapshots is refused (see :meth:`_refuse_stale`).
+        """
+        proposed = {view.id: view for view in candidate.series}
+        # A series switched to another view (Set view) no longer uses its
+        # archived snapshot, so only series that keep their view count.
+        stale_ids = {
+            view.id
+            for view, snapshot in self.stale_series(candidate.id)
+            if view.id in proposed and proposed[view.id].transform_id == snapshot.transform_id
+        }
+        if not stale_ids:
+            return self._resolve_graph(candidate, datasets)
+        current = self.workspace.graph(candidate.id)
+        before = {view.id: view for view in current.series}
+        existing = self.snapshots.get(candidate.id, {})
+        unchanged = (
+            all(before.get(view.id) == view and view.id in existing for view in candidate.series)
+            and (candidate.x_axis.log, candidate.y_axis.log)
+            == (current.x_axis.log, current.y_axis.log)
+        )
+        if unchanged:
+            return {view.id: existing[view.id] for view in candidate.series}
+        self._refuse_stale(candidate.id, "change", series_ids=stale_ids)
+        return self._resolve_graph(candidate, datasets)  # pragma: no cover - refused above
 
     def _resolve_graph(
         self, graph: GraphDocument, datasets: Mapping[str, Dataset | GenericCurve]
@@ -730,21 +872,27 @@ class ApplicationController:
         # Axis validity applies to the displayed values, after multiplier and
         # offset, exactly as resolve_series does for scattering curves.
         displayed_y = curve.y * view.multiplier + view.offset
-        mask = np.isfinite(curve.x) & np.isfinite(displayed_y)
+        finite = np.isfinite(curve.x) & np.isfinite(displayed_y)
+        in_range = np.ones(curve.x.shape, dtype=bool)
         low, high = view.q_range
         if low is not None:
-            mask &= curve.x >= low
+            in_range &= curve.x >= low
         if high is not None:
-            mask &= curve.x <= high
-        domain = mask.copy()
+            in_range &= curve.x <= high
+        domain = finite & in_range
+        mask = domain.copy()
         if x_log:
             mask &= curve.x > 0
         if y_log:
             mask &= displayed_y > 0
         warnings: list[str] = []
-        excluded = int(len(curve.x) - np.count_nonzero(domain))
+        # Points trimmed by the range are the user's choice, not bad data.
+        excluded = int(np.count_nonzero(in_range & ~finite))
         if excluded:
-            warnings.append(f"{excluded} of {len(curve.x)} points were outside the valid plot domain")
+            warnings.append(
+                f"{excluded} of {int(np.count_nonzero(in_range))} points were outside "
+                "the valid plot domain"
+            )
         removed = int(np.count_nonzero(domain) - np.count_nonzero(mask))
         if removed:
             warnings.append(f"{removed} points were invalid for logarithmic axes")
@@ -770,8 +918,9 @@ class ApplicationController:
         self._graph_warnings[graph_id] = [
             warning
             for warning in self._graph_warnings.get(graph_id, [])
-            if "current version" not in warning and "was recomputed" not in warning
+            if "was recomputed" not in warning
         ]
+
     def _presentation_snapshots(self, graph: GraphDocument) -> dict[str, PlotSeries]:
         """Update labels without recalculating potentially archived arrays."""
         existing = self.snapshots.get(graph.id, {})
@@ -851,68 +1000,113 @@ class ApplicationController:
         items.insert(new, items.pop(old))
         self.update_graph(graph.replace_series(items), recompute=False)
 
+    def _recover_snapshots(
+        self,
+        graphs: Iterable[GraphDocument],
+        datasets: Mapping[str, Dataset | GenericCurve],
+        snapshots: dict[str, dict[str, PlotSeries]],
+        previews: Mapping[str, bytes],
+    ) -> tuple[dict[str, list[str]], set[str], bool]:
+        """Fill in missing snapshots of loaded graphs from their embedded data.
+
+        Works on the given mappings only (``snapshots`` is updated in place),
+        so a failure leaves the controller untouched.  Returns per-graph
+        notes, the graphs that can only show their archived preview, and
+        whether anything was recomputed.  Snapshots of older view versions
+        are kept as they are; :meth:`version_notes` reports them.
+        """
+        notes: dict[str, list[str]] = {}
+        preview_only: set[str] = set()
+        recovered = False
+        for graph in graphs:
+            graph_notes = notes.setdefault(graph.id, [])
+            graph_snapshots = snapshots.setdefault(graph.id, {})
+            for view in graph.series:
+                try:
+                    self.transforms.get(view.transform_id)
+                except KeyError:
+                    graph_notes.append(
+                        f"Unknown transform {view.transform_id!r}; showing the archived preview "
+                        "when available"
+                    )
+                    if graph.id in previews:
+                        preview_only.add(graph.id)
+                    continue
+                if view.id in graph_snapshots:
+                    continue
+                dataset = datasets[view.dataset_id]
+                graph_snapshots[view.id] = (
+                    self._resolve_generic_curve(
+                        dataset, view, x_log=graph.x_axis.log, y_log=graph.y_axis.log
+                    )
+                    if isinstance(dataset, GenericCurve)
+                    else resolve_series(
+                        dataset,
+                        view,
+                        self.transforms,
+                        x_log=graph.x_axis.log,
+                        y_log=graph.y_axis.log,
+                    )
+                )
+                graph_notes.append(
+                    f"Missing or corrupt snapshot for {dataset.label!r} was recomputed from "
+                    "embedded data"
+                )
+                recovered = True
+        return notes, preview_only, recovered
+
     def open_package(self, path: str | Path) -> LoadedPackage:
+        """Replace the workspace with a saved package.
+
+        Everything is prepared first and assigned at the end, so a package
+        that fails to load or recompute leaves the current workspace intact.
+        A package written by a newer schema opens with its archived previews
+        only and no ``package_path``: saving it then needs Save As, so the
+        newer file can never be overwritten by this version.
+        """
         loaded = load_package(path)
+        workspace = loaded.workspace
+        snapshots = loaded.snapshots
+        notes, preview_only, recovered = self._recover_snapshots(
+            workspace.graphs, workspace.datasets, snapshots, loaded.previews
+        )
+        if recovered:
+            workspace.dirty = True
         self.workspace_generation += 1
-        self.workspace = loaded.workspace
-        self.snapshots = loaded.snapshots
+        self.workspace = workspace
+        self.snapshots = snapshots
         self.previews = loaded.previews
         self.renderer_data = loaded.renderer_data
         self.read_only_graphs = loaded.read_only_graphs
-        self.preview_only_graphs.clear()
-        self._graph_warnings.clear()
-        self.package_path = loaded.path
-        self.warnings = loaded.warnings
-        recovered = False
-        for graph in self.workspace.graphs:
-            graph_warnings = self._graph_warnings.setdefault(graph.id, [])
-            for view in graph.series:
-                archived = self.snapshots.get(graph.id, {}).get(view.id)
-                try:
-                    transform = self.transforms.get(view.transform_id)
-                except KeyError:
-                    graph_warnings.append(
-                        f"Unknown transform {view.transform_id!r}; showing the archived preview when available"
-                    )
-                    if graph.id in self.previews:
-                        self.preview_only_graphs.add(graph.id)
-                    continue
-                if archived is not None and archived.transform_version != transform.version:
-                    graph_warnings.append(
-                        f"{transform.name} snapshot uses version {archived.transform_version}; "
-                        f"current version is {transform.version}. Use Recompute with Current Version explicitly."
-                    )
-                    continue
-                if archived is None:
-                    dataset = self.workspace.datasets[view.dataset_id]
-                    self.snapshots.setdefault(graph.id, {})[view.id] = (
-                        self._resolve_generic_curve(
-                            dataset, view, x_log=graph.x_axis.log, y_log=graph.y_axis.log
-                        )
-                        if isinstance(dataset, GenericCurve)
-                        else resolve_series(
-                            dataset,
-                            view,
-                            self.transforms,
-                            x_log=graph.x_axis.log,
-                            y_log=graph.y_axis.log,
-                        )
-                    )
-                    graph_warnings.append(
-                        f"Missing or corrupt snapshot for {dataset.label!r} was recomputed from embedded data"
-                    )
-                    recovered = True
-        if recovered:
-            self.workspace.dirty = True
+        self.preview_only_graphs = preview_only
+        self._graph_warnings = notes
+        self.package_path = None if loaded.future_schema else loaded.path
+        self.warnings = loaded.messages
         return loaded
 
     def import_from_package(
-        self, path: str | Path, graph_ids: Iterable[str] | None = None
+        self, package: str | Path | LoadedPackage, graph_ids: Iterable[str] | None = None
     ) -> dict[str, str]:
-        loaded = load_package(path)
+        """Copy graphs (and the data they use) from a package into this workspace.
+
+        ``package`` may be a path or an already loaded package, so a caller
+        that showed the package's graphs for selection need not read the
+        file twice.  The package's warnings are attached to every imported
+        graph.  Returns ``{package graph id: workspace graph id}``.
+        """
+        loaded = package if isinstance(package, LoadedPackage) else load_package(package)
+        if loaded.future_schema:
+            raise ValueError(loaded.warnings[0] if loaded.warnings else "unsupported package")
         selected = list(graph_ids) if graph_ids is not None else [g.id for g in loaded.workspace.graphs]
         graph_map, snapshots = import_graphs(self.workspace, loaded, selected)
+        imported = [self.workspace.graph(graph_id) for graph_id in graph_map.values()]
+        notes, preview_only, recovered = self._recover_snapshots(
+            imported, self.workspace.datasets, snapshots, {
+                new: loaded.previews[old] for old, new in graph_map.items() if old in loaded.previews
+            }
+        )
         self.snapshots.update(snapshots)
+        self.preview_only_graphs |= preview_only
         for old_id, imported_graph_id in graph_map.items():
             if old_id in loaded.previews:
                 self.previews[imported_graph_id] = loaded.previews[old_id]
@@ -920,7 +1114,11 @@ class ApplicationController:
                 self.renderer_data[imported_graph_id] = loaded.renderer_data[old_id]
             if old_id in loaded.read_only_graphs:
                 self.read_only_graphs.add(imported_graph_id)
-        self.warnings.extend(loaded.warnings)
+            self._graph_warnings[imported_graph_id] = [
+                *loaded.messages,
+                *notes.get(imported_graph_id, []),
+            ]
+        self.warnings.extend(loaded.messages)
         return graph_map
 
     def save(
@@ -967,6 +1165,7 @@ class ApplicationController:
     def graph_warnings(self, graph_id: str) -> list[str]:
         return (
             self._graph_warnings.get(graph_id, [])
+            + self.version_notes(graph_id)
             + [
                 warning
                 for snapshot in self.snapshots.get(graph_id, {}).values()

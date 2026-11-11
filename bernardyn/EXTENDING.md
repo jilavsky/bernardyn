@@ -32,10 +32,13 @@ Publish a `RendererRegistration` under `bernardyn.renderers`. Its factory
 creates a QWidget implementing:
 
 ```python
-update(graph_document, snapshots)
+apply_graph(graph_document, snapshots)   # or render(graph_document, snapshots)
 capture_snapshot(width=1200) -> bytes
 save_image(path, width=None) -> Path
 ```
+
+Never name the refresh method `update`: that is `QWidget.update`, Qt's own
+repaint slot.
 
 Renderer IDs and versions are persisted. Unknown renderers are retained and
 opened from their embedded PNG preview when available. Renderer-specific

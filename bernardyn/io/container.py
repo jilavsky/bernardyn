@@ -54,9 +54,19 @@ class LoadedPackage:
     previews: dict[str, bytes] = field(default_factory=dict)
     renderer_data: dict[str, dict[str, np.ndarray]] = field(default_factory=dict)
     read_only_graphs: set[str] = field(default_factory=set)
+    # Integrity problems (checksums, broken references).  A package written
+    # by this version must have none.
     warnings: list[str] = field(default_factory=list)
     future_schema: bool = False
     path: Path | None = None
+    # Content from a newer Bernardyn that is kept but not used (unknown
+    # annotation kinds, curve roles).  Not an integrity problem.
+    notices: list[str] = field(default_factory=list)
+
+    @property
+    def messages(self) -> list[str]:
+        """Warnings and notices together, for display."""
+        return [*self.warnings, *self.notices]
 
 
 def _utc_now() -> str:
@@ -82,7 +92,8 @@ def environment_manifest() -> dict[str, Any]:
         "pyside6": _package_version("PySide6"),
         "pyopengl": _package_version("PyOpenGL"),
         "renderer_versions": {
-            "plot2d": "1.0",
+            # 1.1: images laid out at the physical output size, fonts in points.
+            "plot2d": "1.1",
             "opengl_waterfall": "1.0",
             "opengl_surface": "1.0",
         },
@@ -402,7 +413,9 @@ def _metadata_extras(metadata: Mapping[str, Any], known: frozenset[str]) -> dict
     return {key: value for key, value in metadata.items() if key not in known}
 
 
-def _read_dataset(group: h5py.Group, warnings: list[str]) -> tuple[Dataset | GenericCurve, bool]:
+def _read_dataset(
+    group: h5py.Group, warnings: list[str], notices: list[str] | None = None
+) -> tuple[Dataset | GenericCurve, bool]:
     metadata = _read_json(group, "metadata")
     data_group = group.get("data")
     if not isinstance(data_group, h5py.Group):
@@ -422,7 +435,7 @@ def _read_dataset(group: h5py.Group, warnings: list[str]) -> tuple[Dataset | Gen
             dx=dx,
             dy=dy,
             label=str(metadata.get("label", "Curve")),
-            role=CurveRole(metadata.get("role", CurveRole.DISTRIBUTION.value)),
+            role=CurveRole.from_file(metadata.get("role", CurveRole.DISTRIBUTION.value)),
             x_semantic=str(metadata.get("x_semantic", "generic_x")),
             y_semantic=str(metadata.get("y_semantic", "generic_y")),
             x_label=str(metadata.get("x_label", "X")),
@@ -459,6 +472,11 @@ def _read_dataset(group: h5py.Group, warnings: list[str]) -> tuple[Dataset | Gen
         )
     else:
         raise PackageValidationError(f"unsupported canonical dataset type {canonical_type!r}")
+    if isinstance(dataset, GenericCurve) and not dataset.role.known:
+        (warnings if notices is None else notices).append(
+            f"{dataset.label}: curve role {dataset.role.value!r} comes from a newer Bernardyn; "
+            "it is shown as a plain X/Y curve and kept unchanged when saved"
+        )
     valid &= bool(expected) and expected == dataset_checksum(dataset)
     if not valid:
         warnings.append(f"canonical dataset checksum failed for {dataset.label}")
@@ -518,6 +536,7 @@ def _read_previews(handle: h5py.File) -> dict[str, bytes]:
 def load_package(path: str | Path) -> LoadedPackage:
     source = Path(path).expanduser().resolve()
     warnings: list[str] = []
+    notices: list[str] = []
     with h5py.File(source, "r") as handle:
         _validate_structure(handle)
         schema_version = int(handle.attrs.get("schema_version", 0))
@@ -546,7 +565,10 @@ def load_package(path: str | Path) -> LoadedPackage:
         for dataset_id in manifest.get("dataset_ids", []):
             if dataset_id not in handle["datasets"]:
                 raise PackageValidationError(f"manifest references missing dataset {dataset_id}")
-            dataset, valid = _read_dataset(handle["datasets"][dataset_id], warnings)
+            try:
+                dataset, valid = _read_dataset(handle["datasets"][dataset_id], warnings, notices)
+            except (KeyError, TypeError, ValueError) as exc:
+                raise PackageValidationError(f"invalid dataset {dataset_id}: {exc}") from exc
             datasets[dataset.id] = dataset
             valid_datasets[dataset.id] = valid
 
@@ -562,6 +584,13 @@ def load_package(path: str | Path) -> LoadedPackage:
                 graph = GraphDocument.from_dict(_read_json(group, "document"))
             except (KeyError, TypeError, ValueError) as exc:
                 raise PackageValidationError(f"invalid graph document {graph_id}: {exc}") from exc
+            if graph.preserved_annotations:
+                kinds = sorted({str(item.get("kind")) for item in graph.preserved_annotations})
+                notices.append(
+                    f"{graph.title}: {len(graph.preserved_annotations)} annotation(s) of a kind "
+                    f"from a newer Bernardyn ({', '.join(kinds)}) are not shown but are kept "
+                    "when saved"
+                )
             graphs.append(graph)
             graph_snapshots: dict[str, PlotSeries] = {}
             series_root = group.get("series")
@@ -604,16 +633,19 @@ def load_package(path: str | Path) -> LoadedPackage:
                     elif array is not None:
                         renderer_data[graph.id][name] = array
 
-        workspace = Workspace(
-            id=str(manifest.get("workspace_id", handle.attrs.get("content_uuid", new_id()))),
-            title=str(manifest.get("title", source.stem)),
-            description=str(manifest.get("description", "")),
-            datasets=datasets,
-            graphs=graphs,
-            active_graph_id=manifest.get("active_graph_id"),
-            layout_state=manifest.get("layout_state"),
-            dirty=False,
-        )
+        try:
+            workspace = Workspace(
+                id=str(manifest.get("workspace_id", handle.attrs.get("content_uuid", new_id()))),
+                title=str(manifest.get("title", source.stem)),
+                description=str(manifest.get("description", "")),
+                datasets=datasets,
+                graphs=graphs,
+                active_graph_id=manifest.get("active_graph_id"),
+                layout_state=manifest.get("layout_state"),
+                dirty=False,
+            )
+        except (TypeError, ValueError) as exc:
+            raise PackageValidationError(f"invalid workspace: {exc}") from exc
     return LoadedPackage(
         workspace=workspace,
         snapshots=snapshots,
@@ -622,6 +654,7 @@ def load_package(path: str | Path) -> LoadedPackage:
         read_only_graphs=read_only_graphs,
         warnings=warnings,
         path=source,
+        notices=notices,
     )
 
 
@@ -670,8 +703,21 @@ def import_graphs(
                     series_id=replacement_series_id,
                     dataset_id=dataset_map[series.dataset_id],
                 )
+        config = dict(graph.renderer_config)
+        # 3-D graphs key series positions by series id; follow the new ids,
+        # as duplicate_graph does.
+        if isinstance(config.get("series_positions"), Mapping):
+            series_ids = {
+                old.id: new.id for old, new in zip(graph.series, new_series, strict=True)
+            }
+            config["series_positions"] = {
+                series_ids.get(key, key): value
+                for key, value in config["series_positions"].items()
+            }
         target.add_graph(
-            replace(graph, id=replacement_graph_id, series=tuple(new_series))
+            replace(
+                graph, id=replacement_graph_id, series=tuple(new_series), renderer_config=config
+            )
         )
         imported_snapshots[replacement_graph_id] = snapshot_map
         existing_graph_ids.add(replacement_graph_id)

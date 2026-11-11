@@ -119,10 +119,34 @@ class DatasetKind(str, Enum):
 
 
 class CurveRole(str, Enum):
-    """Scientific meaning of a non-scattering one-dimensional curve."""
+    """Scientific meaning of a non-scattering one-dimensional curve.
+
+    A package from a newer Bernardyn may use a role this version does not
+    know.  :meth:`from_file` turns such a value into a pseudo-member that
+    keeps the string (so a resave writes it back) but is none of the known
+    members; the curve is then shown as a plain X/Y curve.
+    """
 
     RESIDUAL = "residual"
     DISTRIBUTION = "distribution"
+
+    @classmethod
+    def from_file(cls, value: Any) -> CurveRole:
+        """Return the member for ``value``, or a pseudo-member for an unknown role."""
+        try:
+            return cls(value)
+        except ValueError:
+            if not isinstance(value, str) or not value:
+                raise
+        member = str.__new__(cls, value)
+        member._name_ = f"UNKNOWN_{value.upper()}"
+        member._value_ = value
+        return member
+
+    @property
+    def known(self) -> bool:
+        """False for a role written by a newer Bernardyn."""
+        return self.value in type(self)._value2member_map_
 
 
 class AnnotationKind(str, Enum):
@@ -228,7 +252,10 @@ class GenericCurve:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "id", _valid_id(self.id))
-        object.__setattr__(self, "role", CurveRole(self.role))
+        # A pseudo-member from CurveRole.from_file (a newer writer's role) is
+        # kept as it is; anything else must be a known role.
+        if not isinstance(self.role, CurveRole):
+            object.__setattr__(self, "role", CurveRole(self.role))
         x = _array(self.x, name="x")
         if not len(x):
             raise ValueError("generic curve arrays cannot be empty")
@@ -467,11 +494,18 @@ class GraphDocument:
     # They are kept, and written back unchanged, so an older reader never
     # strips a newer reader's settings.  See ``split_known_fields``.
     extras: Mapping[str, Any] = field(default_factory=dict)
+    # Annotations of a kind this version does not know (from a newer
+    # Bernardyn), as their raw JSON objects.  They are not drawn, but
+    # ``to_dict`` writes them back after the known annotations.
+    preserved_annotations: tuple[Mapping[str, Any], ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "id", _valid_id(self.id))
         object.__setattr__(self, "series", tuple(self.series))
         object.__setattr__(self, "annotations", tuple(self.annotations))
+        object.__setattr__(
+            self, "preserved_annotations", tuple(dict(item) for item in self.preserved_annotations)
+        )
         object.__setattr__(self, "renderer_config", dict(self.renderer_config))
         if self.background_scope not in {"canvas", "plot"}:
             raise ValueError("background scope must be 'canvas' or 'plot'")
@@ -493,7 +527,7 @@ class GraphDocument:
         document["annotations"] = [
             merge_extras(annotation, item)
             for annotation, item in zip(self.annotations, document["annotations"], strict=True)
-        ]
+        ] + [json_value(item) for item in document.pop("preserved_annotations", [])]
         return document
 
     @classmethod
@@ -514,7 +548,7 @@ class GraphDocument:
 
         def annotation(item: Mapping[str, Any]) -> Annotation:
             known, extras = split_known_fields(Annotation, item)
-            known["kind"] = AnnotationKind(known["kind"])
+            known["kind"] = AnnotationKind(known["kind"])  # unknown kinds filtered below
             known["position"] = tuple(known["position"])
             known["end"] = tuple(known["end"]) if known.get("end") is not None else None
             known["color"] = tuple(known.get("color", (20, 20, 20, 255)))
@@ -530,8 +564,13 @@ class GraphDocument:
             known, extras = split_known_fields(kind, item)
             return kind(**known, extras=extras)
 
+        known_kinds = {kind.value for kind in AnnotationKind}
+        raw_annotations = list(value.get("annotations", []))
         series = tuple(series_view(item) for item in value.get("series", []))
-        annotations = tuple(annotation(item) for item in value.get("annotations", []))
+        annotations = tuple(
+            annotation(item) for item in raw_annotations if item.get("kind") in known_kinds
+        )
+        preserved = tuple(item for item in raw_annotations if item.get("kind") not in known_kinds)
         inherited_view = (
             series[0].transform_id
             if series and all(item.transform_id == series[0].transform_id for item in series)
@@ -561,6 +600,7 @@ class GraphDocument:
             description=str(value.get("description", "")),
             notes=str(value.get("notes", "")),
             extras=extras,
+            preserved_annotations=preserved,
         )
 
     def replace_series(self, series: Iterable[SeriesView]) -> GraphDocument:

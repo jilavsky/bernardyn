@@ -9,6 +9,7 @@ subfolders of one sample folder); never deeper.
 
 from __future__ import annotations
 
+import os
 import re
 from collections.abc import Callable, Iterable
 from pathlib import Path
@@ -67,28 +68,41 @@ def files_in_folder(folder: str | Path, file_type: str = "all") -> list[Path]:
     if not directory.is_dir():
         return []
     suffixes = suffixes_for(file_type)
+    # os.scandir reports file types from the directory listing itself, so a
+    # folder on a network drive is not stat()ed file by file.
     try:
-        return [
-            path
-            for path in directory.iterdir()
-            if path.is_file()
-            and path.suffix.lower() in suffixes
-            and not path.name.lower().endswith(".bernardyn.h5")
-        ]
+        with os.scandir(directory) as entries:
+            return [
+                directory / entry.name
+                for entry in entries
+                if Path(entry.name).suffix.lower() in suffixes
+                and not entry.name.lower().endswith(".bernardyn.h5")
+                and _is_file(entry)
+            ]
     except OSError:
         return []
+
+
+def _is_file(entry: os.DirEntry) -> bool:
+    try:
+        return entry.is_file()
+    except OSError:
+        return False
 
 
 def child_folders(folder: str | Path) -> list[Path]:
     """Visible folders directly in *folder*, A→Z; empty if it cannot be read."""
     directory = Path(folder).expanduser()
     try:
-        return sorted(
-            (path for path in directory.iterdir() if path.is_dir() and not path.name.startswith(".")),
-            key=lambda path: path.name.lower(),
-        )
+        with os.scandir(directory) as entries:
+            folders = [
+                directory / entry.name
+                for entry in entries
+                if not entry.name.startswith(".") and entry.is_dir()
+            ]
     except OSError:
         return []
+    return sorted(folders, key=lambda path: path.name.lower())
 
 
 def display_name(path: Path, root: str | Path) -> str:
