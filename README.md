@@ -28,11 +28,11 @@ The native schema is documented in
 [`bernardyn/schemas/graph-package-v3.md`](bernardyn/schemas/graph-package-v3.md);
 packages written by any Bernardyn release since the betas remain readable, and
 settings written by newer releases are preserved when an older one resaves.
-User-facing workflow and file-format documentation is in
-[`docs/`](docs/README.md).
+User-facing workflow and file-format documentation is on
+[Read the Docs](https://jilavsky-docs.readthedocs.io/projects/bernardyn/en/latest/).
 Scripts and automation can use the typed Python facade or `bernardyn-plot` CLI;
-see [headless recipes](docs/headless-recipes.md).
-Local MCP-capable agents can use the five-tool [`bernardyn-mcp`](docs/mcp.md)
+see [headless recipes](https://jilavsky-docs.readthedocs.io/projects/bernardyn/en/latest/guides/headless-recipes.html).
+Local MCP-capable agents can use the five-tool [`bernardyn-mcp`](https://jilavsky-docs.readthedocs.io/projects/bernardyn/en/latest/reference/mcp.html)
 server for the same recipe workflow.
 
 User-visible changes are recorded in [`CHANGELOG.md`](CHANGELOG.md).

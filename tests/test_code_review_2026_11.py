@@ -1,7 +1,7 @@
 """Regression tests for the code review of November 9, 2026 (issue #1).
 
 Each test names its finding (B01-B17, D1-D4; the review is summarized in
-CHANGELOG.md and its open items are in docs/TODO.md)
+CHANGELOG.md and its open items are in TODO.md)
 and checks the invariant rather than the implementation.
 """
 

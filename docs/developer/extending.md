@@ -1,0 +1,2 @@
+```{include} ../../bernardyn/EXTENDING.md
+```

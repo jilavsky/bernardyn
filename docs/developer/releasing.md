@@ -3,7 +3,7 @@
 Bernardyn publishes from a GitHub Release through PyPI **Trusted Publishing**.
 No PyPI API token is stored in this repository or in GitHub Secrets.
 
-The release workflow is [`.github/workflows/release.yml`](../.github/workflows/release.yml).
+The release workflow is [`.github/workflows/release.yml`](https://github.com/jilavsky/bernardyn/blob/main/.github/workflows/release.yml).
 It runs the Linux release tests and lint, builds both the source distribution
 and wheel, validates their metadata, then uploads the tested artifacts to PyPI.
 

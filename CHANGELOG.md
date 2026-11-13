@@ -9,10 +9,16 @@ behavior changes.
 Fixes from the code review of 2026-11-09 (issue #1, findings B01–B17 and
 decisions D1–D5). The next release should be 1.2.0: the multiplier and
 image-output changes below alter results. Open work from all reviews and
-plans is now tracked in one list, [`docs/TODO.md`](docs/TODO.md); the old
+plans is now tracked in one list,
+[`TODO.md`](https://github.com/jilavsky/bernardyn/blob/main/TODO.md); the old
 review and plan documents were removed (they remain in git history).
 
 ### Changed
+
+- **Documentation moved to Read the Docs**, at
+  <https://jilavsky-docs.readthedocs.io/projects/bernardyn/en/latest/>. The
+  red **Documentation** button now always opens the online documentation; it
+  no longer opens the local `docs` folder of a source checkout.
 
 - **Series multiplier scales the intensity before the view** (D1), as in
   Irena. In Guinier views it used to multiply ln(I), which changed the slope:

@@ -292,6 +292,7 @@ class PlotResult:
 
 
 def list_recipes() -> tuple[RecipeDescriptor, ...]:
+    """Return the descriptors of every registered plot recipe."""
     return RECIPES
 
 
