@@ -12,6 +12,7 @@ from PySide6.QtWidgets import QAbstractItemView, QDockWidget
 
 from bernardyn import __version__
 from bernardyn import app as bernardyn_app
+from bernardyn._docs import docs_url
 from bernardyn.core.controller import ApplicationController
 from bernardyn.core.models import (
     Annotation,
@@ -349,9 +350,10 @@ def test_title_font_size_and_display_canvas_action(qapp):
     window.close()
 
 
-def test_documentation_url_uses_github_when_local_docs_are_unavailable(tmp_path, monkeypatch):
-    monkeypatch.setattr(main_window, "DOCUMENTATION_DIRECTORY", tmp_path / "missing")
-    assert _documentation_url().toString() == main_window.DOCUMENTATION_URL
+def test_documentation_url_opens_read_the_docs_home():
+    url = _documentation_url().toString()
+    assert url == docs_url("home")
+    assert url.startswith("https://jilavsky-docs.readthedocs.io/projects/bernardyn/en/")
 
 
 def test_location_dialog_uses_qt_check_state_enums(qapp, tmp_path):

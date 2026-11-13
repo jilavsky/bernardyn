@@ -52,6 +52,7 @@ from PySide6.QtWidgets import (
 )
 
 from bernardyn import __version__
+from bernardyn._docs import docs_url
 from bernardyn.core.colorscales import COLOR_SCALES, apply_series_preset
 from bernardyn.core.controller import (
     PALETTE,
@@ -98,8 +99,6 @@ from bernardyn.template.graph_templates import (
 
 log = logging.getLogger(__name__)
 
-DOCUMENTATION_DIRECTORY = Path(__file__).resolve().parents[2] / "docs"
-DOCUMENTATION_URL = "https://github.com/jilavsky/Bernardyn/tree/main/docs"
 LAST_WORKSPACE_PATH_KEY = "last_workspace_path"
 RECENT_WORKSPACES_KEY = "recent_workspace_paths"
 RECENT_WORKSPACES_LIMIT = 10
@@ -108,10 +107,8 @@ DATA_SELECTOR_KEY = "data_selector"
 
 
 def _documentation_url() -> QUrl:
-    """Open local docs for an editable checkout, GitHub docs for a wheel."""
-    if DOCUMENTATION_DIRECTORY.is_dir():
-        return QUrl.fromLocalFile(str(DOCUMENTATION_DIRECTORY))
-    return QUrl(DOCUMENTATION_URL)
+    """Return the online documentation home page on Read the Docs."""
+    return QUrl(docs_url("home"))
 
 
 _UNDO_OVERRIDE_PREFIX = re.compile(r"^Error calling Python override of \w+::\w+\(\): ")

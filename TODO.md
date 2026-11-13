@@ -4,7 +4,7 @@ The single list of what is not done yet. It replaces the earlier review and
 plan documents (1D review of 2026-11-02, review of 2026-11-09, the roadmap to
 1.0, the File browser dock plan, the 1.0 release checklist and the original
 specification); they are in git history before the commit that added this
-file. Finished work is recorded in [`../CHANGELOG.md`](../CHANGELOG.md), not
+file. Finished work is recorded in [`../CHANGELOG.md`](CHANGELOG.md), not
 here. Remove an item when it ships.
 
 ## 1. Testing now — branch `fix/issue-1-code-review` (issue #1)

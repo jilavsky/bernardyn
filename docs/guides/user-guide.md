@@ -6,8 +6,7 @@ each graph keeps its own displayed datasets, transform, styling, axes, legend,
 annotations, and (for 3-D views) camera settings.
 
 Use the red **Documentation** button above the right-side **Graph Inspector**
-to open this local documentation folder. In a PyPI installation, it opens the
-GitHub documentation instead.
+to open this documentation in your web browser.
 
 To find your installed version, choose **About Bernardyn** in the app menu on
 macOS or the **Help** menu on Windows/Linux, or read the status bar. From a
@@ -345,4 +344,4 @@ the graph title, axis labels with units, and each series' view and units;
 read them with `pandas.read_csv(path, comment="#")` or skip lines starting
 with `#`. ITX waves carry their data units.
 
-For format details, see [Data flow and file formats](data-flow-and-formats.md).
+For format details, see [Data flow and file formats](../reference/data-flow-and-formats.md).

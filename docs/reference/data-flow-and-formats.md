@@ -44,7 +44,8 @@ portable numeric datasets. It contains:
 Source paths are retained only as provenance. A package must reopen even when
 the original files were moved or deleted. Checksums validate canonical arrays
 and resolved snapshots. The full version-2 contract is in
-[`graph-package-v2.md`](../bernardyn/schemas/graph-package-v2.md). Version 1
+[`graph-package-v2.md`](https://github.com/jilavsky/bernardyn/blob/main/bernardyn/schemas/graph-package-v2.md); the current
+version 3 is in {doc}`graph-package-v3`. Version 1
 packages remain readable as scattering curves.
 
 ## Export formats
