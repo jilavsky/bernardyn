@@ -186,3 +186,34 @@ def flush_deletes(ctx) -> None:
 
     QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
     ctx.settle(5)
+
+
+def graph_strip(window, margin: int = 12):
+    """The graph tabs cropped to the tab bar plus the band holding the plot.
+
+    The 2-D canvas keeps the output aspect ratio, so in a tall central area the
+    plot sits in a band with empty space above and below; this drops that space.
+    """
+    from PySide6.QtCore import QPoint, QRect
+    from PySide6.QtGui import QPainter, QPixmap
+
+    from ._common import widget_rect
+
+    tabs = window.tabs
+    full = tabs.grab()
+    ratio = full.devicePixelRatio()
+    bar = tabs.tabBar()
+    bar_h = bar.mapTo(tabs, QPoint(0, bar.height())).y()
+    plot = widget_rect(tabs.currentWidget().canvas._renderer, tabs)
+    top, bottom = max(plot.top() - margin, bar_h), min(plot.bottom() + margin, tabs.height())
+    out = QPixmap(round(tabs.width() * ratio), round((bar_h + bottom - top) * ratio))
+    out.setDevicePixelRatio(ratio)
+    p = QPainter(out)
+    p.drawPixmap(QPoint(0, 0), full, QRect(0, 0, round(tabs.width() * ratio), round(bar_h * ratio)))
+    p.drawPixmap(
+        QPoint(0, bar_h),
+        full,
+        QRect(0, round(top * ratio), round(tabs.width() * ratio), round((bottom - top) * ratio)),
+    )
+    p.end()
+    return out

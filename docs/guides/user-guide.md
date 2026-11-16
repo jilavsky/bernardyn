@@ -37,6 +37,14 @@ checked choices apply to every selected file: I(Q) choices to files with the
 same layout, and a checked result kind to every file that stores it. Both
 kinds of choice are remembered for next time.
 
+```{figure} img/user-guide/user-guide-01-data-selector.png
+:alt: Data selector dialog on the testData folder: file list on the left with Al_Mg_Si__40C_0min_0498.h5 selected; on the right its I(Q) data (one checked) and its saved pyIrena results (Unified Fit Data + fit checked); Add selected button at the bottom.
+:width: 100%
+
+The data selector from **Open folder…**: files (1), the checked I(Q) data (2) and saved result
+(3) of the current file, and **Add selected** (4).
+```
+
 The selector recognises HDF5/NXcanSAS (`.h5`, `.hdf5`, `.hdf`, `.nxs`) and
 two-to-four-column text data (`.dat`, `.txt`, `.csv`). For HDF5 files, choose
 the desired 1-D datasets. Bernardyn remembers the chosen dataset layout and
@@ -98,6 +106,14 @@ value the file does not store (for example I₀ and Rg for the dimensionless
 Kratky view), the panel says so instead. Axes left on automatic range widen
 to show the preview and return afterwards; fixed ranges are kept. Preview
 works in 2D graphs.
+
+```{figure} img/user-guide/user-guide-02-preview.png
+:alt: Main window: the graph holds the Al-Mg-Si curve in blue; Rh1_0085.h5 is selected in the File browser with Preview in graph checked, and its curve is drawn as a grey dashed line that is not in the legend or the Data browser.
+:width: 100%
+
+**Preview in graph** (1): moving to `Rh1_0085.h5` in the File browser draws it as a grey dashed
+curve (2). It is not in the legend or the Data browser until you press **Add to graph**.
+```
 
 Checked **saved pyIrena results** preview too:
 
@@ -166,6 +182,14 @@ volume, number, surface, and cumulative distributions, and Modeling offers the
 volume and number distribution of each population. Bernardyn uses the stored
 radius centres and values; it does not infer bin widths or recalculate
 distributions.
+
+```{figure} img/user-guide/user-guide-03-distribution.png
+:alt: A new graph tab named "Size Distribution volume distribution" next to "Scattering plot 1", showing the volume fraction density against radius in Å on linear axes.
+:width: 80%
+
+Checking **Size Distribution · Volume distribution** for `Al_Mg_Si__40C_0min_0498.h5` creates a
+new graph tab holding that curve; with several files, each adds its own curve to it.
+```
 
 Number distributions are shown in Irena units, cm⁻³·Å⁻¹ (cumulative number in
 cm⁻³). Files from older pyIrena versions stored them per Å³ of sample; those
@@ -242,6 +266,9 @@ Use the **Graph** tab in the right-side inspector for graph-wide settings.
   annotations, background, and output settings while keeping the loaded curves
   and their styles. The action can be undone.
 
+% SCREENSHOT user-guide-06-waterfall: a 3-D waterfall graph of several curves (e.g. the three
+% USAXS files in testData) with the 3D tab of the inspector open. Needs a real OpenGL display.
+
 Graphs keep their own configuration, so editing one graph does not alter
 another graph tab unless you deliberately apply a graph template.
 **Graph → Duplicate graph** copies the active graph, with its curves, styles,
@@ -270,6 +297,23 @@ For log-log SAXS graphs, **Power-law slope…** adds a one-decade guide with
 Porod guide); Bernardyn chooses `B` to place the guide at the selected centre.
 The guide is labelled, can be dragged to a new position, and remains editable
 or deletable in the annotation list.
+
+::::{grid} 2
+:::{grid-item}
+```{figure} img/user-guide/user-guide-04-power-law-dialog.png
+:alt: Graph annotation dialog with Type set to Power Law, the X and Y centre filled in, and Power exponent P set to 4.
+
+**Power-law slope…** opens the annotation dialog with Type Power Law and P = 4.
+```
+:::
+:::{grid-item}
+```{figure} img/user-guide/user-guide-05-power-law-graph.png
+:alt: Log-log graph of the Al-Mg-Si curve with a one-decade straight line labelled "slope −4" placed along the Porod region.
+
+After **OK**: a one-decade guide labelled "slope −4".
+```
+:::
+::::
 
 (user-guide-export)=
 ## Save and export
