@@ -1,3 +1,4 @@
+(user-guide)=
 # Bernardyn user guide
 
 Bernardyn is a desktop workbench for preparing publication-oriented 1-D
@@ -5,14 +6,12 @@ scattering and diffraction graphs. A workspace can hold several graph tabs;
 each graph keeps its own displayed datasets, transform, styling, axes, legend,
 annotations, and (for 3-D views) camera settings.
 
-Use the red **Documentation** button above the right-side **Graph Inspector**
-to open this documentation in your web browser.
+The parts of the window (File browser, Data browser, graph tabs, Graph
+inspector) are named in {doc}`../getting-started/window-tour`, which also covers
+docking and recovering panels, the **Documentation** button, and how to find
+your version.
 
-To find your installed version, choose **About Bernardyn** in the app menu on
-macOS or the **Help** menu on Windows/Linux, or read the status bar. From a
-terminal, run `bernardyn --version` (`-version`, `--v`, and `-V` also work).
-On Windows, use `python -m bernardyn --version` to print it in the terminal.
-
+(user-guide-import)=
 ## Import data
 
 The top of the left **Data browser** holds the ways to add data to the active
@@ -48,6 +47,7 @@ For a standard NXcanSAS path such as
 stored in one HDF5 file. When no sample group can be identified, Bernardyn
 uses the filename.
 
+(user-guide-file-browser)=
 ### File browser: pick, check, and correct without dialogs
 
 The **File browser** panel, at the left of the Data browser, stays open while
@@ -110,13 +110,10 @@ Checked **saved pyIrena results** preview too:
   other graph active, Add makes a new comparison graph as before.
 - I(Q) data never preview into a residual or distribution graph.
 
-The panel is an ordinary panel: drag its title to dock it elsewhere, or float
-it onto another monitor. On macOS, floating panels stay visible when you
-switch to another application. Close it with its × button; reopen it with
-**View → Open File Browser** (Ctrl+Shift+B). **View → Reset panel layout**
-puts it back. Its folder, favorites, and list settings are remembered on
-this computer, not stored in workspace files.
+The File browser is a dockable panel; closing, reopening and moving it is
+described in {ref}`window-tour-panels`.
 
+(user-guide-display)=
 ## Choose what is displayed
 
 The left **Data browser — active graph** controls the order in which curves are
@@ -176,14 +173,9 @@ one Undo step.
 
 Use **Graph → New 2D graph** or Ctrl/Cmd+Shift+N to create a 2-D graph quickly.
 
-The inspector's **Datasets** tab provides the same **Show** selector,
-per-series controls, visibility checkboxes, and the legend controls for the
-active graph. Drag the divider below its dataset list to make that list taller.
-
-Both primary panels may be floated while working, but open docked at the next
-launch so they cannot be stranded outside a changed display arrangement. Use
-**View → Open Data Browser**, **View → Open Graph Inspector**, or **View →
-Reset panel layout** to recover a closed or misplaced panel immediately.
+The inspector's **Datasets** tab lists the same curves with the per-series
+and legend controls ({ref}`window-tour-panels`; a recovered or misplaced panel
+is also covered there).
 
 - Click a row to edit its style, legend label, visible Q range, multiplier,
   and offset. As in Irena, the **multiplier scales the intensity** (and its
@@ -208,6 +200,7 @@ Reset panel layout** to recover a closed or misplaced panel immediately.
   estimated, the graph lists a warning while estimated error bars are shown,
   and Igor ITX and H5XP exports note it beside the data.
 
+(user-guide-edit)=
 ## Edit a graph
 
 Use the **Graph** tab in the right-side inspector for graph-wide settings.
@@ -257,6 +250,7 @@ The **Templates** menu saves, applies, renames, and deletes graph templates.
 The template list shows each template's view, output size, and number of
 series styles.
 
+(user-guide-annotations)=
 ## Add and refine annotations
 
 Open the **Annotations** tab and use **Add**, **Edit**, or **Delete**. Text,
@@ -276,6 +270,7 @@ Porod guide); Bernardyn chooses `B` to place the guide at the selected centre.
 The guide is labelled, can be dragged to a new position, and remains editable
 or deletable in the annotation list.
 
+(user-guide-export)=
 ## Save and export
 
 Use **File → Save workspace package as…** for an editable archive of all graph
@@ -325,9 +320,8 @@ aspect ratio and uses the platform's normal font size, so text on screen can
 look relatively larger or smaller than in the output. Use **Preview output…**
 to see the exact result.
 
-The small **Display: W × H px** badge at the upper-right of the graph shows
-the current on-screen canvas size. It changes when the application window is
-resized and does not affect exported images.
+The **Display: W × H px** badge on the graph gives the on-screen canvas size
+({ref}`window-tour-graph`).
 
 Use **Preview output…** beside the output controls (or in the File/Graph menu)
 to open a separate, exact-pixel raster preview. It is generated only on demand;
