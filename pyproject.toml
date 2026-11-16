@@ -52,6 +52,7 @@ dev = ["pytest>=7", "pytest-cov", "pytest-qt>=4.2", "ruff", "build", "twine"]
 Homepage = "https://github.com/jilavsky/Bernardyn"
 Repository = "https://github.com/jilavsky/Bernardyn"
 Issues = "https://github.com/jilavsky/Bernardyn/issues"
+Documentation = "https://jilavsky-docs.readthedocs.io/projects/bernardyn/"
 
 [project.gui-scripts]
 bernardyn = "bernardyn.app:main"
