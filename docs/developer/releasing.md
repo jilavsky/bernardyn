@@ -34,6 +34,8 @@ exact workflow file, `release.yml`.
    If the project already exists under your PyPI account, instead open that
    project’s **Manage → Publishing** page and add the same GitHub publisher.
 4. Merge the release workflow and the desired package version to `main`.
+% CHECK(Jan): the one-time setup and the "bump the version" example still name 0.0.1b6; the
+% package is at 1.1.0. Keep as history, or change the examples to a placeholder?
 5. Create and publish the GitHub release/tag `v0.0.1b6` from that exact `main`
    commit. Publishing the GitHub Release starts the workflow automatically.
 6. In **Actions**, open “Publish Bernardyn to PyPI”, approve the `pypi`
