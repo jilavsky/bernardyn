@@ -6,7 +6,7 @@ of widgets and stores complete, source-independent graphs in portable HDF5
 packages.
 
 :::{admonition} Start here
-New users: {doc}`getting-started/installation`, then the {doc}`guides/user-guide`.
+New users: {doc}`getting-started/installation`, the {doc}`getting-started/quickstart`, then the {doc}`guides/user-guide`.
 :::
 
 ```{toctree}

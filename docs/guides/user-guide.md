@@ -9,7 +9,8 @@ annotations, and (for 3-D views) camera settings.
 The parts of the window (File browser, Data browser, graph tabs, Graph
 inspector) are named in {doc}`../getting-started/window-tour`, which also covers
 docking and recovering panels, the **Documentation** button, and how to find
-your version.
+your version. For a first figure step by step, see
+{doc}`../getting-started/quickstart`.
 
 (user-guide-import)=
 ## Import data
