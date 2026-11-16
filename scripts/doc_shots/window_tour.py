@@ -45,7 +45,7 @@ def main_window(ctx: Context):
         (4, widget_rect(selector.data_list, w), "tr", (-30, 16)),
         (5, widget_rect(selector.results_list, w), "tr", (-30, 16)),
         (6, widget_rect(w.files_panel.add_button, w), "r", (-16, 0)),
-        (7, widget_rect(w.dataset_list, w), "br", (-30, -16)),
+        (7, widget_rect(w.dataset_list, w), "br", (-30, -40)),
         (8, widget_rect(w.tabs.tabBar(), w), "r", (16, 0)),
         (9, widget_rect(page, w), "c", (0, 120)),
         (10, widget_rect(w.inspector.tabs.tabBar(), w), "r", (16, 0)),
