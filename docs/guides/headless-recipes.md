@@ -1,3 +1,4 @@
+(headless-recipes)=
 # Headless plot recipes
 
 Bernardyn's public recipe facade creates a validated graph package from existing
@@ -24,6 +25,14 @@ result = create_plot(
 )
 print(result.package_path)
 print(result.diagnostics)
+```
+
+```{figure} img/headless-recipes/headless-recipes-01-porod.png
+:alt: Porod plot written by the example: intensity times q to the fourth against q to the fourth for the sample, with the title "Sample Porod".
+:width: 600px
+
+`sample-porod.png` from the example above, with `sample.h5` a copy of
+`testData/Al_Mg_Si__40C_0min_0498.h5` (shown at half size).
 ```
 
 Specify `ScatteringInput(..., internal_path="/entry/sasdata")` when a file has

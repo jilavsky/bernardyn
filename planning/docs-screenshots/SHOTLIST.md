@@ -50,3 +50,9 @@ run.
 | ID | page | dataset | state to set up | must show | automated? | status |
 |---|---|---|---|---|---|---|
 | workflow-01-file-menu | workflow | none | new window; File menu opened | the whole File menu (macOS shortcut glyphs when made on a Mac) | yes | done |
+
+## headless-recipes
+
+| ID | page | dataset | state to set up | must show | automated? | status |
+|---|---|---|---|---|---|---|
+| headless-recipes-01-porod | headless-recipes | testData/Al_Mg_Si__40C_0min_0498.h5 as sample.h5 | run the page's first Python example in a scratch folder | the PNG it writes, scaled to 800 px wide | yes | done |
