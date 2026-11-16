@@ -1,3 +1,4 @@
+(user-guide)=
 # Bernardyn user guide
 
 Bernardyn is a desktop workbench for preparing publication-oriented 1-D
@@ -5,14 +6,13 @@ scattering and diffraction graphs. A workspace can hold several graph tabs;
 each graph keeps its own displayed datasets, transform, styling, axes, legend,
 annotations, and (for 3-D views) camera settings.
 
-Use the red **Documentation** button above the right-side **Graph Inspector**
-to open this documentation in your web browser.
+The parts of the window (File browser, Data browser, graph tabs, Graph
+inspector) are named in {doc}`../getting-started/window-tour`, which also covers
+docking and recovering panels, the **Documentation** button, and how to find
+your version. For a first figure step by step, see
+{doc}`../getting-started/quickstart`.
 
-To find your installed version, choose **About Bernardyn** in the app menu on
-macOS or the **Help** menu on Windows/Linux, or read the status bar. From a
-terminal, run `bernardyn --version` (`-version`, `--v`, and `-V` also work).
-On Windows, use `python -m bernardyn --version` to print it in the terminal.
-
+(user-guide-import)=
 ## Import data
 
 The top of the left **Data browser** holds the ways to add data to the active
@@ -37,6 +37,14 @@ checked choices apply to every selected file: I(Q) choices to files with the
 same layout, and a checked result kind to every file that stores it. Both
 kinds of choice are remembered for next time.
 
+```{figure} img/user-guide/user-guide-01-data-selector.png
+:alt: Data selector dialog on the testData folder: file list on the left with Al_Mg_Si__40C_0min_0498.h5 selected; on the right its I(Q) data (one checked) and its saved pyIrena results (Unified Fit Data + fit checked); Add selected button at the bottom.
+:width: 100%
+
+The data selector from **Open folder…**: files (1), the checked I(Q) data (2) and saved result
+(3) of the current file, and **Add selected** (4).
+```
+
 The selector recognises HDF5/NXcanSAS (`.h5`, `.hdf5`, `.hdf`, `.nxs`) and
 two-to-four-column text data (`.dat`, `.txt`, `.csv`). For HDF5 files, choose
 the desired 1-D datasets. Bernardyn remembers the chosen dataset layout and
@@ -48,6 +56,7 @@ For a standard NXcanSAS path such as
 stored in one HDF5 file. When no sample group can be identified, Bernardyn
 uses the filename.
 
+(user-guide-file-browser)=
 ### File browser: pick, check, and correct without dialogs
 
 The **File browser** panel, at the left of the Data browser, stays open while
@@ -98,6 +107,14 @@ Kratky view), the panel says so instead. Axes left on automatic range widen
 to show the preview and return afterwards; fixed ranges are kept. Preview
 works in 2D graphs.
 
+```{figure} img/user-guide/user-guide-02-preview.png
+:alt: Main window: the graph holds the Al-Mg-Si curve in blue; Rh1_0085.h5 is selected in the File browser with Preview in graph checked, and its curve is drawn as a grey dashed line that is not in the legend or the Data browser.
+:width: 100%
+
+**Preview in graph** (1): moving to `Rh1_0085.h5` in the File browser draws it as a grey dashed
+curve (2). It is not in the legend or the Data browser until you press **Add to graph**.
+```
+
 Checked **saved pyIrena results** preview too:
 
 - **Data + fit I(Q)** previews in an I(Q) graph: the data dashed, the fit
@@ -110,13 +127,10 @@ Checked **saved pyIrena results** preview too:
   other graph active, Add makes a new comparison graph as before.
 - I(Q) data never preview into a residual or distribution graph.
 
-The panel is an ordinary panel: drag its title to dock it elsewhere, or float
-it onto another monitor. On macOS, floating panels stay visible when you
-switch to another application. Close it with its × button; reopen it with
-**View → Open File Browser** (Ctrl+Shift+B). **View → Reset panel layout**
-puts it back. Its folder, favorites, and list settings are remembered on
-this computer, not stored in workspace files.
+The File browser is a dockable panel; closing, reopening and moving it is
+described in {ref}`window-tour-panels`.
 
+(user-guide-display)=
 ## Choose what is displayed
 
 The left **Data browser — active graph** controls the order in which curves are
@@ -169,6 +183,14 @@ volume and number distribution of each population. Bernardyn uses the stored
 radius centres and values; it does not infer bin widths or recalculate
 distributions.
 
+```{figure} img/user-guide/user-guide-03-distribution.png
+:alt: A new graph tab named "Size Distribution volume distribution" next to "Scattering plot 1", showing the volume fraction density against radius in Å on linear axes.
+:width: 80%
+
+Checking **Size Distribution · Volume distribution** for `Al_Mg_Si__40C_0min_0498.h5` creates a
+new graph tab holding that curve; with several files, each adds its own curve to it.
+```
+
 Number distributions are shown in Irena units, cm⁻³·Å⁻¹ (cumulative number in
 cm⁻³). Files from older pyIrena versions stored them per Å³ of sample; those
 values are converted (×10²⁴) on reading, as pyIrena does. The whole import is
@@ -176,14 +198,9 @@ one Undo step.
 
 Use **Graph → New 2D graph** or Ctrl/Cmd+Shift+N to create a 2-D graph quickly.
 
-The inspector's **Datasets** tab provides the same **Show** selector,
-per-series controls, visibility checkboxes, and the legend controls for the
-active graph. Drag the divider below its dataset list to make that list taller.
-
-Both primary panels may be floated while working, but open docked at the next
-launch so they cannot be stranded outside a changed display arrangement. Use
-**View → Open Data Browser**, **View → Open Graph Inspector**, or **View →
-Reset panel layout** to recover a closed or misplaced panel immediately.
+The inspector's **Datasets** tab lists the same curves with the per-series
+and legend controls ({ref}`window-tour-panels`; a recovered or misplaced panel
+is also covered there).
 
 - Click a row to edit its style, legend label, visible Q range, multiplier,
   and offset. As in Irena, the **multiplier scales the intensity** (and its
@@ -208,6 +225,7 @@ Reset panel layout** to recover a closed or misplaced panel immediately.
   estimated, the graph lists a warning while estimated error bars are shown,
   and Igor ITX and H5XP exports note it beside the data.
 
+(user-guide-edit)=
 ## Edit a graph
 
 Use the **Graph** tab in the right-side inspector for graph-wide settings.
@@ -248,6 +266,9 @@ Use the **Graph** tab in the right-side inspector for graph-wide settings.
   annotations, background, and output settings while keeping the loaded curves
   and their styles. The action can be undone.
 
+% SCREENSHOT user-guide-06-waterfall: a 3-D waterfall graph of several curves (e.g. the three
+% USAXS files in testData) with the 3D tab of the inspector open. Needs a real OpenGL display.
+
 Graphs keep their own configuration, so editing one graph does not alter
 another graph tab unless you deliberately apply a graph template.
 **Graph → Duplicate graph** copies the active graph, with its curves, styles,
@@ -257,6 +278,7 @@ The **Templates** menu saves, applies, renames, and deletes graph templates.
 The template list shows each template's view, output size, and number of
 series styles.
 
+(user-guide-annotations)=
 ## Add and refine annotations
 
 Open the **Annotations** tab and use **Add**, **Edit**, or **Delete**. Text,
@@ -276,6 +298,24 @@ Porod guide); Bernardyn chooses `B` to place the guide at the selected centre.
 The guide is labelled, can be dragged to a new position, and remains editable
 or deletable in the annotation list.
 
+::::{grid} 2
+:::{grid-item}
+```{figure} img/user-guide/user-guide-04-power-law-dialog.png
+:alt: Graph annotation dialog with Type set to Power Law, the X and Y centre filled in, and Power exponent P set to 4.
+
+**Power-law slope…** opens the annotation dialog with Type Power Law and P = 4.
+```
+:::
+:::{grid-item}
+```{figure} img/user-guide/user-guide-05-power-law-graph.png
+:alt: Log-log graph of the Al-Mg-Si curve with a one-decade straight line labelled "slope −4" placed along the Porod region.
+
+After **OK**: a one-decade guide labelled "slope −4".
+```
+:::
+::::
+
+(user-guide-export)=
 ## Save and export
 
 Use **File → Save workspace package as…** for an editable archive of all graph
@@ -325,9 +365,8 @@ aspect ratio and uses the platform's normal font size, so text on screen can
 look relatively larger or smaller than in the output. Use **Preview output…**
 to see the exact result.
 
-The small **Display: W × H px** badge at the upper-right of the graph shows
-the current on-screen canvas size. It changes when the application window is
-resized and does not affect exported images.
+The **Display: W × H px** badge on the graph gives the on-screen canvas size
+({ref}`window-tour-graph`).
 
 Use **Preview output…** beside the output controls (or in the File/Graph menu)
 to open a separate, exact-pixel raster preview. It is generated only on demand;

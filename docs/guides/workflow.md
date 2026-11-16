@@ -1,3 +1,4 @@
+(workflow)=
 # Bernardyn workflow
 
 ## The short version
@@ -14,6 +15,9 @@ the original data files are not needed after saving.
 
 ## Normal use
 
+% CHECK(Jan): step 1 says Bernardyn starts with a new, unsaved workspace, but the user guide
+% ("Save and export") and the code (MainWindow.restore_last_workspace) reopen the last saved
+% workspace package at launch. True only for the first start or after File → New workspace.
 1. Start Bernardyn. It opens a new, unsaved workspace with one graph tab.
 2. Use **Add data…** or **Open folder…** to select source files, then check
    their I(Q) data, saved pyIrena results, or both.
@@ -27,6 +31,13 @@ the original data files are not needed after saving.
 6. To reopen that session later, use **File → Open package…** and select the
    `.bernardyn.h5` file. This replaces the current workspace after the normal
    unsaved-work confirmation.
+
+```{figure} img/workflow/workflow-01-file-menu.png
+:alt: The File menu: New workspace, New window, Workspace properties, Add data, Open folder, Browse data sets, Open package, Open workspace in new window, Recent workspaces, Import graph from package, Save, Save workspace package as, Save graph package, then the export and print commands.
+:width: 320px
+
+The **File** menu (macOS shortcuts shown; Ctrl instead of ⌘ on Windows and Linux).
+```
 
 ## When to save a graph package
 

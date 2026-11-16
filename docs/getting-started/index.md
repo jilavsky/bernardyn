@@ -6,4 +6,6 @@ Install the package and get a first result.
 :maxdepth: 1
 
 installation
+quickstart
+window-tour
 ```

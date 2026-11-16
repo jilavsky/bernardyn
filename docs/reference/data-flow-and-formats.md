@@ -23,6 +23,8 @@ exact plotted values in an archive.
 
 | File type | Role in Bernardyn |
 |---|---|
+% CHECK(Jan): the table leaves out `.hdf`, which the data selector, the File browser and the
+% Add data… file filter accept (testData/LnG_0103.hdf loads); the user guide lists it.
 | `.h5`, `.hdf5`, `.nxs` | Source HDF5/NXcanSAS data. Bernardyn discovers selectable 1-D entries and does not modify the file. |
 | `.dat`, `.txt`, `.csv` | Source text data with two to four columns. |
 | `.bernardyn.h5` | Native portable graph or workspace package. Open with **File → Open package…**. |
