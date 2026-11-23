@@ -6,6 +6,11 @@ behavior changes.
 
 ## Unreleased
 
+## 1.2.0 — 2026-11-23
+
+Minor release: the series multiplier and image-output changes below alter
+results.
+
 **Buttons look like buttons.** Push buttons are drawn raised (gradient face,
 bevel, sunken when pressed), with the same look and colour meaning as pyIrena,
 Matilda, AIDA and DataReporter: Add to graph is green (main action), Remove
@@ -14,9 +19,29 @@ Documentation stays red (help). Toolbar icon buttons stay flat.
 `bernardyn/gui/raised_buttons.py` is a vendored copy of pyIrena's; do not edit
 it here, refresh it with `pyirena/scripts/sync_raised_buttons.py`.
 
+**View All shows all data.** The plot's right-click **View All** now fits
+every visible curve on both axes, even when the graph has fixed axis limits.
+Only the view changes: the status bar warns that the fixed limits are still
+set, return when the data or axes change, and are used for exported images.
+The inspector's **Autoscale** still switches the axes to automatic.
+
+**Error bars no longer widen automatic axes.** On log axes, error bars that
+reach almost to zero (common after background subtraction) stretched the fit
+over tens of empty decades. This reverses "Automatic axis ranges include the
+visible error bars" below.
+
+**One Qt import point (developers).** Bernardyn and its tests import Qt
+only from `bernardyn/gui/_qt.py` (house standard; PySide6 only, no PyQt6
+fallback). The shim also pins PyQtGraph to PySide6, so a stray PyQt6 in the
+environment can no longer put the plots on a different binding.
+`tests/test_qt_shim.py` fails on any direct `PySide6` import.
+`from bernardyn.gui import MainWindow` still works but is now lazy.
+
+**Colour swatches stay readable.** The "Choose…" label on colour buttons
+switches to white on dark colours; on a black swatch it was unreadable.
+
 Fixes from the code review of 2026-11-09 (issue #1, findings B01–B17 and
-decisions D1–D5). The next release should be 1.2.0: the multiplier and
-image-output changes below alter results. Open work from all reviews and
+decisions D1–D5). Open work from all reviews and
 plans is now tracked in one list,
 [`TODO.md`](https://github.com/jilavsky/bernardyn/blob/main/TODO.md); the old
 review and plan documents were removed (they remain in git history).
@@ -112,8 +137,7 @@ Fixes from the 1D code review of 2026-11-02
 - A Q unit that is stored in a file but not recognised as an inverse length
   is refused with a message, instead of being relabelled Å⁻¹ unconverted.
   Any spelling of Å⁻¹, nm⁻¹, pm⁻¹, µm⁻¹, mm⁻¹, cm⁻¹ and m⁻¹ is converted.
-- The plot's right-click menu keeps only **View All** (Bernardyn's
-  autoscale) and **Mouse Mode**. Log axes, grid, downsampling, axis panels
+- The plot's right-click menu keeps only **View All** and **Mouse Mode**. Log axes, grid, downsampling, axis panels
   and **Export…** there bypassed the inspector, Undo and saved document; use
   the inspector and File menu instead.
 - Fixed axis limits may be one-sided: the empty side follows the data.
@@ -139,7 +163,7 @@ Fixes from the 1D code review of 2026-11-02
   selected.
 - Image export and package previews use the graph's own axis ranges while a
   File browser preview has widened them.
-- Automatic axis ranges include the visible error bars.
+- Automatic axis ranges include the visible error bars (since reversed, see above).
 - **Remove** in the inspector can remove a graph's last series.
 - Non-positive fixed limits on a log axis (and NaN/infinite limits) are
   refused in the inspector with an explanation; the renderer reports such
