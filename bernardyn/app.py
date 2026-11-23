@@ -13,6 +13,7 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QApplication
 
 from bernardyn import __version__
+from bernardyn.gui import raised_buttons
 from bernardyn.gui.main_window import MainWindow
 
 
@@ -161,6 +162,7 @@ def main(argv: list[str] | None = None) -> int:
     app.setApplicationName("Bernardyn")
     app.setApplicationVersion(__version__)
     app.setOrganizationName("Bernardyn")
+    raised_buttons.install(app)   # shared raised-button look (vendored from pyIrena)
     windows = WorkspaceWindowManager()
     window = windows.new_window()
     # Run after the window is visible so a stored dock layout can be restored

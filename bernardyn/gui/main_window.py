@@ -62,6 +62,7 @@ from bernardyn.core.controller import (
 )
 from bernardyn.core.models import AxisSpec, GenericCurve, GraphDocument
 from bernardyn.core.units import axis_label
+from bernardyn.gui import raised_buttons
 from bernardyn.gui.dataset_filters import (
     DATASET_FILTERS,
     dataset_category_label,
@@ -565,8 +566,10 @@ class MainWindow(QMainWindow):
         add_catalog_button.clicked.connect(self._add_from_workspace)
         remove_button = QPushButton("Remove selected from graph", data_widget)
         remove_button.clicked.connect(self._remove_datasets)
+        raised_buttons.set_role(remove_button, "stop")
         cancel_button = QPushButton("Cancel loading", data_widget)
         cancel_button.clicked.connect(self._cancel_loading)
+        raised_buttons.set_role(cancel_button, "stop")
         button_grid = QGridLayout()
         button_grid.addWidget(open_button, 0, 0)
         button_grid.addWidget(open_folder_button, 0, 1)
@@ -608,11 +611,7 @@ class MainWindow(QMainWindow):
         self.documentation_button.setToolTip(
             "Open local documentation (or GitHub documentation after PyPI installation)"
         )
-        self.documentation_button.setStyleSheet(
-            "QPushButton { background: #c62828; color: white; font-weight: bold; "
-            "border: 1px solid #8e0000; border-radius: 4px; padding: 3px 10px; } "
-            "QPushButton:hover { background: #e53935; }"
-        )
+        raised_buttons.set_role(self.documentation_button, "help")
         self.documentation_button.clicked.connect(self._open_documentation)
         inspector_layout.addWidget(
             self.documentation_button, 0, Qt.AlignmentFlag.AlignRight

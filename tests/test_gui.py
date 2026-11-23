@@ -237,7 +237,8 @@ def test_lock_from_another_computer_is_only_broken_when_asked(qapp, tmp_path, mo
 
 def test_documentation_button_is_present(qapp):
     window = MainWindow()
-    assert "#c62828" in window.documentation_button.styleSheet()
+    # Coloured by the shared "help" role (red), not a per-widget stylesheet.
+    assert window.documentation_button.property("btnRole") == "help"
     assert window.documentation_button.text() == "Documentation"
     assert "local" in window.documentation_button.toolTip()
     assert window.documentation_button.parent() is not window.menuBar()
