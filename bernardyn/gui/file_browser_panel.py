@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from bernardyn.gui import raised_buttons
 from bernardyn.gui.dialogs import DataSelectorWidget, StatusLabel
 from bernardyn.io.sources import ScatteringLocation
 
@@ -175,6 +176,7 @@ class FileBrowserPanel(QWidget):
         self.add_button = QPushButton("Add to graph", self)
         self.add_button.setToolTip("Add the checked data of the selected files to the active graph (Enter)")
         self.add_button.clicked.connect(self.request_add)
+        raised_buttons.set_role(self.add_button, "primary")
         self.replace_button = QPushButton("Replace selected series", self)
         self.replace_button.setToolTip(
             "Use the checked I(Q) data of the selected files instead of the series selected in "

@@ -6,6 +6,14 @@ behavior changes.
 
 ## Unreleased
 
+**Buttons look like buttons.** Push buttons are drawn raised (gradient face,
+bevel, sunken when pressed), with the same look and colour meaning as pyIrena,
+Matilda, AIDA and DataReporter: Add to graph is green (main action), Remove
+selected and Cancel loading are red (stop), Reset graph is orange (revert),
+Documentation stays red (help). Toolbar icon buttons stay flat.
+`bernardyn/gui/raised_buttons.py` is a vendored copy of pyIrena's; do not edit
+it here, refresh it with `pyirena/scripts/sync_raised_buttons.py`.
+
 Fixes from the code review of 2026-11-09 (issue #1, findings B01–B17 and
 decisions D1–D5). The next release should be 1.2.0: the multiplier and
 image-output changes below alter results. Open work from all reviews and

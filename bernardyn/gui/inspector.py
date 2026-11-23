@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
 
 from bernardyn.core.models import Dataset, GraphDocument, PlotSeries, SeriesView
 from bernardyn.core.transforms import TransformRegistry
+from bernardyn.gui import raised_buttons
 from bernardyn.gui.dataset_filters import DATASET_FILTERS, matches_dataset_filter
 from bernardyn.gui.dialogs import AnnotationDialog
 from bernardyn.gui.widgets import ScientificSpinBox
@@ -217,6 +218,7 @@ class InspectorWidget(QScrollArea):
         self.background_scope.currentIndexChanged.connect(self._edit_background_scope)
         self.reset_graph = QPushButton("Reset graph to defaults…", group)
         self.reset_graph.clicked.connect(self.resetRequested)
+        raised_buttons.set_role(self.reset_graph, "revert")
         background_row = self._paired_row(
             "Color", self.background, "Apply to", self.background_scope, group
         )
