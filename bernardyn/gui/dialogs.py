@@ -7,20 +7,13 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 
 import h5py
-from PySide6.QtCore import (
-    QItemSelectionModel,
-    QMimeData,
-    QObject,
-    QRunnable,
-    Qt,
-    QThreadPool,
-    QUrl,
-    Signal,
-)
-from PySide6.QtGui import QColor
-from PySide6.QtWidgets import (
+
+from bernardyn.core.models import Annotation, AnnotationKind
+from bernardyn.core.transforms import PlotTransform
+from bernardyn.gui._qt import (
     QAbstractItemView,
     QCheckBox,
+    QColor,
     QColorDialog,
     QComboBox,
     QDialog,
@@ -28,25 +21,30 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QFormLayout,
     QHBoxLayout,
+    QItemSelectionModel,
     QLabel,
     QLineEdit,
     QListWidget,
     QListWidgetItem,
     QMessageBox,
+    QMimeData,
+    QObject,
     QPushButton,
+    QRunnable,
     QScrollArea,
     QSizePolicy,
     QSpinBox,
     QSplitter,
+    Qt,
     QTableWidget,
     QTableWidgetItem,
+    QThreadPool,
+    QUrl,
     QVBoxLayout,
     QWidget,
+    Signal,
 )
-
-from bernardyn.core.models import Annotation, AnnotationKind
-from bernardyn.core.transforms import PlotTransform
-from bernardyn.gui.widgets import ScientificSpinBox
+from bernardyn.gui.widgets import ScientificSpinBox, color_swatch_qss
 from bernardyn.io.file_browser import (
     DEFAULT_SORT_INDEX,
     FILE_TYPE_CHOICES,
@@ -1133,7 +1131,4 @@ class AnnotationDialog(QDialog):
             self._update_color_button()
 
     def _update_color_button(self) -> None:
-        self.color.setStyleSheet(
-            f"background: rgba({self._color[0]}, {self._color[1]}, "
-            f"{self._color[2]}, {self._color[3]})"
-        )
+        self.color.setStyleSheet(color_swatch_qss(self._color))

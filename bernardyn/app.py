@@ -9,11 +9,9 @@ import threading
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import QApplication
-
 from bernardyn import __version__
 from bernardyn.gui import raised_buttons
+from bernardyn.gui._qt import QApplication, Qt, QTimer
 from bernardyn.gui.main_window import MainWindow
 
 
@@ -124,7 +122,7 @@ def install_exception_hooks(log_path: Path | None) -> None:
             return
         showing = True
         try:
-            from PySide6.QtWidgets import QMessageBox
+            from bernardyn.gui._qt import QMessageBox
 
             details = f"\n\nDetails were written to {log_path}." if log_path else ""
             QMessageBox.critical(

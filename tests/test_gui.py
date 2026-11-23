@@ -6,9 +6,6 @@ from pathlib import Path
 import numpy as np
 import pyqtgraph as pg
 import pytest
-from PySide6.QtCore import QMimeData, QPointF, Qt, QUrl
-from PySide6.QtGui import QAction, QDropEvent, QImage
-from PySide6.QtWidgets import QAbstractItemView, QDockWidget
 
 from bernardyn import __version__
 from bernardyn import app as bernardyn_app
@@ -26,6 +23,17 @@ from bernardyn.core.models import (
     TypographySpec,
 )
 from bernardyn.gui import main_window
+from bernardyn.gui._qt import (
+    QAbstractItemView,
+    QAction,
+    QDockWidget,
+    QDropEvent,
+    QImage,
+    QMimeData,
+    QPointF,
+    Qt,
+    QUrl,
+)
 from bernardyn.gui.dialogs import AnnotationDialog, DataFileSelectorDialog, LocationDialog
 from bernardyn.gui.graph_page import GraphPage
 from bernardyn.gui.main_window import DatasetListWidget, MainWindow, _documentation_url
@@ -1369,7 +1377,7 @@ def test_add_from_workspace_offers_loaded_results_that_fit_the_view(qapp, monkey
     window._new_graph("plot2d")
     offered = []
 
-    from PySide6.QtWidgets import QDialog
+    from bernardyn.gui._qt import QDialog
 
     class AcceptAll:
         DialogCode = QDialog.DialogCode

@@ -9,48 +9,6 @@ import re
 from dataclasses import replace
 from pathlib import Path
 
-from PySide6.QtCore import (
-    QEvent,
-    QLockFile,
-    QObject,
-    QRunnable,
-    QStandardPaths,
-    Qt,
-    QThreadPool,
-    QTimer,
-    QUrl,
-    Signal,
-)
-from PySide6.QtGui import (
-    QAction,
-    QCloseEvent,
-    QDesktopServices,
-    QKeySequence,
-    QUndoCommand,
-    QUndoStack,
-)
-from PySide6.QtPrintSupport import QPrintDialog, QPrinter
-from PySide6.QtWidgets import (
-    QAbstractItemView,
-    QApplication,
-    QComboBox,
-    QDockWidget,
-    QFileDialog,
-    QGridLayout,
-    QHBoxLayout,
-    QInputDialog,
-    QLabel,
-    QListWidget,
-    QListWidgetItem,
-    QMainWindow,
-    QMenu,
-    QMessageBox,
-    QPushButton,
-    QTabWidget,
-    QVBoxLayout,
-    QWidget,
-)
-
 from bernardyn import __version__
 from bernardyn._docs import docs_url
 from bernardyn.core.colorscales import COLOR_SCALES, apply_series_preset
@@ -63,6 +21,44 @@ from bernardyn.core.controller import (
 from bernardyn.core.models import AxisSpec, GenericCurve, GraphDocument
 from bernardyn.core.units import axis_label
 from bernardyn.gui import raised_buttons
+from bernardyn.gui._qt import (
+    QAbstractItemView,
+    QAction,
+    QApplication,
+    QCloseEvent,
+    QComboBox,
+    QDesktopServices,
+    QDockWidget,
+    QEvent,
+    QFileDialog,
+    QGridLayout,
+    QHBoxLayout,
+    QInputDialog,
+    QKeySequence,
+    QLabel,
+    QListWidget,
+    QListWidgetItem,
+    QLockFile,
+    QMainWindow,
+    QMenu,
+    QMessageBox,
+    QObject,
+    QPrintDialog,
+    QPrinter,
+    QPushButton,
+    QRunnable,
+    QStandardPaths,
+    Qt,
+    QTabWidget,
+    QThreadPool,
+    QTimer,
+    QUndoCommand,
+    QUndoStack,
+    QUrl,
+    QVBoxLayout,
+    QWidget,
+    Signal,
+)
 from bernardyn.gui.dataset_filters import (
     DATASET_FILTERS,
     dataset_category_label,
@@ -1156,6 +1152,7 @@ class MainWindow(QMainWindow):
                         )
                     page = GraphPage(graph, self, renderers=self.renderers)
                     page.powerLawMoved.connect(self._move_power_law)
+                    page.statusMessage.connect(self.statusBar().showMessage)
                     self.tabs.addTab(page, graph.title)
                     self._render_page(page, graph)
             for index in range(self.tabs.count()):

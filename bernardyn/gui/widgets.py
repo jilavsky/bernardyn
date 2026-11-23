@@ -5,14 +5,29 @@ from __future__ import annotations
 import math
 import re
 
-from PySide6.QtGui import QValidator
-from PySide6.QtWidgets import QDoubleSpinBox
+from bernardyn.gui._qt import QDoubleSpinBox, QValidator
 
-__all__ = ["ScientificSpinBox", "format_scientific"]
+__all__ = ["ScientificSpinBox", "color_swatch_qss", "format_scientific"]
 
 # Anything that can still become a number while the user types: "", "-",
 # "1.", "1e", "1e-", ".5" ...
 _PARTIAL_NUMBER = re.compile(r"^\s*[+-]?(\d+[.,]?\d*|[.,]\d*)?([eE][+-]?\d*)?\s*$")
+
+
+def color_swatch_qss(rgba) -> str:
+    """Stylesheet for a "Choose…" colour-swatch button showing ``rgba``.
+
+    The label text is black or white, whichever contrasts with the swatch;
+    with a fixed dark text a black swatch made the label unreadable.  A
+    translucent colour is judged as drawn over white.
+    """
+    red, green, blue, alpha = (int(channel) for channel in rgba)
+    opacity = alpha / 255
+    over_white = [opacity * channel + (1 - opacity) * 255 for channel in (red, green, blue)]
+    # ITU-R BT.601 luma; good enough to pick between black and white text.
+    luma = 0.299 * over_white[0] + 0.587 * over_white[1] + 0.114 * over_white[2]
+    text = "black" if luma >= 140 else "white"
+    return f"background: rgba({red}, {green}, {blue}, {alpha}); color: {text}"
 
 
 def format_scientific(value: float) -> str:

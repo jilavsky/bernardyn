@@ -16,22 +16,27 @@ import numpy as np
 import pyqtgraph as pg
 import pyqtgraph.exporters
 from pyqtgraph.graphicsItems.LegendItem import ItemSample
-from PySide6.QtCore import (
+
+from bernardyn.core.models import Annotation, AnnotationKind, GraphDocument, PlotSeries, SeriesStyle
+from bernardyn.gui._qt import (
+    QApplication,
     QBuffer,
     QByteArray,
+    QColor,
+    QFont,
+    QGraphicsItem,
+    QGraphicsItemGroup,
+    QGraphicsRectItem,
     QIODevice,
+    QPainter,
     QRect,
     QRectF,
     QSize,
+    QSvgGenerator,
     Qt,
     QTimer,
     Signal,
 )
-from PySide6.QtGui import QColor, QFont, QPainter
-from PySide6.QtSvg import QSvgGenerator
-from PySide6.QtWidgets import QApplication, QGraphicsItem, QGraphicsItemGroup, QGraphicsRectItem
-
-from bernardyn.core.models import Annotation, AnnotationKind, GraphDocument, PlotSeries, SeriesStyle
 
 log = logging.getLogger(__name__)
 
@@ -141,21 +146,6 @@ def _coordinate(values: np.ndarray, logarithmic: bool) -> np.ndarray:
     return np.log10(values) if logarithmic else values
 
 
-def _error_extent(
-    values: np.ndarray, errors: np.ndarray, valid: np.ndarray, logarithmic: bool
-) -> list[np.ndarray]:
-    """Plot-unit ends of the error bars that _add_error_bars would draw."""
-    low = values - errors
-    high = values + errors
-    drawn = valid & np.isfinite(low) & np.isfinite(high)
-    if logarithmic:
-        drawn &= (low > 0) & (high > 0)
-    if not np.any(drawn):
-        return []
-    with np.errstate(divide="ignore", invalid="ignore"):
-        return [_coordinate(low[drawn], logarithmic), _coordinate(high[drawn], logarithmic)]
-
-
 class LegendSymbolSample(ItemSample):
     """Legend sample whose marker size is independent of the plotted marker."""
 
@@ -204,6 +194,8 @@ class DraggablePowerLawGuide(QGraphicsItemGroup):
 class Plot2DWidget(pg.PlotWidget):
     renderer_id = "plot2d"
     powerLawMoved = Signal(str, object)
+    # One-line notice for the status bar, e.g. after "View All" ignored fixed limits.
+    statusMessage = Signal(str)
 
     def __init__(self, parent=None, *, output_layout: bool = False) -> None:
         super().__init__(
@@ -267,14 +259,14 @@ class Plot2DWidget(pg.PlotWidget):
         and the scene "Export..." would change the display or write output
         without the inspector, Undo, snapshots or preview isolation knowing.
         Bernardyn has its own controls for all of these.  "View All" fits
-        through Bernardyn's own autoscale; "Mouse Mode" stays.
+        all data through :meth:`view_all`; "Mouse Mode" stays.
         """
         plot = self.getPlotItem()
         plot.setMenuEnabled(enableMenu=False, enableViewBoxMenu=True)
         menu = plot.getViewBox().menu
         if menu is not None:
             menu.viewAll.triggered.disconnect()
-            menu.viewAll.triggered.connect(self.autoscale)
+            menu.viewAll.triggered.connect(self.view_all)
             for menu_action in menu.actions():
                 submenu = menu_action.menu()
                 if submenu is not None and submenu.title().endswith("axis"):
@@ -1135,20 +1127,56 @@ class Plot2DWidget(pg.PlotWidget):
         if self._graph is not None:
             self._apply_ranges(self._graph, include_preview=bool(self._preview_snapshots))
 
+    def view_all(self) -> None:
+        """Right-click "View All": fit all data on both axes, fixed or not.
+
+        Only the view changes.  Fixed limits stay in the document and come
+        back on the next refit (an edit that changes the data or the axes)
+        and in every exported or copied image, so the user is told.
+        """
+        graph = self._graph
+        if graph is None:
+            return
+        x_range, y_range = self._resolved_bounds(
+            graph, include_preview=bool(self._preview_snapshots)
+        )
+        if x_range is None and y_range is None:
+            return
+        view_box = self.getPlotItem().getViewBox()
+        view_box.disableAutoRange()
+        view_box.setRange(xRange=x_range, yRange=y_range, padding=0.02)
+        fixed = [
+            name
+            for name, axis in (("X", graph.x_axis), ("Y", graph.y_axis))
+            if not axis.auto_range and (axis.minimum is not None or axis.maximum is not None)
+        ]
+        if fixed:
+            self.statusMessage.emit(
+                f"View All shows all data, but the {' and '.join(fixed)} "
+                f"{'axis has' if len(fixed) == 1 else 'axes have'} fixed limits; "
+                "they return when the data or axes change, and exported images use them. "
+                "Use Autoscale in the inspector to switch to automatic axes."
+            )
+
     def _resolved_bounds(
         self, graph: GraphDocument, *, include_preview: bool = False
     ) -> tuple[tuple[float, float] | None, tuple[float, float] | None]:
-        """Bounds from complete snapshots, independent of view clipping."""
+        """Bounds from complete snapshots, independent of view clipping.
+
+        Error bars do not widen the bounds.  On a log axis a bar reaching
+        almost to zero (common for background-subtracted SAXS data) would
+        stretch the range over tens of empty decades.
+        """
         x_values: list[np.ndarray] = []
         y_values: list[np.ndarray] = []
-        shown: list[tuple[PlotSeries, SeriesStyle | None]] = [
-            (snapshot, view.style)
+        shown: list[PlotSeries] = [
+            snapshot
             for view in graph.series
             if view.visible and (snapshot := self._snapshots.get(view.id)) is not None
         ]
         if include_preview:
-            shown.extend((snapshot, None) for snapshot in self._preview_snapshots)
-        for snapshot, style in shown:
+            shown.extend(self._preview_snapshots)
+        for snapshot in shown:
             with np.errstate(divide="ignore", invalid="ignore"):
                 x = _coordinate(snapshot.x, graph.x_axis.log)
                 y = _coordinate(snapshot.y, graph.y_axis.log)
@@ -1156,17 +1184,6 @@ class Plot2DWidget(pg.PlotWidget):
             if np.any(valid):
                 x_values.append(x[valid])
                 y_values.append(y[valid])
-            # Visible error bars belong to the data extent.  This mirrors
-            # _add_error_bars: a bar that would cross zero on a log axis is
-            # not drawn, so it does not widen the range either.
-            if style is not None and style.show_x_error_bars and snapshot.dx is not None:
-                x_values.extend(
-                    _error_extent(snapshot.x, snapshot.dx, valid, graph.x_axis.log)
-                )
-            if style is not None and style.show_y_error_bars and snapshot.dy is not None:
-                y_values.extend(
-                    _error_extent(snapshot.y, snapshot.dy, valid, graph.y_axis.log)
-                )
 
         def span(values: list[np.ndarray]) -> tuple[float, float] | None:
             if not values:

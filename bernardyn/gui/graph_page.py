@@ -7,21 +7,30 @@ from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
-from PySide6.QtCore import QByteArray, QRect, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QImage, QPainter, QPalette, QPixmap
-from PySide6.QtPrintSupport import QPrintDialog, QPrinter
-from PySide6.QtWidgets import (
-    QApplication,
-    QDialog,
-    QHBoxLayout,
-    QLabel,
-    QPushButton,
-    QScrollArea,
-    QVBoxLayout,
-    QWidget,
-)
 
 from bernardyn.core.models import GraphDocument, PlotSeries
+from bernardyn.gui._qt import (
+    QApplication,
+    QByteArray,
+    QColor,
+    QDialog,
+    QHBoxLayout,
+    QImage,
+    QLabel,
+    QPainter,
+    QPalette,
+    QPixmap,
+    QPrintDialog,
+    QPrinter,
+    QPushButton,
+    QRect,
+    QScrollArea,
+    Qt,
+    QTimer,
+    QVBoxLayout,
+    QWidget,
+    Signal,
+)
 from bernardyn.io.curve_export import export_displayed_csv, export_displayed_itx
 from bernardyn.renderers import (
     OpenGLPlotWidget,
@@ -190,6 +199,7 @@ class OutputPreviewDialog(QDialog):
 
 class GraphPage(QWidget):
     powerLawMoved = Signal(str, str, object)
+    statusMessage = Signal(str)
 
     def __init__(
         self,
@@ -236,6 +246,7 @@ class GraphPage(QWidget):
                     self.graph_id, annotation_id, position
                 )
             )
+            self.renderer.statusMessage.connect(self.statusMessage.emit)
         self.canvas.set_graph_appearance(
             graph, constrain_aspect=isinstance(self.renderer, Plot2DWidget)
         )
@@ -334,7 +345,7 @@ class GraphPage(QWidget):
         if hasattr(self.renderer, "copy_to_clipboard"):
             self.renderer.copy_to_clipboard()
             return
-        from PySide6.QtWidgets import QApplication
+        from bernardyn.gui._qt import QApplication
 
         pixmap = QPixmap()
         pixmap.loadFromData(QByteArray(self.capture_preview()), "PNG")

@@ -309,9 +309,8 @@ def _ink_columns(image) -> tuple[int, int]:
 
 
 def test_b05_headless_image_uses_the_whole_canvas(qapp, tmp_path):
-    from PySide6.QtGui import QImage
-
     from bernardyn.api import render_2d_image
+    from bernardyn.gui._qt import QImage
 
     controller = _controller_with_data("porod")
     graph = replace(controller.workspace.graphs[0], x_axis=replace(
@@ -658,9 +657,8 @@ def test_b14_log_file_and_excepthook_record_uncaught_errors(tmp_path, monkeypatc
     import sys
     import threading
 
-    from PySide6.QtWidgets import QMessageBox
-
     from bernardyn import app
+    from bernardyn.gui._qt import QMessageBox
 
     shown = []
     monkeypatch.setattr(QMessageBox, "critical", lambda *args: shown.append(args))

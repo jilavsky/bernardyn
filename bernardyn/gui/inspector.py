@@ -5,14 +5,17 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import replace
 
-from PySide6.QtCore import QSignalBlocker, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFont
-from PySide6.QtWidgets import (
+from bernardyn.core.models import Dataset, GraphDocument, PlotSeries, SeriesView
+from bernardyn.core.transforms import TransformRegistry
+from bernardyn.gui import raised_buttons
+from bernardyn.gui._qt import (
     QAbstractItemView,
     QCheckBox,
+    QColor,
     QColorDialog,
     QComboBox,
     QDoubleSpinBox,
+    QFont,
     QFontComboBox,
     QFormLayout,
     QGroupBox,
@@ -25,19 +28,19 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSignalBlocker,
     QSpinBox,
     QSplitter,
+    Qt,
     QTabWidget,
+    QTimer,
     QVBoxLayout,
     QWidget,
+    Signal,
 )
-
-from bernardyn.core.models import Dataset, GraphDocument, PlotSeries, SeriesView
-from bernardyn.core.transforms import TransformRegistry
-from bernardyn.gui import raised_buttons
 from bernardyn.gui.dataset_filters import DATASET_FILTERS, matches_dataset_filter
 from bernardyn.gui.dialogs import AnnotationDialog
-from bernardyn.gui.widgets import ScientificSpinBox
+from bernardyn.gui.widgets import ScientificSpinBox, color_swatch_qss
 
 
 class InspectorWidget(QScrollArea):
@@ -627,10 +630,7 @@ class InspectorWidget(QScrollArea):
         self.box_axes.setChecked(graph.box_axes)
         self.minor_tick_labels.setChecked(graph.x_axis.minor_tick_labels)
         self.axis_thickness.setValue(graph.x_axis.thickness)
-        self.axis_color.setStyleSheet(
-            f"background: rgba({graph.x_axis.color[0]}, {graph.x_axis.color[1]}, "
-            f"{graph.x_axis.color[2]}, {graph.x_axis.color[3]})"
-        )
+        self.axis_color.setStyleSheet(color_swatch_qss(graph.x_axis.color))
         self.legend.setChecked(graph.legend.visible)
         self.legend_position.setCurrentIndex(
             max(0, self.legend_position.findData(graph.legend.position))
@@ -648,10 +648,7 @@ class InspectorWidget(QScrollArea):
         self.width_in.setValue(graph.width_in)
         self.height_in.setValue(graph.height_in)
         self.dpi.setValue(graph.dpi)
-        self.background.setStyleSheet(
-            f"background: rgba({graph.background[0]}, {graph.background[1]}, "
-            f"{graph.background[2]}, {graph.background[3]})"
-        )
+        self.background.setStyleSheet(color_swatch_qss(graph.background))
         self.background_scope.setCurrentIndex(
             max(0, self.background_scope.findData(graph.background_scope))
         )
@@ -1015,9 +1012,7 @@ class InspectorWidget(QScrollArea):
         self._syncing = True
         style = series.style
         self.series_label.setText(series.legend_label or "")
-        self.color.setStyleSheet(
-            f"background: rgba({style.color[0]}, {style.color[1]}, {style.color[2]}, {style.color[3]})"
-        )
+        self.color.setStyleSheet(color_swatch_qss(style.color))
         self.line_style.setCurrentIndex(max(0, self.line_style.findData(style.line_style)))
         self.line_width.setValue(style.line_width)
         self.symbol.setCurrentIndex(max(0, self.symbol.findData(style.symbol or "none")))
@@ -1027,10 +1022,7 @@ class InspectorWidget(QScrollArea):
         self.show_x_error_bars.setChecked(style.show_error_bars and style.show_x_error_bars)
         self.error_caps.setChecked(style.error_caps)
         self.error_cap_size.setValue(style.error_cap_size)
-        self.error_color.setStyleSheet(
-            f"background: rgba({style.error_color[0]}, {style.error_color[1]}, "
-            f"{style.error_color[2]}, {style.error_color[3]})"
-        )
+        self.error_color.setStyleSheet(color_swatch_qss(style.error_color))
         self.error_width.setValue(style.error_width)
         self.multiplier.setValue(series.multiplier)
         self.offset.setValue(series.offset)

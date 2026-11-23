@@ -244,6 +244,11 @@ Use the **Graph** tab in the right-side inspector for graph-wide settings.
 - **Autoscale** enables both automatic axes and immediately fits the displayed
   data. Presentation-only choices such as grid, legend, or tick-label settings
   preserve an interactive zoom instead of refitting the graph.
+- Right-click the plot and choose **View All** to see all data without
+  changing the graph: it fits every visible curve on both axes, ignoring
+  fixed axis limits. If limits are set, the status bar says so; they return
+  when the data or axes change and are always used for exported images.
+  Automatic ranges follow the data points only, not their error bars.
 - Enable **Show top and right axes** under **Box axes** to draw a boxed 2-D
   plot. The added axes carry tick marks but no duplicate numeric labels.
 - Leave **Show minor tick labels** off for dense log plots. Major labels and

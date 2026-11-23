@@ -590,8 +590,7 @@ def render_2d_image(
     # Must happen before the first QApplication is constructed.  Existing GUI
     # callers keep their own platform integration and can reuse this helper.
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-    from PySide6.QtWidgets import QApplication
-
+    from bernardyn.gui._qt import QApplication
     from bernardyn.renderers.plot2d import Plot2DWidget
 
     QApplication.instance() or QApplication(["bernardyn-headless"])

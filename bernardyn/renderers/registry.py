@@ -11,10 +11,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from PySide6.QtWidgets import QWidget
-
 from bernardyn.core.models import GraphDocument, PlotSeries
 from bernardyn.core.registry import Registry
+from bernardyn.gui._qt import QWidget
 
 
 class RendererWidget(Protocol):

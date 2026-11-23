@@ -11,25 +11,28 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
-from PySide6.QtCore import QDir, Qt, QTimer, Signal
-from PySide6.QtGui import QKeySequence, QShortcut
-from PySide6.QtWidgets import (
+from bernardyn.gui import raised_buttons
+from bernardyn.gui._qt import (
     QCheckBox,
+    QDir,
     QFileDialog,
     QFileSystemModel,
     QHBoxLayout,
+    QKeySequence,
     QLineEdit,
     QMenu,
     QPushButton,
+    QShortcut,
     QSplitter,
     QStyle,
+    Qt,
+    QTimer,
     QToolButton,
     QTreeView,
     QVBoxLayout,
     QWidget,
+    Signal,
 )
-
-from bernardyn.gui import raised_buttons
 from bernardyn.gui.dialogs import DataSelectorWidget, StatusLabel
 from bernardyn.io.sources import ScatteringLocation
 

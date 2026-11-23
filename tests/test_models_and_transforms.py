@@ -164,7 +164,7 @@ def test_series_multiplier_and_range(dataset):
 
 
 def test_renderer_registry_accepts_extension_without_main_window_change(qapp):
-    from PySide6.QtWidgets import QWidget
+    from bernardyn.gui._qt import QWidget
 
     registry = RendererRegistry()
     registry.register(RendererRegistration("dummy", "Dummy", "1.0", QWidget))

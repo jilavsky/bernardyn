@@ -11,11 +11,18 @@ from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
-from PySide6.QtCore import QBuffer, QByteArray, QIODevice
-from PySide6.QtGui import QImage, QMatrix4x4
-from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
 from bernardyn.core.models import GraphDocument, PlotSeries
+from bernardyn.gui._qt import (
+    QBuffer,
+    QByteArray,
+    QImage,
+    QIODevice,
+    QLabel,
+    QMatrix4x4,
+    QVBoxLayout,
+    QWidget,
+)
 
 log = logging.getLogger(__name__)
 

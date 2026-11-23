@@ -242,32 +242,56 @@ def test_f09_preview_does_not_change_exported_ranges(qapp):
     widget.close()
 
 
-def test_f10_auto_range_includes_visible_error_bars(qapp):
-    dataset = Dataset(q=[1.0, 2.0], intensity=[10.0, 20.0], uncertainty=[100.0, 100.0])
+def test_auto_range_ignores_error_bars(qapp):
+    # Reverses review finding F10: on log axes, error bars reaching almost to
+    # zero (background-subtracted data) stretched the fit over empty decades.
+    dataset = Dataset(q=[1.0, 2.0], intensity=[10.0, 20.0], uncertainty=[9.9999, 100.0])
 
-    def linear_with_errors(graph):
+    def with_errors(graph):
         return replace(
             graph,
-            x_axis=replace(graph.x_axis, log=False),
-            y_axis=replace(graph.y_axis, log=False),
             series=tuple(
                 replace(view, style=replace(view.style, show_y_error_bars=True))
                 for view in graph.series
             ),
         )
 
-    widget, graph, _ = _rendered(qapp, linear_with_errors, dataset)
+    widget, graph, _ = _rendered(qapp, with_errors, dataset)
     _, (low, high) = widget._resolved_bounds(graph)
-    assert low <= -90 and high >= 120
-    hidden = replace(
-        graph,
-        series=tuple(
-            replace(view, style=replace(view.style, show_y_error_bars=False))
-            for view in graph.series
-        ),
-    )
-    _, (low, high) = widget._resolved_bounds(hidden)
-    assert low == pytest.approx(10) and high == pytest.approx(20)
+    assert low == pytest.approx(1.0) and high == pytest.approx(np.log10(20.0))
+    widget.close()
+
+
+def test_view_all_fits_data_past_fixed_limits_and_warns(qapp):
+    def fixed(graph):
+        return replace(
+            graph,
+            x_axis=replace(graph.x_axis, auto_range=False, minimum=1.5, maximum=2.5),
+            y_axis=replace(graph.y_axis, auto_range=False, minimum=0.1, maximum=1.0),
+        )
+
+    widget, graph, _ = _rendered(qapp, fixed)
+    view_box = widget.getPlotItem().getViewBox()
+    messages: list[str] = []
+    widget.statusMessage.connect(messages.append)
+    widget.view_all()
+    (x_low, x_high), (y_low, y_high) = view_box.viewRange()
+    assert x_low <= 0.0 and x_high >= np.log10(3.0)
+    assert y_low <= 1.0 and y_high >= np.log10(30.0)
+    assert len(messages) == 1 and "X and Y axes have fixed limits" in messages[0]
+    # The document is untouched: a refit brings the fixed limits back.
+    widget._apply_ranges(graph)
+    (x_low, x_high), _ = view_box.viewRange()
+    assert x_low == pytest.approx(np.log10(1.5)) and x_high == pytest.approx(np.log10(2.5))
+    widget.close()
+
+
+def test_view_all_on_automatic_axes_does_not_warn(qapp):
+    widget, _, _ = _rendered(qapp)
+    messages: list[str] = []
+    widget.statusMessage.connect(messages.append)
+    widget.view_all()
+    assert messages == []
     widget.close()
 
 
@@ -454,9 +478,7 @@ def test_f08_filter_drops_hidden_files_from_selection(qapp, tmp_path):
 
 
 def test_f14_result_checkbox_refreshes_the_preview(qapp, tmp_path):
-    from PySide6.QtCore import Qt
-    from PySide6.QtWidgets import QListWidgetItem
-
+    from bernardyn.gui._qt import QListWidgetItem, Qt
     from bernardyn.gui.file_browser_panel import FileBrowserPanel
 
     panel = FileBrowserPanel(lambda path: [], {}, {}, discover_results=None)

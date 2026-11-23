@@ -26,7 +26,7 @@ def _hang_watchdog():
 @pytest.fixture(scope="session")
 def qapp():
     try:
-        from PySide6.QtWidgets import QApplication
+        from bernardyn.gui._qt import QApplication
     except ImportError:
         pytest.skip("PySide6 is not installed")
     app = QApplication.instance() or QApplication([])

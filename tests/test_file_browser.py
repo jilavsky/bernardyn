@@ -6,12 +6,11 @@ from pathlib import Path
 from shutil import copy2
 
 import pytest
-from PySide6.QtCore import QMimeData, QPointF, Qt, QUrl
-from PySide6.QtGui import QDropEvent
 
 from bernardyn.core.controller import ApplicationController
 from bernardyn.core.models import Dataset, SeriesStyle
 from bernardyn.gui import main_window
+from bernardyn.gui._qt import QDropEvent, QMimeData, QPointF, Qt, QUrl
 from bernardyn.gui.dialogs import FILE_BROWSER_MIME_TYPE
 from bernardyn.gui.file_browser_panel import RECENT_FOLDER_LIMIT, FileBrowserPanel
 from bernardyn.gui.main_window import MainWindow
@@ -653,7 +652,7 @@ def test_preview_widens_automatic_axes_and_restores_them(qapp):
 
 
 def test_panels_can_be_dragged_side_by_side_and_tabs_are_visible(window):
-    from PySide6.QtWidgets import QMainWindow, QTabWidget
+    from bernardyn.gui._qt import QMainWindow, QTabWidget
 
     options = window.dockOptions()
     assert options & QMainWindow.DockOption.AllowNestedDocks
